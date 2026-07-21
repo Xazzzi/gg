@@ -16,6 +16,9 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "complexity": {
+        "noCommaOperator": "off"
+      },
       "suspicious": {
         "noAssignInExpressions": "off",
         "noExplicitAny": "off"

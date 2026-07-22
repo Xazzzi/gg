@@ -42,6 +42,23 @@ ch.close();
 using ch = new Channel<number>();
 ```
 
+## Synchronous vs Asynchronous Sending
+
+The channel supports two modes of broadcasting values:
+
+### Fire and Forget (`send`)
+`ch.send(value)` immediately pushes the value into the channel's buffer and returns synchronously. If no consumers are listening, the value queues up according to the backlog rules.
+
+### Backpressure and Acknowledgment (`asend`)
+`await ch.asend(value)` returns a Promise that blocks the producer until a consumer explicitly reads the value. This allows you to build strict backpressure and ensures producers don't outpace consumers.
+
+```typescript
+const ch = new Channel<number>();
+
+// The producer will suspend here until a consumer pulls the value!
+await ch.asend(42); 
+```
+
 ## Configuration options
 
 The channel can be fine-tuned via the options object passed into constructor to perfectly match your synchronization, backlog, and load-shedding requirements.

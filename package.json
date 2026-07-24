@@ -1,13 +1,34 @@
 {
   "name": "@xazzzi/gg",
   "version": "0.1.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Zero-dependency, robust, and highly concurrent primitives for modern JavaScript/TypeScript.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./min": {
+      "import": "./dist/index.min.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --minify --format=esm --outfile=dist/index.min.js",
+    "prepack": "npm run build",
     "type": "tsc --noEmit",
     "lint": "biome check",
-    "test": "node --expose-gc --test",
-    "doom": "stryker run"
+    "pretest": "node generate-tests-index.ts",
+    "test": "node --expose-gc --test --test-timeout=250 --test-reporter=dot tests/index.test.ts",
+    "test:human": "node --expose-gc --test --test-timeout=250 --experimental-test-coverage tests/index.test.ts",
+    "test:branches": "node find-uncovered-branches.ts",
+    "test:mutations": "npm run pretest && stryker run; node generate-surviving-mutants.ts",
+    "test:redundant": "npm run pretest && node find-redundant-tests.ts",
+    "checks": "npm run type && npm run lint && npm run test"
   },
   "keywords": [],
   "author": "",
@@ -15,8 +36,9 @@
   "type": "module",
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
-    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/core": "9.6.1",
     "@types/node": "26.1.1",
+    "esbuild": "0.28.1",
     "typescript": "5.9.3"
   }
 }

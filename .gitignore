@@ -1,3 +1,6 @@
-node_modules/
 .stryker-tmp/
+reports/
+node_modules/
+dist/
 AGENTS.md
+surviving-mutants.md

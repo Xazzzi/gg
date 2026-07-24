@@ -50,7 +50,7 @@ The channel supports two modes of broadcasting values:
 `ch.send(value)` immediately pushes the value into the channel's buffer and returns synchronously. If no consumers are listening, the value queues up according to the backlog rules.
 
 ### Backpressure and Acknowledgment (`asend`)
-`await ch.asend(value)` returns a Promise that blocks the producer until a consumer explicitly reads the value. This allows you to build strict backpressure and ensures producers don't outpace consumers.
+`await ch.asend(value)` returns a Promise that blocks the producer until *at least one* consumer explicitly reads the value (or skips past it). This allows you to build strict backpressure and ensures producers don't outpace consumers. In an MPMC scenario with multiple consumers, the producer is unblocked as soon as the *fastest* active consumer processes the transmission.
 
 ```typescript
 const ch = new Channel<number>();
@@ -65,15 +65,15 @@ The channel can be fine-tuned via the options object passed into constructor to 
 
 ### `firstReceive`
 Controls what a *newly attached* consumer receives upon its very first iteration:
-- **`"first"`**: Consumer replays the absolute beginning of the channel's entire history.
-- **`"unread"`** *(default)*: Consumer starts from the oldest *unconsumed* value in the queue, skipping history that has already been consumed by other listeners.
+- **`"first"`**: Consumer replays the absolute beginning of the channel's entire history (retained in memory).
+- **`"unread"`** *(default)*: Consumer starts from the oldest value that has not yet been read by *any* listener. Once the fastest listener reads a value, the channel's global unread pointer advances, meaning subsequent new listeners will skip it.
 - **`"latest"`**: Consumer immediately receives the most recently resolved value (if one exists), or waits for the next one.
 - **`"next"`**: Consumer ignores all past transmissions and strictly waits for the next future value.
 
 ### `thenReceive`
 Controls how an attached consumer processes subsequent values:
-- **`"every"`**: The consumer sequentially processes every single value broadcasted.
-- **`"latest"`** *(default)*: If a consumer is slow or actively busy processing, it drops unread intermediate values and skips straight to the most recently broadcasted value to catch up.
+- **`"every"`**: The consumer sequentially processes every single value broadcasted, forcing the channel to retain the backlog in memory until this consumer reads it.
+- **`"latest"`** *(default)*: If a consumer is slow or actively busy processing, it drops unread intermediate values and skips straight to the most recently broadcasted value to catch up. This allows intermediate unread values to be garbage collected.
 
 ### `stopStyle`
 Controls how iterators behave when `ch.close()` or `ch[Symbol.dispose]()` is called:
@@ -87,4 +87,22 @@ You can explicitly abort the channel and forcefully throw an error into all acti
 ```typescript
 ch.throw(new Error("Upstream failure"));
 ```
-Consumers blocked on the channel will immediately reject, allowing downstream `try/catch` blocks to gracefully handle the failure.
+Consumers blocked on the channel will immediately reject, allowing downstream `try/catch` blocks to gracefully handle the failure. Additionally, any producers currently blocked on an `asend()` call will also instantly reject with the same error to prevent them from hanging indefinitely.
+
+### Identifying Stop Errors
+When `ch.close()` is called, it internally invokes `ch.throw(STOP)`. This causes blocked consumers and producers to reject gracefully. 
+To distinguish between an expected channel closure and an actual upstream failure in your `catch` blocks, use the exported `isStopError` utility:
+
+```typescript
+import { Channel, isStopError } from "gg";
+
+try {
+  await ch.asend(42);
+} catch (err) {
+  if (isStopError(err)) {
+    console.log("Channel gracefully closed, producer aborting.");
+  } else {
+    console.error("Actual failure:", err);
+  }
+}
+```

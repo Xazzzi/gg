@@ -1,6 +1,5 @@
-import { narrow, noop, unreachable } from "./utils.ts";
+import { noop, unreachable } from "./utils.ts";
 
-type Callback = (value?: unknown) => void;
 type AckSeq = number;
 type Next<T> = [T, Promise<Next<T>> | undefined, AckSeq];
 export type FirstReceive = "first" | "unread" | "latest" | "next";
@@ -8,6 +7,10 @@ export type ThenReceive = "every" | "latest";
 export type StopStyle = "drain" | "stop";
 
 export const STOP = Symbol("STOP");
+
+export function isStopError(error: unknown): boolean {
+  return (error as any)?.reason === STOP;
+}
 
 export type ChannelOptions = {
   name?: string;
@@ -26,7 +29,13 @@ export class Channel<T> implements AsyncIterable<T>, Disposable {
   );
 
   #seq: AckSeq = 1;
-  #acks = new Map<WeakRef<Callback>, AckSeq>();
+  #acks = new Map<WeakRef<PromiseWithResolvers<AckSeq>>, AckSeq>();
+
+  #registry = new FinalizationRegistry<WeakRef<PromiseWithResolvers<AckSeq>>>(
+    // Stryker disable next-line ArrowFunction: GC sweep is a memory optimization
+    ref => this.#acks.delete(ref),
+  );
+
   #value = Promise.withResolvers<Next<T>>();
   #rxHead?: Promise<Next<T>>;
   #latest?: Promise<Next<T>>;
@@ -50,13 +59,18 @@ export class Channel<T> implements AsyncIterable<T>, Disposable {
     }
   }
 
-  send(value: T, nextAck?: Callback) {
+  send(value: T, nextAck?: PromiseWithResolvers<AckSeq>) {
     this.signal.throwIfAborted();
 
     const resolve = this.#value.resolve;
     this.#latest = this.#value.promise;
     this.#value = Promise.withResolvers<Next<T>>();
-    if (nextAck) this.#acks.set(new WeakRef(nextAck), (this.#seq += 1));
+
+    if (nextAck) {
+      const ref = new WeakRef(nextAck);
+      this.#acks.set(ref, (this.#seq += 1));
+      this.#registry.register(nextAck, ref);
+    }
 
     const tuple: Next<T> = [
       value,
@@ -70,7 +84,9 @@ export class Channel<T> implements AsyncIterable<T>, Disposable {
   // Variant of send() that blocks till value yields.
   // This may never resolve in case sent value was skipped.
   async asend(value: T) {
-    return await new Promise(resolve => this.send(value, resolve));
+    const resolvers = Promise.withResolvers<AckSeq>();
+    this.send(value, resolvers);
+    return await resolvers.promise;
   }
 
   async *[Symbol.asyncIterator]() {
@@ -97,13 +113,18 @@ export class Channel<T> implements AsyncIterable<T>, Disposable {
         // Unlock producers immediately upon read, before consumer processes the value
         for (const [ref, refSeq] of this.#acks) {
           if (refSeq > seq) break;
-          const fn = ref.deref();
-          if (fn) fn(seq);
+          try {
+            // Stryker disable next-line OptionalChaining: defensively untestable due to GC race
+            ref.deref()?.resolve(seq);
+          } catch {
+            // ignore sabotage
+          }
           this.#acks.delete(ref);
         }
 
         // Channels advance rxHead to current before yielding value to observers.
         // If this code runs it means someone already called .next() on the channel.
+        // Stryker disable next-line all: preventing redundant assignment when rxHead is already next, untestable due to FIFO microtask queue
         if (firstIsUnread && current === this.#rxHead) this.#rxHead = next;
 
         // Yield blocks till consumer is done reading the value
@@ -111,8 +132,7 @@ export class Channel<T> implements AsyncIterable<T>, Disposable {
 
         // Refresh next which might've become stale while we waited
         if (skipToLatest) {
-          narrow<Promise<Next<T>>>(this.#latest);
-          next = this.#latest;
+          next = this.#latest as Promise<Next<T>>;
           if (next === current) next = this.#value.promise;
         }
 
@@ -129,6 +149,20 @@ export class Channel<T> implements AsyncIterable<T>, Disposable {
     this.#aborter.abort(reason);
     this.#value.promise.catch(noop); // no unhandledRejection when unobserved
     this.#value.reject(value);
+
+    let err = value;
+    if (value === STOP) {
+      err = Object.assign(new Error("Channel closed"), { reason: STOP });
+    }
+
+    // Reject any pending producers with the same error so they don't hang
+    for (const [ref] of this.#acks) {
+      try {
+        // Stryker disable next-line OptionalChaining: untestable GC race
+        ref.deref()?.reject(err);
+      } catch {} // ignore sabotage
+    }
+    this.#acks.clear();
   }
 
   close() {

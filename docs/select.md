@@ -136,6 +136,13 @@ To make it evaluate eagerly upon creation, pass `autoStart: true`:
 const s = select({ g: myGenerator() }, { autoStart: true });
 ```
 
+## Backpressure (`backPressure`)
+By default (`backPressure: true`), `select` awaits the consumer to read the previous state emission before it pulls new asynchronous values. This prevents the multiplexer from overwhelming the consumer.
+If you set `backPressure: false`, `select` processes source events and emits new states immediately, without waiting for the consumer to read them. This is useful when the consumer occasionally samples the state and does not process every emission.
+
+## Non-Yielding (`nonYielding`)
+If you use `select` purely to drive side-effects or update a state proxy read by a framework, you can pass `nonYielding: true`. The multiplexer updates the proxy and triggers the `onChanges` callback, but it skips emitting values into the underlying channel. This avoids deadlocks when there is no active stream consumer.
+
 ## Resource Management (Disposable)
 The returned proxy implements `Symbol.dispose` and `Symbol.asyncDispose`. This means you can use it with TypeScript's `using` keyword to automatically close the channel and stop multiplexing when it falls out of scope:
 ```typescript

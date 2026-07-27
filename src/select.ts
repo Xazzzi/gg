@@ -32,10 +32,12 @@ type ValsOf<T extends Record<keyof any, any>> = {
 export type SelectShape = Record<keyof any, unknown> | unknown[];
 
 export type SelectOptions = {
-  autoStart?: boolean;
-  autoClose?: boolean;
-  holdDone?: boolean;
-  changeValues?: boolean;
+  autoStart?: boolean; // Begin pulling before first consumer requests a value
+  autoClose?: boolean; // Close underlying channel if no async drivers left
+  holdDone?: boolean; // Final undefined return wont override last yield
+  backPressure?: boolean; // When on emit awaits consumer to read before next async pulls
+  nonYielding?: boolean; // When you use select just to drive something else
+  changeValues?: boolean; // Record not only keys that changed but also previous values
   onChanges?: (changes: unknown) => void;
 };
 
@@ -60,6 +62,8 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
   changes: Map<keyof any, any> | Set<any>;
   autoClose: boolean;
   holdDone: boolean;
+  backPressure?: boolean;
+  nonYielding?: boolean;
   changeValues: boolean;
   onChanges?: (changes: unknown) => void;
   // Stryker disable next-line BooleanLiteral: initial queued state is irrelevant because this.start triggers the first emit which resets it
@@ -73,6 +77,8 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
       autoStart = false,
       autoClose = true,
       holdDone = true,
+      backPressure = true,
+      nonYielding = false,
       changeValues = false,
       onChanges,
       firstReceive = "latest",
@@ -88,6 +94,8 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
     this.changes = this.changeValues ? new Map() : new Set();
 
     this.autoClose = autoClose;
+    this.backPressure = backPressure;
+    this.nonYielding = nonYielding;
     this.holdDone = holdDone;
     this.onChanges = onChanges;
 
@@ -233,11 +241,13 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
 
       this.changes.clear();
       this.relocations.length = 0;
-      this.onChanges?.(changesSnapshot);
       try {
-        await this.ch.asend(
-          this.isArray ? [...this.values] : { ...this.values },
-        );
+        this.onChanges?.(changesSnapshot);
+        if (!this.nonYielding) {
+          const value = this.isArray ? [...this.values] : { ...this.values };
+          if (this.backPressure) await this.ch.asend(value);
+          else this.ch.send(value);
+        } else this.ch.signal.throwIfAborted();
       } catch (e: any) {
         if (!isStopError(e)) throw e;
         return;
@@ -524,5 +534,5 @@ export function select<T extends SelectShape>(
   shape: T,
   options?: SelectOptions & ChannelOptions,
 ): State<T> {
-  return new Proxy(shape, new Select(shape, options)) as unknown as State<T>;
+  return new Proxy(shape, new Select(shape, options)) as State<T>;
 }

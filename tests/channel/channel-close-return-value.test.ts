@@ -1,5 +1,5 @@
-import { test } from "node:test";
 import * as assert from "node:assert";
+import { test } from "node:test";
 import { Channel } from "../../src/channel.ts";
 
 test("close(returnValue) sets the return value of the AsyncIterable", async () => {
@@ -7,9 +7,9 @@ test("close(returnValue) sets the return value of the AsyncIterable", async () =
   ch.send(1);
   ch.close("done");
 
-  const results = [];
+  const _results = [];
   const iter = ch[Symbol.asyncIterator]();
-  
+
   const first = await iter.next();
   assert.deepStrictEqual(first, { value: 1, done: false });
 

@@ -1,15 +1,14 @@
-import { test } from "node:test";
 import * as assert from "node:assert";
-import { Channel } from "../../src/channel.ts";
-import { select, CHAN } from "../../src/select.ts";
+import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import * as util from "node:util";
+import { Channel } from "../../src/channel.ts";
+import { select } from "../../src/select.ts";
 
 test("select with nonYielding: true does not send values to its channel", async () => {
   const ch1 = new Channel<number>();
-  let latestSnapshot: any;
+  let _latestSnapshot: any;
   let changesCount = 0;
-  const state = select(
+  const _state = select(
     { v: ch1 },
     {
       nonYielding: true,
@@ -31,10 +30,10 @@ test("select with nonYielding: true does not send values to its channel", async 
   // The iterator should not yield anything, meaning it hangs if we try to read from it.
   // We can just dispose the state and it should clean up gracefully via AbortSignal.
   // But wait, state[Symbol.asyncIterator] is present.
-  
+
   // Close the sources
   ch1.close();
   await setImmediate();
-  
+
   // Ensure the loop is exited (this is internal, but at least it shouldn't crash)
 });

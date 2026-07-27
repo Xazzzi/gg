@@ -1,3 +1,4 @@
+import { feed, type PipeOptions, type Source } from "./pipe.ts";
 import { noop, unreachable } from "./utils.ts";
 
 type AckSeq = number;
@@ -60,6 +61,15 @@ export class Channel<T, TReturn = any>
     if (firstReceive === "first" || firstReceive === "unread") {
       this.#rxHead = this.#value.promise;
     }
+  }
+
+  pipe(source: Source<T>, options?: PipeOptions): this {
+    feed(source, this, options);
+    return this;
+  }
+
+  feed(source: Source<T>, options?: PipeOptions): Promise<void> {
+    return feed(source, this, options);
   }
 
   send(value: T, nextAck?: PromiseWithResolvers<AckSeq>) {
@@ -131,7 +141,9 @@ export class Channel<T, TReturn = any>
         if (firstIsUnread && current === this.#rxHead) this.#rxHead = next;
 
         // Yield blocks till consumer is done reading the value
-        yield value;
+        if (value !== (STOP as unknown as T)) {
+          yield value;
+        }
 
         // Refresh next which might've become stale while we waited
         if (skipToLatest) {

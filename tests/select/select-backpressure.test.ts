@@ -1,8 +1,8 @@
-import { test } from "node:test";
 import * as assert from "node:assert";
+import { test } from "node:test";
+import { setImmediate } from "node:timers/promises";
 import { Channel } from "../../src/channel.ts";
 import { select } from "../../src/select.ts";
-import { setImmediate } from "node:timers/promises";
 
 test("select with backPressure: false sends without awaiting consumer", async () => {
   const ch1 = new Channel<number>();
@@ -22,7 +22,7 @@ test("select with backPressure: false sends without awaiting consumer", async ()
   ch1.send(1);
   await setImmediate();
   assert.strictEqual(changesCount, 2);
-  
+
   ch1.send(2);
   await setImmediate();
   assert.strictEqual(changesCount, 3);
@@ -49,7 +49,7 @@ test("select with backPressure: true blocks on unread consumers", async () => {
   await setImmediate();
   // 1st value processed, onChanges fired. But asend blocks, so pullAsync is skipped.
   assert.strictEqual(changesCount, 2);
-  
+
   ch1.send(2);
   await setImmediate();
   // 2nd value is not pulled because pullAsync was skipped in previous blocked emit.

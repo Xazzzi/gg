@@ -30,8 +30,15 @@
     "test:redundant": "npm run pretest && node find-redundant-tests.ts",
     "checks": "npm run type && npm run lint && npm run test"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "generator",
+    "channel",
+    "select",
+    "pipe",
+    "async",
+    "flow"
+  ],
+  "author": "Vitalii Yakovenko",
   "license": "MIT",
   "type": "module",
   "devDependencies": {

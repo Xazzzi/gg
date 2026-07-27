@@ -1,5 +1,7 @@
 import "./utils.test.ts";
 import "./channel/ch-closed-promise-resolves-when-channel-is-closed.test.ts";
+import "./channel/channel-close-return-value.test.ts";
+import "./channel/channel-factory.test.ts";
 import "./channel/channel-first-receive-first.test.ts";
 import "./channel/channel-first-receive-latest-without-value.test.ts";
 import "./channel/channel-first-receive-unread.test.ts";

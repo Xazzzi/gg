@@ -19,7 +19,9 @@ export type ChannelOptions = {
   stopStyle?: StopStyle;
 };
 
-export class Channel<T> implements AsyncIterable<T>, Disposable {
+export class Channel<T, TReturn = any>
+  implements AsyncIterable<T, TReturn>, Disposable
+{
   readonly name: string;
 
   #aborter = new AbortController();
@@ -39,6 +41,7 @@ export class Channel<T> implements AsyncIterable<T>, Disposable {
   #value = Promise.withResolvers<Next<T>>();
   #rxHead?: Promise<Next<T>>;
   #latest?: Promise<Next<T>>;
+  #return?: TReturn; // value to end consumer AsyncIterables with
 
   #firstReceive: FirstReceive;
   #thenReceive: ThenReceive;
@@ -141,6 +144,9 @@ export class Channel<T> implements AsyncIterable<T>, Disposable {
         if (error === STOP) break;
         throw error;
       }
+
+    // biome-ignore lint/style/noNonNullAssertion: dont care if undefined
+    return this.#return!;
   }
 
   throw(value: unknown) {
@@ -165,11 +171,16 @@ export class Channel<T> implements AsyncIterable<T>, Disposable {
     this.#acks.clear();
   }
 
-  close() {
+  close(returnValue?: TReturn) {
+    this.#return = returnValue;
     this.throw(STOP);
   }
 
   [Symbol.dispose]() {
     this.close();
   }
+}
+
+export function channel<T>(options?: ChannelOptions): Channel<T> {
+  return new Channel<T>(options);
 }

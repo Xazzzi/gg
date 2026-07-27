@@ -18,6 +18,9 @@ const ch = new Channel<number>({
   stopStyle: "drain"
 });
 
+// Or use the factory function
+const ch2 = channel<number>();
+
 // Supply with send calls
 ch.send(1);
 promise.then(result => ch.send(result));
@@ -38,8 +41,11 @@ console.log(await it.next());
 // Close channel gracefully
 ch.close();
 
+// Close channel with a final return value for the iterator
+ch.close("finished");
+
 // Or leverage explicit resource management:
-using ch = new Channel<number>();
+using ch3 = new Channel<number>();
 ```
 
 ## Synchronous vs Asynchronous Sending

@@ -25,7 +25,7 @@ test("uncovered branches", async () => {
   let s2Emits = 0;
   const s2 = select([1, 2], { autoStart: true, onChanges: () => s2Emits++ });
   await setImmediate();
-  (s2 as any).splice(0, 0);
+  s2.splice(0, 0);
   await setImmediate();
   assert.strictEqual(s2Emits, 1);
 

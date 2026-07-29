@@ -2,8 +2,8 @@
 
 Based on modern APIs and rigorously tested for 100% coverage, including mutation testing via [Stryker](https://stryker-mutator.io/).
 
-- Minified: 11 kB
-- Minified + Gzipped: <4 kB
+- Minified: 12 kB
+- Minified + Gzipped: 4 kB
 
 See [comparison](./docs/comparison.md) to other libraries out there.
 

@@ -42,6 +42,10 @@ import "./select/dropped-raw-promise-gracefully-ignores-background-settlements.t
 import "./select/parked-iterator-throw-executes-correctly.test.ts";
 import "./select/select-backpressure.test.ts";
 import "./select/select-changevalues-tracking.test.ts";
+import "./select/select-custom-projector-bad.test.ts";
+import "./select/select-custom-projector-object.test.ts";
+import "./select/select-custom-projector-sync.test.ts";
+import "./select/select-custom-projector.test.ts";
 import "./select/select-defaults-to-latest-state.test.ts";
 import "./select/select-handles-null-and-primitives-without-crashing.test.ts";
 import "./select/select-holddone-retains-last-value-for-sync-iterators.test.ts";
@@ -67,6 +71,7 @@ import "./select/select-proxy-array-shift-with-promises.test.ts";
 import "./select/select-proxy-exposes-asyncdispose-symbol-when-supported.test.ts";
 import "./select/select-proxy-exposes-dispose-symbols.test.ts";
 import "./select/select-relocated-proxy-non-integer.test.ts";
+import "./select/select-simple-mapper.test.ts";
 import "./select/select-starts-eagerly-with-autostart-and-lazy-without.test.ts";
 import "./select/select-with-async-generator-returning-a-value.test.ts";
 import "./select/select-with-async-iterator-throwing-synchronously-on-second-next.test.ts";

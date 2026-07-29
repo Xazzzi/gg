@@ -50,6 +50,69 @@ const s = select({ a: 42, b: Promise.resolve(1) });
 // Yields: { a: 42, b: { status: "fulfilled", value: 1 } }
 ```
 
+### Custom projections (`mapFields` and `mapSnapshot`)
+
+If you do not want to use the default `Val<T>` wrapper for asynchronous states, `select` provides two transformation callbacks:
+
+1. `mapFields`: A `FieldMapper` that transforms individual properties before they are merged into the final snapshot. If this mapper is configured with `spread: true`, its returned object properties are merged directly into the parent snapshot.
+2. `mapSnapshot(state)`: Receives the entire snapshot (after `mapFields` has been applied, if any) and returns the final yielded value. This is ideal for ad-hoc projections.
+
+#### Built-in Mappers: `spread` and `simple`
+
+`select` exports two built-in field mappers for common UI patterns:
+
+**1. `spread`**
+You can map a single async value (like a promise) into separate state fields (like `promise`, `promiseLoading`, `promiseError`).
+
+```typescript
+import { select, spread } from "./select.ts";
+
+const stream = select(
+  { p: Promise.resolve(42) },
+  { mapFields: spread }
+);
+
+// Yields: { p: undefined, pLoading: true, pError: null, pDone: false }
+// Yields: { p: 42, pLoading: false, pError: null, pDone: true }
+```
+*(If the shape is an array, `spread` returns a single object with `value`, `loading`, `error`, and `done` per index. This preserves the array structure).*
+
+**2. `simple`**
+If you only need the resolved values, use the `simple` mapper. It unwraps the value directly. It returns `null` while pending or rejected.
+
+```typescript
+import { select, simple } from "./select.ts";
+
+const stream = select(
+  { p: Promise.resolve(42) },
+  { mapFields: simple }
+);
+
+// Yields: { p: null }
+// Yields: { p: 42 }
+```
+
+#### Authoring Custom Mappers (Higher-Kinded Types)
+
+TypeScript cannot infer the return type of a generic callback without the explicit generics. This is a known limitation (lack of Higher-Kinded Types). You cannot pass a generic function directly to `mapFields` to get correct types.
+
+To solve this, `select` uses the `FieldMapper` protocol. To write a reusable generic mapper, intersect the function with a type definition that uses `this["_T"]` to resolve the generic shape:
+
+```typescript
+import type { FieldMapper, Val } from "./mappers.ts";
+
+export interface MyMapper extends FieldMapper {
+  // Define the output type mapped over the input shape T
+  type: { [K in keyof this["_T"]]: string };
+}
+
+export const myMapper = function myMapper(key: keyof any, state: Val<any>) {
+  return state.status === "fulfilled" ? String(state.value) : "loading";
+} as MyMapper;
+```
+
+> **Note**: The Proxy returned by `select` always maintains your original input shape! If you mutate it dynamically, you still write `stream.p = newPromise`, and your `mapFields` or `mapSnapshot` functions will automatically reflect the change in the next snapshot.
+
 ## Features
 
 ### Synchronous Batching

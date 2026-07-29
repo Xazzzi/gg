@@ -20,7 +20,7 @@ export type ChannelOptions = {
   stopStyle?: StopStyle;
 };
 
-export class Channel<T, TReturn = any>
+export class Channel<T, TReturn = never>
   implements AsyncIterable<T, TReturn>, Disposable
 {
   readonly name: string;

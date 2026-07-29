@@ -1,4 +1,5 @@
 import { Channel, type ChannelOptions, isStopError } from "./channel.ts";
+import type { DefaultMapper, FieldMapper, IsAny, Val } from "./mappers.ts";
 import { createRelocatedProxy, type Relocation } from "./relocated-proxy.ts";
 import {
   type Callback,
@@ -10,28 +11,18 @@ import {
   unsend,
 } from "./utils.ts";
 
+export {
+  type SimpleMapper,
+  type SpreadMapper,
+  simple,
+  spread,
+} from "./mappers.ts";
+
 export const CHAN = Symbol("CHAN");
 
-type Val<T> =
-  | { status: "pending" }
-  | { status: "fulfilled"; value: T; done?: boolean }
-  | { status: "rejected"; reason: unknown };
+export type SelectShape = Record<keyof any, unknown> | readonly unknown[];
 
-type Vals<T> = T extends
-  | Promise<infer U>
-  | AsyncIterable<infer U>
-  | AsyncIterator<infer U>
-  | Iterator<infer U>
-  ? Val<U>
-  : T;
-
-type ValsOf<T extends Record<keyof any, any>> = {
-  [K in keyof T]: Vals<T[K]>;
-};
-
-export type SelectShape = Record<keyof any, unknown> | unknown[];
-
-export type SelectOptions = {
+export type SelectOptions<T extends SelectShape, M extends FieldMapper, R> = {
   autoStart?: boolean; // Begin pulling before first consumer requests a value
   autoClose?: boolean; // Close underlying channel if no async drivers left
   holdDone?: boolean; // Final undefined return wont override last yield
@@ -39,18 +30,43 @@ export type SelectOptions = {
   nonYielding?: boolean; // When you use select just to drive something else
   changeValues?: boolean; // Record not only keys that changed but also previous values
   onChanges?: (changes: unknown) => void;
+  mapFields?: M;
+  mapSnapshot?: (state: (M & { _T: T })["type"]) => R;
 };
 
-type ChanBacked<T extends SelectShape> = { [CHAN]: Channel<ValsOf<T>> };
+type ChanBacked<R> = { [CHAN]: Channel<R> };
 
-export type State<T extends SelectShape> = T &
-  ChanBacked<T> &
-  AsyncIterable<ValsOf<T>> &
+type ArrayMutators<T> = {
+  push(...items: T[]): number;
+  unshift(...items: T[]): number;
+  splice(start: number, deleteCount?: number, ...items: T[]): any[];
+};
+
+type ProxyArray<R extends readonly unknown[]> = Array<R[number]> & {
+  [K in Extract<keyof R, `${number}`>]?: R[K];
+};
+
+export type State<T extends SelectShape, R> = (IsAny<T> extends true
+  ? any
+  : T extends readonly unknown[]
+    ? ArrayMutators<T[number]>
+    : Omit<T, keyof R>) &
+  (T extends readonly unknown[]
+    ? R extends readonly unknown[]
+      ? ProxyArray<R>
+      : R
+    : R) &
+  ChanBacked<R> &
+  AsyncIterable<R, never> &
   AsyncDisposable &
   Disposable;
 
-class Select<T extends SelectShape> implements ProxyHandler<T> {
-  ch: Channel<ValsOf<T>>;
+const arrayMutators = new Set(["push", "pop", "shift", "unshift", "splice"]);
+
+class Select<T extends SelectShape, FM extends FieldMapper, Result>
+  implements ProxyHandler<T>
+{
+  channel: Channel<Result>;
   isArray: boolean;
   aiter = new Map<keyof any, AsyncIterator<unknown>>();
   siter = new Map<keyof any, Iterator<unknown>>();
@@ -66,9 +82,10 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
   nonYielding?: boolean;
   changeValues: boolean;
   onChanges?: (changes: unknown) => void;
+  mapFields?: FM;
+  mapSnapshot?: (state: any) => Result;
   // Stryker disable next-line BooleanLiteral: initial queued state is irrelevant because this.start triggers the first emit which resets it
   queued = false;
-  arrayMutators = new Set(["push", "pop", "shift", "unshift", "splice"]);
   shape: T;
 
   constructor(
@@ -81,12 +98,14 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
       nonYielding = false,
       changeValues = false,
       onChanges,
+      mapFields,
+      mapSnapshot,
       firstReceive = "latest",
       ...channelOptions
-    }: SelectOptions & ChannelOptions = {},
+    }: SelectOptions<T, FM, Result> & ChannelOptions = {},
   ) {
     this.shape = shape;
-    this.ch = new Channel<ValsOf<T>>({ firstReceive, ...channelOptions });
+    this.channel = new Channel<Result>({ firstReceive, ...channelOptions });
     this.isArray = Array.isArray(shape);
     this.values = this.isArray ? [] : {};
     // Stryker disable next-line ConditionalExpression: changeValues is explicitly false by default, the onChanges != null check is just to safely drop the tracking completely if no handler was provided
@@ -98,6 +117,8 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
     this.nonYielding = nonYielding;
     this.holdDone = holdDone;
     this.onChanges = onChanges;
+    this.mapFields = mapFields;
+    this.mapSnapshot = mapSnapshot;
 
     for (const [key, val] of Object.entries(shape))
       this.initKey(this.isArray ? Number(key) : key, val);
@@ -112,12 +133,27 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
 
   checkClose() {
     if (this.autoClose && this.nextPromises.size === 0 && !this.queued)
-      this.ch.close();
+      this.channel.close();
   }
 
   setval(key: keyof any, value: unknown) {
     this.trackChange(key, this.values[key as any]);
     this.values[key as any] = value;
+  }
+
+  setAsyncVal(key: keyof any, value: Val<any>) {
+    if (!this.mapFields) return this.setval(key, value);
+
+    const mapped = this.mapFields(key, value, this.isArray);
+    if (
+      this.mapFields.spread &&
+      !this.isArray &&
+      typeof mapped === "object" &&
+      mapped !== null &&
+      !Array.isArray(mapped)
+    ) {
+      for (const [k, v] of Object.entries(mapped)) this.setval(k, v);
+    } else this.setval(key, mapped);
   }
 
   handleAsyncNext(
@@ -128,7 +164,7 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
   ) {
     let self: Promise<unknown>;
     if (!Object.hasOwn(this.values, key))
-      this.setval(key, { status: "pending" });
+      this.setAsyncVal(key, { status: "pending" });
 
     self = iterPromise.then(
       res => {
@@ -138,12 +174,14 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
           return;
         }
 
-        this.setval(currentKey, {
+        this.setAsyncVal(currentKey, {
           ...res,
           status: "fulfilled",
           value:
             this.holdDone && res.done && res.value === undefined
-              ? (this.values[currentKey] as any).value
+              ? this.mapFields
+                ? this.values[currentKey]
+                : (this.values[currentKey] as any).value
               : res.value,
         });
         if (res.done && iterMap) iterMap.delete(currentKey);
@@ -156,7 +194,7 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
           if (iterator) unsend(iterator as any, iterPromise as any, true);
           return;
         }
-        this.setval(currentKey, { status: "rejected", reason });
+        this.setAsyncVal(currentKey, { status: "rejected", reason });
         iterMap?.delete(currentKey);
         this.nextPromises.delete(currentKey);
         this.notify();
@@ -171,7 +209,7 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
       const it = this.aiter.get(key)!;
       this.handleAsyncNext(this.aiter, key, it, it.next());
     } catch (reason) {
-      this.setval(key, { status: "rejected", reason });
+      this.setAsyncVal(key, { status: "rejected", reason });
       this.aiter.delete(key);
       this.notify();
     }
@@ -199,18 +237,20 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
           res.value.then((value: any) => ({ ...res, value })),
         );
       } else {
-        this.setval(key, {
+        this.setAsyncVal(key, {
           status: "fulfilled",
           value:
             this.holdDone && res.done && res.value === undefined
-              ? (this.values[key] as any).value
+              ? this.mapFields
+                ? this.values[key]
+                : (this.values[key] as any).value
               : res.value,
           done: res.done,
         });
         if (res.done) this.siter.delete(key);
       }
     } catch (reason) {
-      this.setval(key, { status: "rejected", reason });
+      this.setAsyncVal(key, { status: "rejected", reason });
       this.siter.delete(key);
       this.nextPromises.delete(key);
     }
@@ -222,7 +262,7 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
     const start = this.start;
     this.start = undefined;
 
-    if (this.ch.signal.aborted) return;
+    if (this.channel.signal.aborted) return;
     for (const key of this.siter.keys())
       !this.changes.has(key) && this.pullSync(key);
 
@@ -244,10 +284,11 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
       try {
         this.onChanges?.(changesSnapshot);
         if (!this.nonYielding) {
-          const value = this.isArray ? [...this.values] : { ...this.values };
-          if (this.backPressure) await this.ch.asend(value);
-          else this.ch.send(value);
-        } else this.ch.signal.throwIfAborted();
+          let finalValue = this.isArray ? [...this.values] : { ...this.values };
+          if (this.mapSnapshot) finalValue = this.mapSnapshot(finalValue);
+          if (this.backPressure) await this.channel.asend(finalValue);
+          else this.channel.send(finalValue);
+        } else this.channel.signal.throwIfAborted();
       } catch (e: any) {
         if (!isStopError(e)) throw e;
         return;
@@ -272,7 +313,7 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
     } else if (isIterator(val)) {
       this.siter.set(key, val as any);
     } else if (isPromise(val)) {
-      this.setval(key, { status: "pending" });
+      this.setAsyncVal(key, { status: "pending" });
       this.handleAsyncNext(
         null,
         key,
@@ -285,7 +326,7 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
   }
 
   [Symbol.asyncIterator]() {
-    const iter = this.ch[Symbol.asyncIterator]();
+    const iter = this.channel[Symbol.asyncIterator]();
     // Stryker disable next-line ConditionalExpression: unsend handles undefined start callback harmlessly but the check avoids unnecessary allocation overhead
     if (this.start) unsend(iter, undefined, undefined, () => this.start?.());
     return iter;
@@ -483,18 +524,17 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
     if (prop === Symbol.asyncIterator)
       return this.start
         ? this[Symbol.asyncIterator].bind(this)
-        : this.ch[Symbol.asyncIterator].bind(this.ch);
-    if (prop === Symbol.dispose) return this.ch[Symbol.dispose].bind(this.ch);
+        : this.channel[Symbol.asyncIterator].bind(this.channel);
+    if (prop === Symbol.dispose) return this.channel[Symbol.dispose].bind(this.channel);
     // Stryker disable next-line all
     if (prop === Symbol.asyncDispose)
       return (
-        (this.ch as any)[Symbol.asyncDispose]?.bind(this.ch) ??
-        this.ch.close.bind(this.ch)
+        (this.channel as any)[Symbol.asyncDispose]?.bind(this.channel) ??
+        this.channel.close.bind(this.channel)
       );
-    if (prop === CHAN) return this.ch;
+    if (prop === CHAN) return this.channel;
 
-    if (this.isArray && this.arrayMutators.has(prop as string)) {
-      // console.log("Intercepted mutator:", prop);
+    if (this.isArray && arrayMutators.has(prop as string)) {
       return (this as any)[prop as string];
     }
 
@@ -530,9 +570,25 @@ class Select<T extends SelectShape> implements ProxyHandler<T> {
   }
 }
 
-export function select<T extends SelectShape>(
-  shape: T,
-  options?: SelectOptions & ChannelOptions,
-): State<T> {
-  return new Proxy(shape, new Select(shape, options)) as State<T>;
+export function select<
+  T extends readonly unknown[] | [],
+  M extends FieldMapper = DefaultMapper,
+  S = (M & { _T: T })["type"],
+>(shape: T, options?: SelectOptions<T, M, S> & ChannelOptions): State<T, S>;
+
+export function select<
+  T extends Record<keyof any, unknown>,
+  M extends FieldMapper = DefaultMapper,
+  S = (M & { _T: T })["type"],
+>(shape: T, options?: SelectOptions<T, M, S> & ChannelOptions): State<T, S>;
+
+export function select<
+  T extends SelectShape,
+  M extends FieldMapper = DefaultMapper,
+  S = (M & { _T: T })["type"],
+>(shape: T, options?: SelectOptions<T, M, S> & ChannelOptions): State<T, S> {
+  return new Proxy(
+    shape,
+    new Select<T, M, S>(shape, options),
+  ) as unknown as State<T, S>;
 }

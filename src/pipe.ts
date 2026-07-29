@@ -16,11 +16,11 @@ export type PipeOptions = {
   backPressure?: boolean;
 };
 
-const pipeSources = new WeakMap<Channel<any>, Set<WeakRef<object>>>();
+const pipeSources = new WeakMap<Channel<any, any>, Set<WeakRef<object>>>();
 
-export async function feed<T>(
+export async function feed<T, TReturn>(
   source: Source<T>,
-  channel: Channel<T>,
+  channel: Channel<T, TReturn>,
   {
     autoStart = false,
     autoClose = true,

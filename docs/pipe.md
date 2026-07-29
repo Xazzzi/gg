@@ -42,35 +42,44 @@ Use the `pipe` to merge multiple asynchronous streams into a single channel. The
 ```typescript
 import { Channel } from "./src/channel.ts";
 
-async function* fetchLogs(server: string) {
+async function* logsStream(server: string) {
   yield `Log from ${server}`;
 }
 
 const channel = new Channel();
 
-channel.pipe(fetchLogs("Server A"));
-channel.pipe(fetchLogs("Server B"));
+channel.pipe(logsStream("Server A"));
+channel.pipe(logsStream("Server B"));
 
 for await (const log of channel) {
   console.log(log);
 }
 ```
 
-Use the pipe to convert a raw asynchronous generator into a channel. This provides backpressure control and predictable shutdown behavior.
+Use the pipe to convert a raw asynchronous generator into a work queue. The `thenReceive: "unread"` option makes sure exactly one worker processes each item.
 
 ```typescript
 import { pipe } from "./src/pipe.ts";
 
-async function* processData() {
-  for (let i = 1; i <= 3; i++) {
+async function* workStream() {
+  for (let i = 1; i <= 10000; i++) {
     yield `Data ${i}`;
   }
 }
 
 // Create a new channel directly from the source
-const channel = pipe(processData());
+const channel = pipe(workStream(), { thenReceive: "unread" });
 
-for await (const data of channel) {
-  console.log(data);
+async function * worker() {
+  for await (const data of channel) {
+    console.log('Simulate async processing of', data);
+    await new Promise(ok => setTimeout(ok, 100 + 1000 * Math.random()));
+  }
 }
+
+const WORKERS = 100;
+select(
+  Array(WORKERS).fill().map(() => worker()),
+  { autoStart: true }
+);
 ```

@@ -11,6 +11,7 @@ import "./channel/channel-pipe.test.ts";
 import "./channel/channel-producer-throw-sabotage.test.ts";
 import "./channel/channel-stop-error-utility.test.ts";
 import "./channel/channel-stopstyle-stop-hangs-producers.test.ts";
+import "./channel/channel-then-receive-unread.test.ts";
 import "./channel/channel-throw-custom-error.test.ts";
 import "./channel/close-sets-reason-to-channel-closed.test.ts";
 import "./channel/does-not-prematurely-resolve-newer-promises-when-reading-older-values.test.ts";

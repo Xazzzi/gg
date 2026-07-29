@@ -1,12 +1,6 @@
 # Channel primitive
 
-A zero-dependency, robust, and highly concurrent Async Iterable stream primitive for modern JavaScript/TypeScript.
-
-## Features
-- **Native & Idiomatic**: built using modern primitives like `Promise.withResolvers`, `AbortController`, and `Symbol.asyncIterator`.
-- **Memory Safe**: only necessary objects are retained in memory.
-- **Concurrent & MPMC**: safely handles Multiple-Producers and Multiple-Consumers broadcasting without dropped signals or unhandled rejections.
-- **100% Mutation Tested**: bulletproof, rigorously tested state logic. 100% mutational coverage using Stryker.
+An MPMC (Multi-Producer, Multi-Consumer) Async Iterable stream primitive featuring strict memory safety, backpressure (`asend`), and configurable backlog policies.
 
 ## Quick Start
 
@@ -79,6 +73,7 @@ Controls what a *newly attached* consumer receives upon its very first iteration
 ### `thenReceive`
 Controls how an attached consumer processes subsequent values:
 - **`"every"`**: The consumer sequentially processes every single value broadcasted, forcing the channel to retain the backlog in memory until this consumer reads it.
+- **`"unread"`**: The channel acts as a work queue. Multiple consumers compete for values. Exactly one consumer receives each value. You must set `firstReceive` to `"unread"` when you use this option.
 - **`"latest"`** *(default)*: If a consumer is slow or actively busy processing, it drops unread intermediate values and skips straight to the most recently broadcasted value to catch up. This allows intermediate unread values to be garbage collected.
 
 ### `stopStyle`

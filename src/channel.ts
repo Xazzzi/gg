@@ -4,7 +4,7 @@ import { noop, unreachable } from "./utils.ts";
 type AckSeq = number;
 type Next<T> = [T, Promise<Next<T>> | undefined, AckSeq];
 export type FirstReceive = "first" | "unread" | "latest" | "next";
-export type ThenReceive = "every" | "latest";
+export type ThenReceive = "every" | "latest" | "unread";
 export type StopStyle = "drain" | "stop";
 
 export const STOP = Symbol("STOP");
@@ -54,13 +54,16 @@ export class Channel<T, TReturn = any>
     thenReceive = "latest",
     stopStyle = "drain",
   }: ChannelOptions = {}) {
+    if (thenReceive === "unread" && firstReceive !== "unread")
+      throw new Error('thenReceive: "unread" requires firstReceive: "unread"');
+
+    if (firstReceive === "first" || firstReceive === "unread")
+      this.#rxHead = this.#value.promise;
+
     this.name = name;
     this.#firstReceive = firstReceive;
     this.#thenReceive = thenReceive;
     this.#stopStyle = stopStyle;
-    if (firstReceive === "first" || firstReceive === "unread") {
-      this.#rxHead = this.#value.promise;
-    }
   }
 
   pipe(source: Source<T>, options?: PipeOptions): this {
@@ -87,7 +90,9 @@ export class Channel<T, TReturn = any>
 
     const tuple: Next<T> = [
       value,
-      this.#thenReceive === "every" ? this.#value.promise : undefined,
+      this.#thenReceive === "every" || this.#thenReceive === "unread"
+        ? this.#value.promise
+        : undefined,
       this.#seq,
     ];
 
@@ -108,6 +113,7 @@ export class Channel<T, TReturn = any>
     const firstIsUnread = this.#firstReceive === "unread";
     const skipToLatest = this.#thenReceive === "latest";
     const drainOnClose = this.#stopStyle === "drain";
+    const thenIsUnread = this.#thenReceive === "unread";
 
     let next: Promise<Next<T>> = firstIsNext
       ? this.#value.promise
@@ -137,8 +143,9 @@ export class Channel<T, TReturn = any>
 
         // Channels advance rxHead to current before yielding value to observers.
         // If this code runs it means someone already called .next() on the channel.
-        // Stryker disable next-line all: preventing redundant assignment when rxHead is already next, untestable due to FIFO microtask queue
-        if (firstIsUnread && current === this.#rxHead) this.#rxHead = next;
+        const wonUnreadRace = firstIsUnread && current === this.#rxHead;
+        if (wonUnreadRace) this.#rxHead = next;
+        else if (thenIsUnread) continue;
 
         // Yield blocks till consumer is done reading the value
         if (value !== (STOP as unknown as T)) {

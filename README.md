@@ -1,9 +1,9 @@
-# Tiny zero-dependency, robust, and highly concurrent primitives for modern JavaScript/TypeScript.
+# Tiny zero-dependency concurrent primitives for modern JavaScript/TypeScript
 
 Based on modern APIs and rigorously tested for 100% coverage, including mutation testing via [Stryker](https://stryker-mutator.io/).
 
-- Minified: 11.1 kB
-- Minified + Gzipped: 3.8 kB
+- Minified: 11 kB
+- Minified + Gzipped: <4 kB
 
 See [comparison](./docs/comparison.md) to other libraries out there.
 

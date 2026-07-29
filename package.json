@@ -1,7 +1,7 @@
 {
   "name": "@xazzzi/gg",
   "version": "0.1.0",
-  "description": "Zero-dependency, robust, and highly concurrent primitives for modern JavaScript/TypeScript.",
+  "description": "Tiny zero-dependency concurrent primitives for modern JavaScript/TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -15,7 +15,10 @@
     }
   },
   "files": [
-    "dist"
+    "README.md",
+    "docs",
+    "dist",
+    "src"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --minify --format=esm --outfile=dist/index.min.js",

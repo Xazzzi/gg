@@ -10,7 +10,8 @@
     "module": "nodenext",
     "lib": ["ESNext", "DOM"],
     "types": ["node"],
+    "paths": { "@xazzzi/gg": ["./src/index.ts"] },
     "noEmit": true
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests", "learn-gg.ts"]
 }

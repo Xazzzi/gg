@@ -1,0 +1,7 @@
+.claude/
+.stryker-tmp/
+reports/
+node_modules/
+dist/
+surviving-mutants.md
+.DS_Store

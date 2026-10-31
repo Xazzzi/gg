@@ -1,13 +1,15 @@
-# gg
+# @xazzzi/gg [![CI](https://github.com/Xazzzi/gg/actions/workflows/ci.yml/badge.svg)](https://github.com/Xazzzi/gg/actions/workflows/ci.yml)
 
 Tiny zero-dependency concurrent primitives for JavaScript and TypeScript.
 `Channel` moves values, `feed` fills channels from sources, and `select` combines sources into one state.
 
 Requires Node 22 or later, and is ESM only.
 
+
 ```sh
 npm install @xazzzi/gg
 ```
+
 
 ## Channel
 

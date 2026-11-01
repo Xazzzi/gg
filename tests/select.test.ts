@@ -1616,7 +1616,21 @@ test("SE-09E on a terminal channel, copyWithin changes the proxy only", async ()
   assert.equal(log.ops.length, count);
 });
 
-test("SE-099 sort compares outputs and restarts no source", async () => {
+test("SE-099 sort compares sources, with or without unwrap", async () => {
+  const a = Promise.resolve(2),
+    b = Promise.resolve(1);
+  for (const unwrap of [false, true]) {
+    const s: any = select([a, b], { ...open, unwrap } as any);
+    await setImmediate();
+    const seen: unknown[] = [];
+    s.sort((x: unknown, y: unknown) => (seen.push(x, y), x === b ? -1 : 1));
+    assert.ok(seen.every(item => item === a || item === b));
+    assert.deepEqual([...s], [b, a]);
+    s[CHAN].close();
+  }
+});
+
+test("SE-09F sortOutputs compares outputs and restarts no source", async () => {
   const log = opLog();
   let pulls = 0;
   const source = {
@@ -1629,7 +1643,7 @@ test("SE-099 sort compares outputs and restarts no source", async () => {
   await setImmediate();
   const pulled = pulls;
   assert.equal(
-    s.sort((a: number, b: number) => a - b),
+    s.sortOutputs((a: number, b: number) => a - b),
     s,
   );
   await setImmediate();
@@ -1641,11 +1655,11 @@ test("SE-099 sort compares outputs and restarts no source", async () => {
   s[CHAN].close();
 });
 
-test("SE-099 sort passes Val outputs without unwrap", async () => {
+test("SE-09F sortOutputs passes Val outputs without unwrap", async () => {
   const s: any = select([Promise.resolve(2), Promise.resolve(1)], open);
   await setImmediate();
   const [two, one] = [...s];
-  s.sort(
+  s.sortOutputs(
     (a: Val<number>, b: Val<number>) =>
       (a.value as number) - (b.value as number),
   );
@@ -1653,7 +1667,7 @@ test("SE-099 sort passes Val outputs without unwrap", async () => {
   s[CHAN].close();
 });
 
-test("SE-099 sort moves undefined last in stable order, unseen by compare", async () => {
+test("SE-09F sortOutputs moves undefined last in stable order, unseen by compare", async () => {
   const a = Promise.withResolvers<number>(),
     b = Promise.withResolvers<number>();
   const s: any = select([a.promise, 2, b.promise, 1], {
@@ -1662,7 +1676,7 @@ test("SE-099 sort moves undefined last in stable order, unseen by compare", asyn
   });
   await setImmediate();
   const seen: unknown[] = [];
-  s.sort((x: number, y: number) => (seen.push(x, y), x - y));
+  s.sortOutputs((x: number, y: number) => (seen.push(x, y), x - y));
   assert.deepEqual([...s], [1, 2, a.promise, b.promise]);
   assert.ok(!seen.includes(undefined));
   s[CHAN].close();
@@ -1732,6 +1746,67 @@ test("SE-099 sort rejects a bad comparator, and a failing one changes nothing", 
   s[0] = 3; // The lock is released
   assert.deepEqual([...s], [3, 1]);
   s[CHAN].close();
+});
+
+test("SE-09F sortOutputs with no compare orders output strings", async () => {
+  const s: any = select([Promise.resolve("b"), "a"], {
+    ...open,
+    unwrap: true,
+  });
+  await setImmediate();
+  const [promise] = [...s];
+  s.sortOutputs();
+  assert.deepEqual([...s], ["a", promise]);
+  s[CHAN].close();
+});
+
+test("SE-09F sortOutputs rejects a bad comparator and a mutating one", () => {
+  const s: any = select([2, 1], open);
+  for (const bad of [null, 1, {}])
+    assert.throws(() => s.sortOutputs(bad), TypeError);
+  let error: unknown;
+  s.sortOutputs(() => {
+    try {
+      s.push(3);
+    } catch (e) {
+      error = e;
+    }
+    return 0;
+  });
+  assert.ok(error instanceof TypeError);
+  assert.throws(
+    () =>
+      s.sort(() => {
+        s.sortOutputs();
+        return 0;
+      }),
+    TypeError,
+  );
+  s[CHAN].close();
+});
+
+test("SE-09F sortOutputs throws on a terminal channel and changes nothing", () => {
+  const s: any = select([2, 1], open);
+  s[CHAN].close();
+  assert.throws(() => s.sortOutputs(), TypeError);
+  assert.deepEqual([...s], [2, 1]);
+});
+
+test("SE-09F a comparator that closes the channel still sorts outputs", async () => {
+  const s: any = select([2, 1], open);
+  await setImmediate();
+  s.sortOutputs((a: number, b: number) => (s[CHAN].close(), a - b));
+  assert.deepEqual([...s], [1, 2]);
+});
+
+test("SE-09F sortOutputs is in an array state only", () => {
+  const list: any = select([1], open),
+    object: any = select({ a: 1 }, open);
+  assert.ok("sortOutputs" in list);
+  assert.ok(!("sortOutputs" in object));
+  assert.equal(object.sortOutputs, undefined);
+  list[CHAN].close();
+  object[CHAN].close();
 });
 
 test("SE-09A a comparator cannot change the shape", () => {

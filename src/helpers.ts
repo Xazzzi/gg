@@ -186,6 +186,8 @@ export function spread<S>(snapshot: S): Spread<S> {
 type Entry<T> = T extends readonly (infer V)[] ? V : T[keyof T];
 
 const same = (value: unknown) => value;
+const own = (target: any, key: PropertyKey) =>
+  Object.hasOwn(target, key) ? target[key] : undefined;
 
 const store = (target: any, key: PropertyKey, value: unknown) => {
   if (key === "__proto__")
@@ -248,23 +250,19 @@ const foldArray = (target: any[], ops: readonly Op[], map: any) => {
 
 const foldObject = (target: any, ops: readonly Op[], map: any) => {
   const sets = new Map<PropertyKey, Cell>(),
-    gone = new Map<PropertyKey, unknown>();
-  const before = (key: PropertyKey) => {
-    if (sets.has(key)) return (sets.get(key) as Cell).prev;
-    if (gone.has(key)) return gone.get(key);
-    return Object.hasOwn(target, key) ? target[key] : undefined;
-  };
+    gone = new Set<PropertyKey>();
   for (const op of ops) {
-    if (op.op === "set") sets.set(op.key, incoming(op.value, before(op.key)));
+    if (op.op === "set")
+      sets.set(op.key, incoming(op.value, own(target, op.key)));
     else if (op.op === "delete") {
-      gone.set(op.key, before(op.key));
+      gone.add(op.key);
       sets.delete(op.key);
     } else throw misfit(op);
   }
   const entries = [...sets].map(
     ([key, cell]) => [key, map(cell.value, cell.prev)] as const,
   );
-  for (const key of gone.keys()) delete target[key];
+  for (const key of gone) delete target[key];
   for (const [key, value] of entries) store(target, key, value);
   return target;
 };
@@ -289,10 +287,9 @@ export function applyOps(
   if (!options.eager)
     return (Array.isArray(target) ? foldArray : foldObject)(target, ops, map);
   for (const op of ops) {
-    if (op.op === "set") {
-      const prev = Object.hasOwn(target, op.key) ? target[op.key] : undefined;
-      store(target, op.key, map(op.value, prev));
-    } else if (op.op === "delete") delete target[op.key];
+    if (op.op === "set")
+      store(target, op.key, map(op.value, own(target, op.key)));
+    else if (op.op === "delete") delete target[op.key];
     else if (op.op === "move") {
       if (!Array.isArray(target))
         throw new TypeError("applyOps move needs an array target");

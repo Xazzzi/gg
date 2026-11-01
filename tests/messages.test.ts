@@ -51,6 +51,15 @@ const cases: [string, () => unknown, RegExp][] = [
   ],
   ["sort comparator", () => list().sort(1), /comparator must be a function/],
   [
+    "sortOutputs terminal",
+    () => {
+      const s = list();
+      s[CHAN].close();
+      s.sortOutputs();
+    },
+    /sortOutputs needs a live channel/,
+  ],
+  [
     "sort mutation",
     () => {
       const s = list();

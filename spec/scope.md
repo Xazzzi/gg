@@ -32,6 +32,7 @@ Gherkin is not used.
 - `spread` is a snapshot projection, passed as `mapSnapshot: spread`.
 - `applyOps` is the one replay of `onChanges`, with an optional `map` for derived entries.
 - Proxy reads return sources, because `State` keeps the input types.
+- `sort` follows the proxy and compares sources, so `sortOutputs` is the explicit way to compare outputs.
 - Removed sources are not closed, because they return to the caller.
 - `Channel` rejects thenables, and projections are synchronous.
 - `StopError`, `isVal` and `CHAN` work across library copies.

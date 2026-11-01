@@ -63,8 +63,9 @@ An `unwrap` of type `boolean` must be narrowed before the call, so an overload c
 
 `State<T, R, O = Snapshot<T>>` is `Mutable<T, O>`, plus `AsyncIterable<R>`, `Disposable` and `{ [CHAN]: Channel<R> }`.
 `O` is the snapshot type, which is `Unwrapped<T>` under `unwrap`.
-For an array shape, `Mutable<T, O>` is `T[number][]` with `sort` retyped, because mutators can change the length and SE-099 compares outputs.
-The comparator takes elements of `O` without `undefined`, and `sort` returns the same retyped array.
+For an array shape, `Mutable<T, O>` is `T[number][]` with `sortOutputs` added and `reverse` overloaded to keep it, because mutators can change the length.
+It MUST stay assignable to `T[number][]`, so a function taking that array accepts the state.
+The `sortOutputs` comparator takes elements of `O` without `undefined`, and `sort`, `sortOutputs`, `reverse` and `fill` return the same array type.
 For an object shape, it is `T`.
 It keeps the input types because the proxy reads and writes sources, not states.
 
@@ -255,7 +256,7 @@ A flush runs these steps in order.
   Deleting a missing key or an index at or past `length` MUST do nothing.
   Deleting `length` MUST fail as on an `Array`, so the trap returns false.
 - SE-08A: On a terminal channel, writes and mutators MUST succeed on the proxy without tracking, flushing or reopening.
-  SE-034, SE-085, SE-095, SE-098, SE-099 and SE-09A still apply, and take precedence.
+  SE-034, SE-085, SE-095, SE-098, SE-099, SE-09A and SE-09F still apply, and take precedence.
   No detection runs, except the `Promise` check of SE-034.
 - SE-08B: An own reserved key in `shape`, enumerable or not, MUST make `select` throw a `TypeError` synchronously.
 - SE-08C: `defineProperty`, `preventExtensions` and `setPrototypeOf` on the proxy MUST throw a `TypeError`.
@@ -263,7 +264,7 @@ A flush runs these steps in order.
 
 ## Arrays
 
-- SE-090: `push`, `pop`, `shift`, `unshift`, `splice`, `sort`, `reverse`, `fill`, `copyWithin` and `length` writes MUST move slots, not rebuild them.
+- SE-090: `push`, `pop`, `shift`, `unshift`, `splice`, `sort`, `sortOutputs`, `reverse`, `fill`, `copyWithin` and `length` writes MUST move slots, not rebuild them.
   Reading a mutator MUST return one stable function per proxy, not the `Array.prototype` method.
 - SE-091: Mutators MUST return what the matching `Array` method returns, using sources.
 - SE-092: A slot's updates MUST reach its current index after any move.
@@ -273,21 +274,24 @@ A flush runs these steps in order.
 - SE-097: A mutator call that changes nothing MUST produce no operation and no flush.
   Adding a source a mutator just removed counts as a change, and restarts it.
 - SE-098: A `length` write MUST follow `Array` semantics, including a `RangeError` for an invalid length.
-- SE-099: `sort` MUST order slots by their outputs, and return the proxy.
-  Like `Array.prototype.sort`, it is stable, puts `undefined` outputs last without calling the comparator, and compares strings with no comparator.
+- SE-099: `sort` MUST order slots by their sources, and return the proxy.
+  Like `Array.prototype.sort`, it is stable, puts `undefined` last without calling the comparator, and compares strings with no comparator.
   A comparator that is neither a function nor `undefined` MUST throw a `TypeError`, and a comparator that throws MUST change nothing.
-  The order is a one-off, so later updates MUST NOT move slots.
 - SE-09A: Changing the shape while a comparator runs MUST throw a `TypeError`.
 - SE-09B: `reverse` MUST reverse the slots, and return the proxy.
-- SE-09C: `sort` and `reverse` MUST move slots without restarting them, and MUST produce one `move`.
+- SE-09C: `sort`, `sortOutputs` and `reverse` MUST move slots without restarting them, and MUST produce one `move`.
   An order that changes nothing falls under SE-097.
-  On a terminal channel, by SE-08A, `sort` orders sources.
 - SE-09D: `fill` MUST follow `Array` range rules, return the proxy, and act as one `splice` of the range.
   Each slot in the range gets the source, and SE-132 applies to an iterator.
   An empty range changes nothing, but SE-034 still applies to the source.
 - SE-09E: `copyWithin` MUST follow `Array` range rules, return the proxy, and act as one `splice` of the target range using the copied sources.
   A copy onto the same index MUST change nothing, by SE-097.
   A copied slot restarts as pending, and SE-132 applies to an iterator.
+- SE-09F: `sortOutputs` MUST follow SE-099, except that it orders slots by their outputs.
+  An output is a slot's snapshot entry, a `Val` or under `unwrap` a value, before `mapSnapshot`.
+  The order is a one-off, so later updates MUST NOT move slots.
+  On a terminal channel it MUST throw a `TypeError`, because slots have no outputs to compare.
+  `"sortOutputs" in state` MUST hold for an array shape.
 
 ## Operation log
 

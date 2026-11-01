@@ -72,11 +72,13 @@ export type Unwrapped<T> = T extends readonly unknown[]
   ? UnwrappedOf<Settled<T[number]>>[]
   : { [K in keyof T]: UnwrappedOf<Settled<T[K]>> };
 
-type SelectArray<V, O> = Omit<V[], "sort"> & {
-  sort(
+// Extends V[], so a state stays assignable to V[], and reverse overloads to keep sortOutputs.
+type SelectArray<V, O> = {
+  sortOutputs(
     compare?: (a: Exclude<O, undefined>, b: Exclude<O, undefined>) => number,
   ): SelectArray<V, O>;
-};
+  reverse(): SelectArray<V, O>;
+} & V[];
 
 type Mutable<T, O> = T extends readonly unknown[]
   ? SelectArray<T[number], O extends readonly (infer E)[] ? E : never>
@@ -508,11 +510,13 @@ export function select(shape: any, options: any = {}): any {
     return state;
   };
 
-  const sort = (compare?: (a: any, b: any) => number) => {
+  const checkCompare = (compare?: (a: any, b: any) => number) => {
     if (compare !== undefined && typeof compare !== "function")
       throw new TypeError("sort comparator must be a function");
     unlocked();
-    const items: unknown[] = signal.aborted ? target : array.map(out);
+  };
+
+  const arrange = (items: unknown[], compare?: (a: any, b: any) => number) => {
     let order: number[];
     sorting = true;
     try {
@@ -604,7 +608,16 @@ export function select(shape: any, options: any = {}): any {
       splice(begin, count, blanks(count).fill(source));
       return state;
     },
-    sort,
+    sort: (compare?: (a: any, b: any) => number) => {
+      checkCompare(compare);
+      return arrange(target, compare);
+    },
+    sortOutputs: (compare?: (a: any, b: any) => number) => {
+      checkCompare(compare);
+      if (signal.aborted)
+        throw new TypeError("sortOutputs needs a live channel");
+      return arrange(array.map(out), compare);
+    },
     reverse: () =>
       permute(target.map((_: unknown, i: number) => target.length - 1 - i)),
     copyWithin: (to: unknown, from: unknown, until?: unknown) => {
@@ -649,7 +662,10 @@ export function select(shape: any, options: any = {}): any {
         ? methods[key]
         : Reflect.get(target, key, receiver);
     },
-    has: (_, key) => RESERVED.includes(key) || Reflect.has(target, key),
+    has: (_, key) =>
+      RESERVED.includes(key) ||
+      (isArray && key in methods) ||
+      Reflect.has(target, key),
     set(_, key, value) {
       assign(key, value);
       return true;

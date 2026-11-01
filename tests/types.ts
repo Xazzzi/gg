@@ -108,17 +108,34 @@ const op: Op = { op: "delete", key: "a", prev: 1 };
 void [source, op];
 
 const rows = select([Promise.resolve(1), 2], { unwrap: true });
-rows.sort((a, b) => {
+rows.sortOutputs((a, b) => {
   yes<Eq<typeof a, number>>();
   return a - b;
 });
+rows.sort((a, b) => {
+  yes<Eq<typeof a, Promise<number> | number>>();
+  return Number(a) - Number(b);
+});
 const vals = select([Promise.resolve(1)]);
-vals.sort((a, b) => {
+vals.sortOutputs((a, b) => {
   yes<Eq<typeof a, Val<number>>>();
   return Number(a.done) - Number(b.done);
 });
 yes<Eq<Extract<Op, { op: "move" }>["order"], number[]>>();
 rows.sort().reverse().fill(3);
+rows.reverse().sortOutputs((a, b) => {
+  yes<Eq<typeof a, number>>();
+  return a - b;
+});
+rows.fill(3).sortOutputs((a, b) => {
+  yes<Eq<typeof a, number>>();
+  return a - b;
+});
+const takesStrings = (values: string[]) => values.length;
+takesStrings(select(["a"]));
+takesStrings(select(["a"], { unwrap: true }).reverse());
+const takesSources = (values: (Promise<number> | number)[]) => values.length;
+takesSources(rows);
 applyOps([1], [op], value => Number(value), { eager: true });
 // @ts-expect-error HE-049
 applyOps([1], [op], undefined, { eager: 1 });

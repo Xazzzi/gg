@@ -374,7 +374,8 @@ topic("onChanges", "- ");
 }
 topic("sort comparators", "- ");
 {
-  // sort compares outputs, so unwrap passes values and pending slots go last.
+  // sort compares sources, like every proxy method.
+  // sortOutputs compares outputs, so unwrap passes values and pending slots go last.
   const scores = select([Promise.resolve(2), 3, 1], {
     unwrap: true,
     autoStart: true,
@@ -383,7 +384,7 @@ topic("sort comparators", "- ");
   });
   await tick();
 
-  scores.sort((a, b) => b - a);
+  scores.sortOutputs((a, b) => b - a);
   console.log(scores[0], scores[2]); // => 3 1
   scores[CHAN].close();
 }
@@ -495,8 +496,9 @@ topic("applyOps", "- ");
 // With backPressure, select stops at the publish step until a consumer reads.
 // Use autoStart with nonYielding, or backPressure: false, for unattended sources.
 // break does not stop select, so use `using` or close the channel.
-// sort is a one-off, so later updates do not move slots.
+// sortOutputs is a one-off, so later updates do not move slots.
 // A comparator that changes the shape gets a TypeError.
+// sortOutputs throws on a terminal channel, where slots have no outputs.
 // One iterator in two slots shares a cursor, so each value reaches one slot.
 // fill and copyWithin can do this silently, and leave overwritten iterators open.
 // An attached consumer that is dropped without return() keeps its backlog alive.

@@ -796,6 +796,21 @@ test("HE-046 a __proto__ key stays an own entry", () => {
   });
 });
 
+test("HE-046 other keys stay plain assignments a reactive target sees", () => {
+  for (const options of [eager, {}]) {
+    const writes: PropertyKey[] = [];
+    const target = new Proxy({} as any, {
+      set(object, key, value) {
+        writes.push(key);
+        return Reflect.set(object, key, value);
+      },
+    });
+    const op: Op = { op: "set", key: "a", value: 1, prev: undefined };
+    applyOps(target, [op], undefined, options);
+    assert.deepEqual(writes, ["a"]);
+  }
+});
+
 test("HE-047 invalid arguments throw a TypeError", () => {
   for (const target of [null, 1, "x"])
     assert.throws(() => applyOps(target as any, []), TypeError);
@@ -961,6 +976,16 @@ test("HE-04C a key removed and set again inherits its entry, once", () => {
   const fresh: unknown[][] = [];
   applyOps({} as any, [set("hasOwnProperty", 1)], tag(fresh));
   assert.deepEqual(fresh, [[1, undefined]]);
+});
+
+test("HE-04C a splice value past the removed range has no prev", () => {
+  const seen: unknown[][] = [];
+  const target = applyOps(["A", "B"], [cut(0, 1, 1, 2)], tag(seen));
+  assert.deepEqual(seen, [
+    [1, "A"],
+    [2, undefined],
+  ]);
+  assert.deepEqual(target, ["1!", "2!", "B"]);
 });
 
 test("HE-04C a set past the end has no prev", () => {

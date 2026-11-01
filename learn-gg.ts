@@ -7,7 +7,7 @@
 /// It runs top to bottom, and each `// =>` comment shows what the line prints.
 /// Each section sits in its own `{ }` scope, so names can repeat.
 /// The rules behind all of this live in [`spec/`](spec/).
-
+import { styleText } from "node:util";
 import {
   abortable,
   CHAN,
@@ -21,9 +21,11 @@ import {
   spread,
 } from "@xazzzi/gg";
 
+const topic = (title: string, prefix = "\n") =>
+  console.log(styleText(["bold", "cyan"], prefix + title));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-console.log("Channel: send, then read with for await");
+topic("Channel: send, then read with for await");
 {
   // A log of values. By default, each consumer reads all of them.
   const ch = new Channel<number>();
@@ -35,7 +37,7 @@ console.log("Channel: send, then read with for await");
   for await (const n of ch) console.log(n); // => 1, then 2
 }
 
-console.log('"latest" skips: head first, then newest');
+topic('"latest" skips: head first, then newest');
 {
   const ch = new Channel<number>({ thenReceive: "latest" });
 
@@ -48,7 +50,7 @@ console.log('"latest" skips: head first, then newest');
   console.log((await it.next()).value); // => 3, 2 was skipped
 }
 
-console.log("Two options pick the channel's behaviour");
+topic("Two options pick the channel's behaviour");
 // firstReceive picks a consumer's first value.
 // thenReceive picks every value after that.
 //
@@ -61,8 +63,9 @@ console.log("Two options pick the channel's behaviour");
 //
 // "unread" as thenReceive needs "unread" as firstReceive.
 // Any other pairing could hand one value to two consumers.
+topic("Broadcast", "- ");
 {
-  // Broadcast: a late consumer replays the whole log.
+  // A late consumer replays the whole log.
   const log = new Channel<string>({ firstReceive: "first" });
   log.send("a");
   log.send("b");
@@ -70,8 +73,9 @@ console.log("Two options pick the channel's behaviour");
   for await (const line of log) console.log(line); // => a, then b
   for await (const line of log) console.log(line); // => a, then b
 }
+topic("Work queue", "- ");
 {
-  // Work queue: each value reaches exactly one consumer.
+  // Each value reaches exactly one consumer.
   const jobs = new Channel<number>({ thenReceive: "unread" });
   const a = jobs[Symbol.asyncIterator]();
   const b = jobs[Symbol.asyncIterator]();
@@ -80,8 +84,9 @@ console.log("Two options pick the channel's behaviour");
   console.log((await a.next()).value); // => 1
   console.log((await b.next()).value); // => 2
 }
+topic("Latest holder", "- ");
 {
-  // Latest holder: a new consumer sees the current value at once.
+  // A new consumer sees the current value at once.
   const price = new Channel<number>({
     firstReceive: "latest",
     thenReceive: "latest",
@@ -91,7 +96,7 @@ console.log("Two options pick the channel's behaviour");
   console.log((await price[Symbol.asyncIterator]().next()).value); // => 101
 }
 
-console.log("Backpressure with asend");
+topic("Backpressure with asend");
 {
   const ch = new Channel<number>();
 
@@ -104,7 +109,41 @@ console.log("Backpressure with asend");
   console.log("read"); // => read
 }
 
-console.log("Ending a channel");
+topic("Producers unlock in send order");
+{
+  const ch = new Channel<string>();
+
+  // Each producer sends its next value only after a consumer reads the last one.
+  const a = (async () => {
+    console.log("sending a1");
+    await ch.asend("a1");
+    console.log("a1 read, sending a2");
+    await ch.asend("a2");
+    console.log("a2 read, a done");
+  })();
+  const b = (async () => {
+    console.log("sending b1");
+    await ch.asend("b1");
+    console.log("b1 read, sending b2");
+    await ch.asend("b2");
+    console.log("b2 read, b done");
+  })();
+
+  // Nothing has been read, so both producers wait with a1 and b1 in the log.
+  const it = ch[Symbol.asyncIterator]();
+  for (let i = 0; i < 4; i++) {
+    console.log("got", (await it.next()).value);
+  }
+  await Promise.all([a, b]);
+  // The read settles the ack first, so each producer logs before the consumer.
+  // => a1 read, sending a2 / got a1
+  // => b1 read, sending b2 / got b1
+  // => a2 read, a done / got a2
+  // => b2 read, b done / got b2
+}
+
+topic("Ending a channel");
+topic("close", "- ");
 {
   // close(value) becomes the consumer's return value.
   const ch = new Channel<number, string>();
@@ -115,6 +154,7 @@ console.log("Ending a channel");
   console.log(ch.signal.aborted); // => true, signal aborts synchronously
   ch.close("ignored"); // The first close or throw wins
 }
+topic("throw", "- ");
 {
   // throw fails consumers. Producers get a StopError that wraps the reason.
   const ch = new Channel<number>();
@@ -134,6 +174,7 @@ console.log("Ending a channel");
     console.log((error as StopError).reason === failure); // => true
   }
 }
+topic("stopStyle", "- ");
 {
   // "drain", the default, lets consumers finish. "stop" drops what is unread.
   const ch = new Channel<number>({ stopStyle: "stop" });
@@ -141,12 +182,14 @@ console.log("Ending a channel");
   ch.close();
   console.log((await ch[Symbol.asyncIterator]().next()).done); // => true
 }
+topic("using", "- ");
 {
   // `using` closes the channel at the end of the scope.
   // Node 24 runs it natively, and Node 22 needs a transpiler or `ch[Symbol.dispose]()`.
   using ch = new Channel<number>();
   ch.send(1);
 }
+topic("break", "- ");
 {
   // break detaches one consumer, and the channel stays open.
   const ch = new Channel<number>();
@@ -155,7 +198,7 @@ console.log("Ending a channel");
   console.log(ch.signal.aborted); // => false
 }
 
-console.log("Channels refuse thenables");
+topic("Channels refuse thenables");
 {
   const ch = new Channel<unknown>();
   try {
@@ -166,7 +209,8 @@ console.log("Channels refuse thenables");
   // Await the promise first, or let feed do it.
 }
 
-console.log("feed: move a source into a channel");
+topic("feed: move a source into a channel");
+topic("Sources", "- ");
 {
   // A source is a promise or any iterator, sync or async.
   async function* numbers() {
@@ -180,6 +224,7 @@ console.log("feed: move a source into a channel");
   // The channel closes once the last source finishes.
   for await (const n of ch) console.log(n); // => 1, then 2
 }
+topic("Merging feeds", "- ");
 {
   // Several feeds merge. One run keeps its order, but runs interleave.
   const ch = new Channel<string>();
@@ -190,6 +235,7 @@ console.log("feed: move a source into a channel");
   for await (const value of ch) out.push(value);
   console.log(out.sort()); // => [ 'a', 'b' ]
 }
+topic("feed options", "- ");
 {
   // autoStart runs with no consumer, backPressure: false skips the wait.
   // sendReturn also sends a generator's return value.
@@ -207,6 +253,7 @@ console.log("feed: move a source into a channel");
 
   for await (const n of ch) console.log(n); // => 1, then 2
 }
+topic("Source failures", "- ");
 {
   // feed never rejects. A source failure fails the channel instead.
   const ch = new Channel<number>();
@@ -219,7 +266,7 @@ console.log("feed: move a source into a channel");
   }
 }
 
-console.log("select: one state from many sources");
+topic("select: one state from many sources");
 {
   const user = Promise.withResolvers<string>();
   const state = select({ title: "Home", user: user.promise });
@@ -237,11 +284,13 @@ console.log("select: one state from many sources");
   console.log((await it.next()).done); // => true
 }
 
-console.log("unwrap gives plain values, and a rejection fails the channel");
+topic("unwrap gives plain values, and a rejection fails the channel");
+topic("unwrap", "- ");
 {
   const state = select({ user: Promise.resolve("Ada") }, { unwrap: true });
   for await (const { user } of state) console.log(user); // => Ada
 }
+topic("Rejections", "- ");
 {
   const state = select(
     { user: Promise.reject(new Error("down")) },
@@ -253,6 +302,7 @@ console.log("unwrap gives plain values, and a rejection fails the channel");
     console.log((error as Error).message); // => down
   }
 }
+topic("One Channel in two slots", "- ");
 {
   // A Channel opens one reader per slot, so both slots read every value.
   const ch = new Channel<number>({ firstReceive: "first" });
@@ -264,7 +314,7 @@ console.log("unwrap gives plain values, and a rejection fails the channel");
   // => [2, 2]
 }
 
-console.log("The shape stays mutable");
+topic("The shape stays mutable");
 {
   const state = select({ a: 1 } as Record<string, unknown>, {
     autoClose: false,
@@ -284,7 +334,8 @@ console.log("The shape stays mutable");
   state[CHAN].close(); // CHAN reaches the underlying Channel
 }
 
-console.log("Arrays and the operation log");
+topic("Arrays and the operation log");
+topic("onChanges", "- ");
 {
   // onChanges gets ordered operations, so a UI can replay them without diffing.
   const seen: Op[] = [];
@@ -320,6 +371,7 @@ console.log("Arrays and the operation log");
 
   rows[CHAN].close();
 }
+topic("sort comparators", "- ");
 {
   // sort compares outputs, so unwrap passes values and pending slots go last.
   const scores = select([Promise.resolve(2), 3, 1], {
@@ -335,7 +387,7 @@ console.log("Arrays and the operation log");
   scores[CHAN].close();
 }
 
-console.log("Sync iterators advance once per flush");
+topic("Sync iterators advance once per flush");
 {
   function* ids() {
     yield 1;
@@ -348,7 +400,8 @@ console.log("Sync iterators advance once per flush");
     console.log(snapshot.id.value); // => 1
 }
 
-console.log("Helpers");
+topic("Helpers");
+topic("spread", "- ");
 {
   // spread flattens each Val into fields, usually as mapSnapshot.
   const state = select(
@@ -361,6 +414,7 @@ console.log("Helpers");
     console.log(view.user, view.userLoading, view.userError, view.userDone);
   // => Ada false null true
 }
+topic("isVal", "- ");
 {
   // isVal tells a Val from a lookalike.
   const snapshot = (
@@ -370,6 +424,7 @@ console.log("Helpers");
   ).value;
   console.log(isVal(snapshot.a), isVal({ status: "pending" })); // => true false
 }
+topic("catching", "- ");
 {
   // catching ends a source quietly. onError is required, so it is explicit.
   async function* flaky() {
@@ -383,6 +438,7 @@ console.log("Helpers");
   for await (const n of safe) console.log(n);
   // => 1, then logged: flaky
 }
+topic("abortable", "- ");
 {
   // abortable stops waiting on a signal. It does not cancel the work.
   const control = new AbortController();
@@ -395,8 +451,7 @@ console.log("Helpers");
     console.log((error as Error).message); // => gave up
   }
 }
-
-console.log("Traps");
+// # Traps
 // asend with no consumer stays pending until the channel ends.
 // A next() left pending on a work queue still takes a value, which is then lost.
 // With backPressure, select stops at the publish step until a consumer reads.

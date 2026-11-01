@@ -23,10 +23,10 @@ import {
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-// 1. Channel: send, then read with for await
+console.log("Channel: send, then read with for await");
 {
   // A log of values. "every" means each consumer reads all of them.
-  const ch = new Channel<number>({ thenReceive: "every" });
+  const ch = new Channel<number>();
 
   ch.send(1); // Synchronous, never blocks, and runs no consumer code
   ch.send(2);
@@ -35,9 +35,9 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   for await (const n of ch) console.log(n); // => 1, then 2
 }
 
-// 2. The default mode skips: head first, then newest
+console.log('"latest" skips: head first, then newest');
 {
-  const ch = new Channel<number>(); // unread, latest, drain
+  const ch = new Channel<number>({ thenReceive: "latest" });
 
   ch.send(1);
   ch.send(2);
@@ -48,7 +48,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   console.log((await it.next()).value); // => 3, 2 was skipped
 }
 
-// 3. Two options pick the channel's behaviour
+console.log("Two options pick the channel's behaviour");
 // firstReceive picks a consumer's first value.
 // thenReceive picks every value after that.
 //
@@ -85,13 +85,16 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 }
 {
   // Latest holder: a new consumer sees the current value at once.
-  const price = new Channel<number>({ firstReceive: "latest" });
+  const price = new Channel<number>({
+    firstReceive: "latest",
+    thenReceive: "latest",
+  });
   price.send(100);
   price.send(101);
   console.log((await price[Symbol.asyncIterator]().next()).value); // => 101
 }
 
-// 4. Backpressure with asend
+console.log("Backpressure with asend");
 {
   const ch = new Channel<number>();
 
@@ -104,7 +107,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   console.log("read"); // => read
 }
 
-// 5. Ending a channel
+console.log("Ending a channel");
 {
   // close(value) becomes the consumer's return value.
   const ch = new Channel<number, string>();
@@ -155,7 +158,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   console.log(ch.signal.aborted); // => false
 }
 
-// 6. Channels refuse thenables
+console.log("Channels refuse thenables");
 {
   const ch = new Channel<unknown>();
   try {
@@ -166,7 +169,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   // Await the promise first, or let feed do it.
 }
 
-// 7. feed: move a source into a channel
+console.log("feed: move a source into a channel");
 {
   // A source is a promise or any iterator, sync or async.
   async function* numbers() {
@@ -174,7 +177,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     yield 2;
   }
 
-  const ch = new Channel<number>({ thenReceive: "every" });
+  const ch = new Channel<number>();
   feed(numbers(), ch); // Waits for a consumer, then respects backpressure
 
   // The channel closes once the last source finishes.
@@ -182,7 +185,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 }
 {
   // Several feeds merge. One run keeps its order, but runs interleave.
-  const ch = new Channel<string>({ thenReceive: "every" });
+  const ch = new Channel<string>();
   feed(["a"], ch);
   feed(Promise.resolve("b"), ch);
 
@@ -198,7 +201,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     return 2;
   }
 
-  const ch = new Channel<number>({ thenReceive: "every" });
+  const ch = new Channel<number>();
   await feed(steps(), ch, {
     autoStart: true,
     backPressure: false,
@@ -219,7 +222,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   }
 }
 
-// 8. select: one state from many sources
+console.log("select: one state from many sources");
 {
   const user = Promise.withResolvers<string>();
   const state = select({ title: "Home", user: user.promise });
@@ -237,7 +240,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   console.log((await it.next()).done); // => true
 }
 
-// 9. unwrap gives plain values, and a rejection fails the channel
+console.log("unwrap gives plain values, and a rejection fails the channel");
 {
   const state = select({ user: Promise.resolve("Ada") }, { unwrap: true });
   for await (const { user } of state) console.log(user); // => Ada
@@ -253,8 +256,17 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     console.log((error as Error).message); // => down
   }
 }
+{
+  const ch = new Channel<number>({ firstReceive: "first" });
+  feed([1, 2], ch);
+  for await (const vals of select([ch, ch], { unwrap: true }))
+    console.log(vals);
+  // => [undefined, undefined]
+  // => [1, 1]
+  // => [2, 2]
+}
 
-// 10. The shape stays mutable
+console.log("The shape stays mutable");
 {
   const state = select({ a: 1 } as Record<string, unknown>, {
     autoClose: false,
@@ -274,7 +286,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   state[CHAN].close(); // CHAN reaches the underlying Channel
 }
 
-// 11. Arrays and the operation log
+console.log("Arrays and the operation log");
 {
   // onChanges gets ordered operations, so a UI can replay them without diffing.
   const seen: Op[] = [];
@@ -305,7 +317,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   rows[CHAN].close();
 }
 
-// 12. Sync iterators advance once per flush
+console.log("Sync iterators advance once per flush");
 {
   function* ids() {
     yield 1;
@@ -318,7 +330,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     console.log(snapshot.id.value); // => 1
 }
 
-// 13. Helpers
+console.log("Helpers");
 {
   // spread flattens each Val into fields, usually as mapSnapshot.
   const state = select(
@@ -366,7 +378,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   }
 }
 
-// 14. Traps
+console.log("Traps");
 // asend with no consumer stays pending until the channel ends.
 // A next() left pending on a work queue still takes a value, which is then lost.
 // With backPressure, select stops at the publish step until a consumer reads.

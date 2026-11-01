@@ -88,7 +88,8 @@ It keeps the input types because the proxy reads and writes sources, not states.
 ## Options
 
 - SE-001: Defaults MUST be `autoStart: false`, `autoClose: true`, `backPressure: true`, `nonYielding: false`, `unwrap: false`.
-- SE-002: `firstReceive` MUST default to `"latest"`, or to `"unread"` when `thenReceive` is `"unread"`.
+- SE-002: `thenReceive` MUST default to `"latest"`.
+  `firstReceive` MUST default to `"latest"`, or to `"unread"` when `thenReceive` is `"unread"`.
 - SE-003: Other `ChannelOptions` MUST pass to the channel unchanged.
 - SE-004: `select` MUST NOT mutate `shape`.
   The proxy operates on a shallow copy, which is a plain object or a plain array.

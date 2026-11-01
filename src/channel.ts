@@ -75,7 +75,7 @@ export class Channel<T, TReturn = undefined>
 
   constructor({
     firstReceive = "unread",
-    thenReceive = "latest",
+    thenReceive = "every",
     stopStyle = "drain",
   }: ChannelOptions = {}) {
     if (

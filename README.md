@@ -18,7 +18,7 @@ npm install @xazzzi/gg
 ```ts
 import { Channel } from "@xazzzi/gg";
 
-const ch = new Channel<number>({ thenReceive: "every" });
+const ch = new Channel<number>();
 ch.send(1);
 ch.send(2);
 ch.close();
@@ -38,7 +38,7 @@ Options select the mode:
 | `latest`     | Newest, then all     | Newest, then newest  | Invalid    |
 | `next`       | Future values only   | Next, then newest    | Invalid    |
 
-Defaults are `firstReceive: "unread"`, `thenReceive: "latest"` and `stopStyle: "drain"`.
+Defaults are `firstReceive: "unread"`, `thenReceive: "every"` and `stopStyle: "drain"`.
 `stopStyle: "stop"` discards values not yet read when the channel ends.
 
 ## feed
@@ -53,7 +53,7 @@ async function* lines(name: string) {
   yield `${name}: ready`;
 }
 
-const ch = new Channel<string>({ thenReceive: "every" });
+const ch = new Channel<string>();
 feed(lines("a"), ch);
 feed(lines("b"), ch);
 for await (const line of ch) console.log(line);

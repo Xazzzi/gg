@@ -174,7 +174,7 @@ export function select(shape: any, options: any = {}): any {
   const {
     onChanges,
     mapSnapshot,
-    thenReceive,
+    thenReceive = "latest",
     stopStyle,
     firstReceive = thenReceive === "unread" ? "unread" : "latest",
   } = options;

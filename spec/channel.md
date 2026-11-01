@@ -80,7 +80,7 @@ The implementation MAY use any internal structure with the same observable behav
 
 ## Construction
 
-- CH-001: Defaults MUST be `firstReceive: "unread"`, `thenReceive: "latest"`, `stopStyle: "drain"`.
+- CH-001: Defaults MUST be `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"`.
 - CH-002: The constructor MUST throw a `TypeError` if `thenReceive` is `"unread"` and `firstReceive` is not `"unread"`.
 - CH-003: The constructor MUST throw a `TypeError` for an option value not listed in the Public API.
 
@@ -257,7 +257,7 @@ ch.send(2);
 ch.send(3);
 const it = ch[Symbol.asyncIterator]();
 await it.next(); // { value: 1, done: false }, the head by CH-021
-await it.next(); // { value: 3, done: false }, the newest by CH-031
+await it.next(); // { value: 2, done: false }, position + 1 by CH-030
 ch.close("end");
 await it.next(); // { value: "end", done: true }, nothing left to read
 ```

@@ -133,6 +133,18 @@ test("SE-001 SE-002 option defaults", async () => {
   );
 });
 
+test("SE-002 thenReceive defaults to latest", async () => {
+  const s = select({ a: 1 }, { backPressure: false, autoClose: false });
+  const it = iter(s);
+  assert.deepEqual((await it.next()).value, { a: 1 });
+  s.a = 2;
+  await setImmediate();
+  s.a = 3;
+  await setImmediate();
+  assert.deepEqual((await it.next()).value, { a: 3 });
+  s[Symbol.dispose]();
+});
+
 test("SE-007 options of the wrong type throw, and undefined selects the default", async () => {
   for (const key of [
     "autoStart",

@@ -30,13 +30,14 @@ async function collectible(
   return { collected, held };
 }
 
-test("CH-001 defaults are unread, latest, drain", async () => {
+test("CH-001 defaults are unread, every, drain", async () => {
   const ch = new Channel<number>();
   ch.send(1);
   ch.send(2);
   ch.send(3);
   const it = iter(ch);
   assert.deepEqual(await it.next(), val(1));
+  assert.deepEqual(await it.next(), val(2));
   assert.deepEqual(await it.next(), val(3));
   ch.close();
   assert.deepEqual(await it.next(), end());
@@ -279,7 +280,10 @@ test("CH-020 first starts at value 1", async () => {
 });
 
 test("CH-022 latest evaluates the newest at attach", async () => {
-  const ch = new Channel<number>({ firstReceive: "latest" });
+  const ch = new Channel<number>({
+    firstReceive: "latest",
+    thenReceive: "latest",
+  });
   ch.send(1);
   const pending = iter(ch).next();
   ch.send(2);
@@ -287,7 +291,10 @@ test("CH-022 latest evaluates the newest at attach", async () => {
 });
 
 test("CH-022 latest starts at the newest, or the next value", async () => {
-  const ch = new Channel<number>({ firstReceive: "latest" });
+  const ch = new Channel<number>({
+    firstReceive: "latest",
+    thenReceive: "latest",
+  });
   const pending = iter(ch).next();
   ch.send(1);
   ch.send(2);
@@ -312,7 +319,10 @@ test("CH-023 CH-024 next starts at the first value after attach", async () => {
 });
 
 test("CH-031 latest is evaluated at the next call", async () => {
-  const ch = new Channel<number>({ firstReceive: "first" });
+  const ch = new Channel<number>({
+    firstReceive: "first",
+    thenReceive: "latest",
+  });
   ch.send(1);
   ch.send(2);
   const it = iter(ch);
@@ -324,7 +334,10 @@ test("CH-031 latest is evaluated at the next call", async () => {
 });
 
 test("CH-031 a queued next evaluates after the earlier next settles", async () => {
-  const ch = new Channel<number>({ firstReceive: "first" });
+  const ch = new Channel<number>({
+    firstReceive: "first",
+    thenReceive: "latest",
+  });
   ch.send(1);
   ch.send(2);
   ch.send(3);
@@ -337,7 +350,7 @@ test("CH-031 a queued next evaluates after the earlier next settles", async () =
 });
 
 test("CH-032 CH-033 latest blocks and reads the first value after that", async () => {
-  const ch = new Channel<number>();
+  const ch = new Channel<number>({ thenReceive: "latest" });
   const it = iter(ch);
   ch.send(1);
   await it.next();
@@ -381,7 +394,7 @@ test("CH-041 CH-043 reading the head under every advances it by one", async () =
 });
 
 test("CH-042 CH-043 reading the head under latest moves it past the log", async () => {
-  const ch = new Channel<number>();
+  const ch = new Channel<number>({ thenReceive: "latest" });
   ch.send(1);
   ch.send(2);
   ch.send(3);
@@ -498,7 +511,10 @@ test("CH-050 latest retains only the newest value", async () => {
 });
 
 test("CH-050 first under latest retains value 1 and the newest", async () => {
-  const ch = new Channel<object>({ firstReceive: "first" });
+  const ch = new Channel<object>({
+    firstReceive: "first",
+    thenReceive: "latest",
+  });
   ch.send({ id: 1 });
   const { collected } = await collectible(
     () => ({}),
@@ -514,7 +530,7 @@ test("CH-050 first under latest retains value 1 and the newest", async () => {
 });
 
 test("CH-050 head under latest retains the head and the newest", async () => {
-  const ch = new Channel<object>();
+  const ch = new Channel<object>({ thenReceive: "latest" });
   ch.send({ id: 1 });
   const { collected } = await collectible(
     () => ({}),
@@ -547,7 +563,7 @@ test("CH-050 a value behind the head is collectable", async () => {
 });
 
 test("CH-050 read head under latest is collectable", async () => {
-  const ch = new Channel<object>();
+  const ch = new Channel<object>({ thenReceive: "latest" });
   const it = iter(ch);
   let done = false;
   const registry = new FinalizationRegistry(() => (done = true));
@@ -591,7 +607,10 @@ const collectedAfter = (track: (register: (value: object) => void) => void) => {
 };
 
 test("CH-050 a detached behind consumer releases the newest", async () => {
-  const ch = new Channel<object>({ firstReceive: "next" });
+  const ch = new Channel<object>({
+    firstReceive: "next",
+    thenReceive: "latest",
+  });
   const it = iter(ch);
   const pending = it.next();
   ch.send({});
@@ -607,7 +626,10 @@ test("CH-050 a detached behind consumer releases the newest", async () => {
 });
 
 test("CH-050 a detaching consumer leaves the newest for one still behind", async () => {
-  const ch = new Channel<number>({ firstReceive: "next" });
+  const ch = new Channel<number>({
+    firstReceive: "next",
+    thenReceive: "latest",
+  });
   const a = iter(ch),
     b = iter(ch);
   const pa = a.next(),
@@ -622,7 +644,10 @@ test("CH-050 a detaching consumer leaves the newest for one still behind", async
 });
 
 test("CH-050 a consumer attaching at the newest does not count as behind", async () => {
-  const ch = new Channel<object>({ firstReceive: "next" });
+  const ch = new Channel<object>({
+    firstReceive: "next",
+    thenReceive: "latest",
+  });
   const a = iter(ch);
   const first = a.next();
   ch.send({});
@@ -947,7 +972,7 @@ test("Unattached iterator has no effect", async () => {
 });
 
 test("CH-050 a consumer blocked on the head does not retain the newest", async () => {
-  const ch = new Channel<object>();
+  const ch = new Channel<object>({ thenReceive: "latest" });
   const a = iter(ch);
   const b = iter(ch);
   ch.send({});
@@ -1022,7 +1047,7 @@ test("CH-036 blocked unread consumers each receive one value", async () => {
 });
 
 test("CH-040 the head starts at 1", async () => {
-  const ch = new Channel<number>();
+  const ch = new Channel<number>({ thenReceive: "latest" });
   ch.send(1);
   ch.send(2);
   assert.deepEqual(await iter(ch).next(), val(1));
@@ -1036,7 +1061,7 @@ test("CH-095 attached rejects a channel from another copy", () => {
 });
 
 test("CH-050 a consumer with no read does not end the newest for one behind", async () => {
-  const ch = new Channel<number>();
+  const ch = new Channel<number>({ thenReceive: "latest" });
   ch.send(1);
   ch.send(2);
   const a = iter(ch);
@@ -1050,7 +1075,10 @@ test("CH-050 a consumer with no read does not end the newest for one behind", as
 });
 
 test("CH-050 a detached consumer stops counting for later sends", async () => {
-  const ch = new Channel<object | number>({ firstReceive: "next" });
+  const ch = new Channel<object | number>({
+    firstReceive: "next",
+    thenReceive: "latest",
+  });
   const a = iter(ch);
   const first = a.next();
   await setImmediate();
@@ -1072,7 +1100,10 @@ test("CH-050 a detached consumer stops counting for later sends", async () => {
 });
 
 test("CH-031 a consumer blocked at next counts as behind", async () => {
-  const ch = new Channel<number>({ firstReceive: "next" });
+  const ch = new Channel<number>({
+    firstReceive: "next",
+    thenReceive: "latest",
+  });
   const it = iter(ch);
   const first = it.next();
   await setImmediate();

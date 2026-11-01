@@ -13,6 +13,16 @@ const list = () =>
 
 // Messages are not in the spec, but a wrong one is still a defect in a developer-facing error.
 const cases: [string, () => unknown, RegExp][] = [
+  ["sort comparator", () => list().sort(1), /comparator must be a function/],
+  [
+    "sort mutation",
+    () => {
+      const s = list();
+      s.push(2);
+      s.sort(() => s.push(3));
+    },
+    /A comparator cannot change a select proxy/,
+  ],
   [
     "option value",
     () => new Channel({ firstReceive: "x" as any }),

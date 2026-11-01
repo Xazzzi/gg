@@ -25,7 +25,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 console.log("Channel: send, then read with for await");
 {
-  // A log of values. "every" means each consumer reads all of them.
+  // A log of values. By default, each consumer reads all of them.
   const ch = new Channel<number>();
 
   ch.send(1); // Synchronous, never blocks, and runs no consumer code
@@ -63,10 +63,7 @@ console.log("Two options pick the channel's behaviour");
 // Any other pairing could hand one value to two consumers.
 {
   // Broadcast: a late consumer replays the whole log.
-  const log = new Channel<string>({
-    firstReceive: "first",
-    thenReceive: "every",
-  });
+  const log = new Channel<string>({ firstReceive: "first" });
   log.send("a");
   log.send("b");
   log.close();
@@ -257,6 +254,7 @@ console.log("unwrap gives plain values, and a rejection fails the channel");
   }
 }
 {
+  // A Channel opens one reader per slot, so both slots read every value.
   const ch = new Channel<number>({ firstReceive: "first" });
   feed([1, 2], ch);
   for await (const vals of select([ch, ch], { unwrap: true }))
@@ -307,14 +305,34 @@ console.log("Arrays and the operation log");
   // => { op: 'splice', start: 1, removed: [], added: [ 'b' ] }
   // => { op: 'splice', start: 0, removed: [ 'a' ], added: [] }
 
-  // sort, reverse, fill and copyWithin throw, because no operation describes them.
-  try {
-    rows.sort();
-  } catch (error) {
-    console.log((error as Error).name); // => TypeError
-  }
+  // sort and reverse move slots without restarting sources.
+  seen.length = 0;
+  rows.push("a");
+  rows.sort();
+  await tick();
+  console.log(seen.at(-1)); // => { op: 'move', order: [ 1, 0 ] }
+
+  // fill and copyWithin replace a range with one splice.
+  rows.fill("z");
+  await tick();
+  console.log(seen.at(-1));
+  // => { op: 'splice', start: 0, removed: [ 'a', 'b' ], added: [ 'z', 'z' ] }
 
   rows[CHAN].close();
+}
+{
+  // sort compares outputs, so unwrap passes values and pending slots go last.
+  const scores = select([Promise.resolve(2), 3, 1], {
+    unwrap: true,
+    autoStart: true,
+    autoClose: false,
+    nonYielding: true,
+  });
+  await tick();
+
+  scores.sort((a, b) => b - a);
+  console.log(scores[0], scores[2]); // => 3 1
+  scores[CHAN].close();
 }
 
 console.log("Sync iterators advance once per flush");
@@ -384,6 +402,10 @@ console.log("Traps");
 // With backPressure, select stops at the publish step until a consumer reads.
 // Use autoStart with nonYielding, or backPressure: false, for unattended sources.
 // break does not stop select, so use `using` or close the channel.
+// sort is a one-off, so later updates do not move slots.
+// A comparator that changes the shape gets a TypeError.
+// One iterator in two slots shares a cursor, so each value reaches one slot.
+// fill and copyWithin can do this silently, and leave overwritten iterators open.
 // An attached consumer that is dropped without return() keeps its backlog alive.
 // An always-ready source with backPressure: false starves the event loop.
 // Under stopStyle: "stop", send(1) then close() in one run always drops 1.

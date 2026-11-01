@@ -73,6 +73,15 @@ for await (const { title, users } of state) render(title, users);
 
 Without `unwrap`, each source appears as a `Val` with `status`, `value`, `reason` and `done`.
 `onChanges` receives each change as an ordered operation, so arrays can be replayed without diffing.
+`sort` and `reverse` move slots without restarting sources, and `sort` compares outputs once.
+
+`break` detaches one consumer, and leaves the sources running.
+Bind the state with `using`, or call `close` in `finally`, to stop them.
+
+```ts
+using state = select({ users: pollUsers() }, { unwrap: true });
+for await (const { users } of state) if (users?.length) break;
+```
 
 ## Helpers
 

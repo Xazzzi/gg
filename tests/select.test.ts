@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
+import { inspect } from "node:util";
 import {
   CHAN,
   Channel,
   catching,
+  feed,
   isVal,
   type Op,
   select,
   spread,
+  type Val,
 } from "../src/index.ts";
 
 const iter = (s: any) => s[Symbol.asyncIterator]();
@@ -45,7 +48,12 @@ const replay = (ops: Op[], base: any) => {
   for (const op of ops) {
     if (op.op === "set") base[op.key] = op.value;
     else if (op.op === "delete") delete base[op.key];
-    else base.splice(op.start, op.removed.length, ...op.added);
+    else if (op.op === "move") {
+      const old = [...base];
+      op.order.forEach((from, to) => {
+        base[to] = old[from];
+      });
+    } else base.splice(op.start, op.removed.length, ...op.added);
   }
   return base;
 };
@@ -1410,7 +1418,6 @@ test("SE-08A terminal writes succeed without tracking", async () => {
   assert.equal(pulled, 0);
   assert.deepEqual(log.ops, []);
   assert.ok(s[CHAN].signal.aborted);
-  assert.throws(() => l.sort(), TypeError);
   assert.throws(() => (l.x = 1), TypeError);
 });
 
@@ -1533,10 +1540,475 @@ test("SE-093 SE-124 a removed slot's updates are ignored", async () => {
   o[CHAN].close();
 });
 
-test("SE-094 sort, reverse, fill and copyWithin throw", () => {
+test("SE-09E copyWithin replaces the target range through one splice", async () => {
+  const log = opLog();
+  const s: any = select([1, 2, 3, 4], { ...open, ...log });
+  await setImmediate();
+  log.ops.length = 0;
+  assert.equal(s.copyWithin(0, 2), s);
+  await setImmediate();
+  assert.deepEqual([...s], [3, 4, 3, 4]);
+  assert.deepEqual(log.ops, [
+    { op: "splice", start: 0, removed: [1, 2], added: [3, 4] },
+  ]);
+  s[CHAN].close();
+});
+
+test("SE-09E copyWithin follows Array range rules", () => {
+  const ranges = [
+    [0, 1],
+    [1, 0],
+    [2, 0],
+    [0, 1, 2],
+    [-2, 0],
+    [0, -2],
+    [1, 3, 2],
+    [0, 2, -1],
+    ["1", "2"],
+    [9, 0],
+    [0, 9],
+    [Number.NaN, 1, undefined],
+  ];
+  for (const range of ranges) {
+    const s: any = select([1, 2, 3, 4], open);
+    s.copyWithin(...range);
+    assert.deepEqual(
+      [...s],
+      [1, 2, 3, 4].copyWithin(...(range as [number, number, number])),
+    );
+    s[CHAN].close();
+  }
+});
+
+test("SE-09E a copy that changes nothing produces no flush", async () => {
+  const log = opLog();
+  const s: any = select([1, 2], { ...open, ...log });
+  await setImmediate();
+  log.ops.length = 0;
+  assert.equal(s.copyWithin(1, 1), s);
+  assert.equal(s.copyWithin(0, 1, 1), s);
+  await setImmediate();
+  assert.deepEqual(log.ops, []);
+  s[CHAN].close();
+});
+
+test("SE-09E copyWithin restarts a copied promise as pending", async () => {
+  const p = Promise.withResolvers<number>();
+  const s: any = select([1, p.promise], { ...open, unwrap: true });
+  const it = iter(s);
+  await it.next();
+  s.copyWithin(0, 1);
+  p.resolve(7);
+  await setImmediate();
+  assert.deepEqual((await it.next()).value, [7, 7]);
+  s[CHAN].close();
+});
+
+test("SE-09E on a terminal channel, copyWithin changes the proxy only", async () => {
+  const log = opLog();
+  const s: any = select([1, 2], { ...open, ...log });
+  await setImmediate();
+  s[CHAN].close();
+  const count = log.ops.length;
+  s.copyWithin(0, 1);
+  assert.deepEqual([...s], [2, 2]);
+  await setImmediate();
+  assert.equal(log.ops.length, count);
+});
+
+test("SE-099 sort compares outputs and restarts no source", async () => {
+  const log = opLog();
+  let pulls = 0;
+  const source = {
+    next: async () => {
+      pulls++;
+      return { done: pulls > 1, value: pulls > 1 ? undefined : 5 };
+    },
+  };
+  const s: any = select([9, source, 1], { ...open, unwrap: true, ...log });
+  await setImmediate();
+  const pulled = pulls;
+  assert.equal(
+    s.sort((a: number, b: number) => a - b),
+    s,
+  );
+  await setImmediate();
+  assert.deepEqual(s[0], 1);
+  assert.equal(s[1], source);
+  assert.deepEqual(s[2], 9);
+  assert.ok(pulls <= pulled + 1);
+  assert.deepEqual(log.ops.at(-1), { op: "move", order: [2, 1, 0] });
+  s[CHAN].close();
+});
+
+test("SE-099 sort passes Val outputs without unwrap", async () => {
+  const s: any = select([Promise.resolve(2), Promise.resolve(1)], open);
+  await setImmediate();
+  const [two, one] = [...s];
+  s.sort(
+    (a: Val<number>, b: Val<number>) =>
+      (a.value as number) - (b.value as number),
+  );
+  assert.deepEqual([...s], [one, two]);
+  s[CHAN].close();
+});
+
+test("SE-099 sort moves undefined last in stable order, unseen by compare", async () => {
+  const a = Promise.withResolvers<number>(),
+    b = Promise.withResolvers<number>();
+  const s: any = select([a.promise, 2, b.promise, 1], {
+    ...open,
+    unwrap: true,
+  });
+  await setImmediate();
+  const seen: unknown[] = [];
+  s.sort((x: number, y: number) => (seen.push(x, y), x - y));
+  assert.deepEqual([...s], [1, 2, a.promise, b.promise]);
+  assert.ok(!seen.includes(undefined));
+  s[CHAN].close();
+});
+
+test("SE-099 sort matches Array.prototype.sort across merges", () => {
+  let seed = 7;
+  const next = (limit: number) => (seed = (seed * 31 + 17) % 1009) % limit;
+  const items = Array.from({ length: 300 }, (_, index) => {
+    const kind = next(4);
+    if (kind === 0) return undefined;
+    return kind === 1 ? `${next(40)}` : kind === 2 ? next(40) : index;
+  });
+  const s: any = select(items, open);
+  s.sort();
+  const expected = [...items].sort();
+  for (const [index, item] of expected.entries()) assert.equal(s[index], item);
+  const c: any = select(items, open);
+  c.sort((a: unknown, b: unknown) => Number(a) - Number(b));
+  const compared = [...items].sort((a, b) => Number(a) - Number(b));
+  for (const [index, item] of compared.entries()) assert.equal(c[index], item);
+  s[CHAN].close();
+  c[CHAN].close();
+});
+
+test("SE-099 sort reads undefined on either side of a comparison", () => {
+  for (const items of [
+    [2, undefined, 1],
+    [undefined, 2, undefined, 1],
+    [1, 2, undefined],
+  ]) {
+    const seen: unknown[] = [];
+    const s: any = select(items, open);
+    s.sort((x: number, y: number) => (seen.push(x, y), x - y));
+    assert.deepEqual([...s], [...items].sort());
+    assert.ok(!seen.includes(undefined));
+    s[CHAN].close();
+  }
+});
+
+test("SE-099 sort keeps equal strings stable", () => {
+  const s: any = select(["1", 1, "1", 1], open);
+  s.sort();
+  assert.deepEqual([...s], ["1", 1, "1", 1]);
+  s[CHAN].close();
+});
+
+test("SE-099 sort without compare orders strings", () => {
+  const s: any = select([10, 9, 10, undefined, 1], open);
+  s.sort();
+  assert.deepEqual([...s], [1, 10, 10, 9, undefined]);
+  s[CHAN].close();
+});
+
+test("SE-099 sort rejects a bad comparator, and a failing one changes nothing", () => {
+  const s: any = select([2, 1], open);
+  for (const bad of [null, 1, {}]) assert.throws(() => s.sort(bad), TypeError);
+  const error = new Error("x");
+  assert.throws(
+    () =>
+      s.sort(() => {
+        throw error;
+      }),
+    error,
+  );
+  assert.deepEqual([...s], [2, 1]);
+  s[0] = 3; // The lock is released
+  assert.deepEqual([...s], [3, 1]);
+  s[CHAN].close();
+});
+
+test("SE-09A a comparator cannot change the shape", () => {
+  const s: any = select([2, 1, 3], open);
+  const attempts = [
+    () => (s[0] = 9),
+    () => (s[9] = 9),
+    () => s.push(9),
+    () => s.pop(),
+    () => s.reverse(),
+    () => s.sort(),
+    () => s.fill(9),
+    () => s.copyWithin(0, 1),
+    () => (s.length = 0),
+    () => delete s[0],
+  ];
+  for (const attempt of attempts) {
+    let error: unknown;
+    s.sort(() => {
+      try {
+        attempt();
+      } catch (e) {
+        error = e;
+      }
+      return 0;
+    });
+    assert.ok(error instanceof TypeError);
+  }
+  assert.deepEqual([...s], [2, 1, 3]);
+  s.sort(() => {
+    s[0] = 2; // The same source changes nothing, so SE-087 holds
+    s.splice(1, 0);
+    return 0;
+  });
+  s[CHAN].close();
+});
+
+test("SE-09B reverse moves slots and returns the proxy", async () => {
+  const log = opLog();
+  const s: any = select([1, 2, 3], { ...open, ...log });
+  await setImmediate();
+  assert.equal(s.reverse(), s);
+  await setImmediate();
+  assert.deepEqual([...s], [3, 2, 1]);
+  assert.deepEqual(log.ops.at(-1), { op: "move", order: [2, 1, 0] });
+  assert.deepEqual(replay(log.ops, []), [3, 2, 1]);
+  s[CHAN].close();
+});
+
+test("SE-09B a moved slot's updates reach its new index", async () => {
+  const later = Promise.withResolvers<number>();
+  const log = opLog();
+  const s: any = select([later.promise, 1, 2], {
+    ...open,
+    unwrap: true,
+    ...log,
+  });
+  await setImmediate();
+  s.reverse();
+  await setImmediate();
+  later.resolve(7);
+  await setImmediate();
+  assert.deepEqual(log.ops.at(-1), {
+    op: "set",
+    key: 2,
+    value: 7,
+    prev: undefined,
+  });
+  assert.deepEqual(replay(log.ops, []), [2, 1, 7]);
+  s[CHAN].close();
+});
+
+test("SE-09C a sort or reverse that changes nothing produces no flush", async () => {
+  const log = opLog();
+  const s: any = select([1, 2], { ...open, ...log });
+  const single: any = select([1], { ...open, ...log });
+  const it = iter(s);
+  await it.next();
+  await setImmediate();
+  const count = log.ops.length;
+  assert.equal(s.sort(), s);
+  assert.equal(single.reverse(), single);
+  const read = it.next();
+  await setImmediate();
+  assert.match(inspect(read), /pending/);
+  assert.equal(log.ops.length, count);
+  s[CHAN].close();
+  single[CHAN].close();
+});
+
+test("SE-09C sort before start moves slots with no operation", async () => {
+  const log = opLog();
+  const s: any = select([2, 1], { ...log, autoClose: false });
+  s.reverse();
+  assert.deepEqual((await iter(s).next()).value, [1, 2]);
+  assert.deepEqual(log.ops, [
+    { op: "splice", start: 0, removed: [], added: [1, 2] },
+  ]);
+  s[CHAN].close();
+});
+
+test("SE-09C on a terminal channel, sort and reverse order sources", async () => {
+  const log = opLog();
+  const p = Promise.resolve(1);
+  const s: any = select([2, p, 1], { ...open, ...log });
+  await setImmediate();
+  s[CHAN].close();
+  const count = log.ops.length;
+  s.push(0);
+  s.sort(
+    (a: unknown, b: unknown) =>
+      Number(typeof a === "object") - Number(typeof b === "object") ||
+      (a as number) - (b as number),
+  );
+  assert.deepEqual([...s], [0, 1, 2, p]);
+  s.reverse();
+  assert.deepEqual([...s], [p, 2, 1, 0]);
+  await setImmediate();
+  assert.equal(log.ops.length, count);
+});
+
+test("SE-09C a comparator that closes the channel still sorts the proxy", async () => {
+  const log = opLog();
+  const s: any = select([2, 1], { ...open, ...log });
+  await setImmediate();
+  s.sort((a: number, b: number) => (s[CHAN].close(), a - b));
+  assert.deepEqual([...s], [1, 2]);
+  assert.ok(!log.ops.some(op => op.op === "move"));
+});
+
+test("SE-09D fill replaces a range through one splice", async () => {
+  const log = opLog();
+  const s: any = select([1, 2, 3, 4], { ...open, ...log });
+  await setImmediate();
+  log.ops.length = 0;
+  assert.equal(s.fill(0, 1, 3), s);
+  await setImmediate();
+  assert.deepEqual([...s], [1, 0, 0, 4]);
+  assert.deepEqual(log.ops, [
+    { op: "splice", start: 1, removed: [2, 3], added: [0, 0] },
+  ]);
+  s[CHAN].close();
+});
+
+test("SE-09D fill follows Array range rules", () => {
+  const ranges = [
+    [],
+    [1],
+    [-2],
+    [1, -1],
+    [3, 1],
+    [-9, 9],
+    ["1", "2"],
+    [1.9, 2.9],
+    [Number.NaN, undefined],
+  ];
+  for (const range of ranges) {
+    const s: any = select([1, 2, 3], open);
+    s.fill(0, ...range);
+    assert.deepEqual([...s], [1, 2, 3].fill(0, ...(range as number[])));
+    s[CHAN].close();
+  }
+});
+
+test("SE-09D an empty fill changes nothing", async () => {
+  const log = opLog();
+  const s: any = select([1, 2], { ...open, ...log });
+  await setImmediate();
+  log.ops.length = 0;
+  s.fill(0, 1, 1);
+  await setImmediate();
+  assert.deepEqual(log.ops, []);
+  s[CHAN].close();
+});
+
+test("SE-09D SE-034 an empty fill leaves no unhandled rejection", async () => {
   const s: any = select([1, 2], open);
-  for (const name of ["sort", "reverse", "fill", "copyWithin"])
-    assert.throws(() => s[name](0), TypeError);
+  s.fill(Promise.reject(new Error("x")), 1, 1);
+  await setImmediate();
+  s[CHAN].close();
+});
+
+test("SE-09D fill starts a promise source in each slot", async () => {
+  const s: any = select([1, 2], { ...open, unwrap: true });
+  const it = iter(s);
+  await it.next();
+  s.fill(Promise.resolve(7));
+  await setImmediate();
+  assert.deepEqual((await it.next()).value, [7, 7]);
+  s[CHAN].close();
+});
+
+test("SE-043 changes in one tick schedule one flush", async () => {
+  const s: any = select(
+    { a: 1, p: new Promise(() => {}) },
+    { stopStyle: "stop", unwrap: true },
+  );
+  const it = iter(s);
+  await it.next();
+  await setImmediate();
+  delete s.p; // Nothing keeps the channel open, so a second flush would close it
+  s.a = 2;
+  await setImmediate();
+  assert.deepEqual((await it.next()).value, { a: 2 });
+});
+
+test("SE-02B unwrap skips the snapshot for a finish that keeps the value", async () => {
+  async function* gen() {
+    yield 1;
+    yield 2;
+  }
+  const seen: unknown[] = [];
+  const log = opLog();
+  for await (const v of select([gen()], { unwrap: true, ...log })) seen.push(v);
+  assert.deepEqual(seen, [[undefined], [1], [2]]);
+  assert.equal(log.ops.filter(op => op.op === "set").length, 2);
+});
+
+test("SE-02B unwrap still publishes a return value and a repeated value", async () => {
+  async function* gen() {
+    yield 1;
+    yield 1;
+    return 2;
+  }
+  const seen: unknown[] = [];
+  for await (const v of select([gen()], { unwrap: true })) seen.push(v);
+  assert.deepEqual(seen, [[undefined], [1], [1], [2]]);
+});
+
+test("SE-02B without unwrap the finish still publishes done", async () => {
+  async function* gen() {
+    yield 1;
+  }
+  const seen: boolean[] = [];
+  for await (const [v] of select([gen()]) as any) seen.push(v.done);
+  assert.deepEqual(seen, [false, false, true]);
+});
+
+test("SE-02B a skipped snapshot still reports other changes", async () => {
+  const gate = Promise.withResolvers<void>();
+  async function* gen() {
+    yield 1;
+    await gate.promise;
+  }
+  const s: any = select({ a: gen(), b: 1 }, { unwrap: true, autoClose: false });
+  const it = iter(s);
+  await it.next();
+  assert.deepEqual((await it.next()).value, { a: 1, b: 1 });
+  gate.resolve();
+  await setImmediate();
+  s.b = 2;
+  assert.deepEqual((await it.next()).value, { a: 1, b: 2 });
+  s[CHAN].close();
+});
+
+test("SE-132 slots sharing an iterator deal its values in pull order", async () => {
+  async function* gen() {
+    yield 1;
+    yield 2;
+    yield 3;
+  }
+  const it = gen();
+  const seen: unknown[] = [];
+  for await (const v of select([it, it], { unwrap: true })) seen.push(v);
+  assert.deepEqual(seen.at(-1), [3, 2]);
+});
+
+test("SE-132 a Channel in two slots reaches both", async () => {
+  const ch = new Channel<number>({ firstReceive: "first" });
+  feed([1, 2], ch);
+  const seen: unknown[] = [];
+  for await (const v of select([ch, ch], { unwrap: true })) seen.push(v);
+  assert.deepEqual(seen, [
+    [undefined, undefined],
+    [1, 1],
+    [2, 2],
+  ]);
 });
 
 test("SE-095 a non-index key throws on arrays", () => {

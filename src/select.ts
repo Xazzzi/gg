@@ -21,7 +21,8 @@ export type Val<T> =
 export type Op =
   | { op: "set"; key: string | symbol | number; value: unknown; prev: unknown }
   | { op: "delete"; key: string | symbol; prev: unknown }
-  | { op: "splice"; start: number; removed: unknown[]; added: unknown[] };
+  | { op: "splice"; start: number; removed: unknown[]; added: unknown[] }
+  | { op: "move"; order: number[] };
 
 export type SelectOptions<S, R> = ChannelOptions & {
   autoStart?: boolean;
@@ -69,9 +70,17 @@ export type Unwrapped<T> = T extends readonly unknown[]
   ? UnwrappedOf<Settled<T[number]>>[]
   : { [K in keyof T]: UnwrappedOf<Settled<T[K]>> };
 
-type Mutable<T> = T extends readonly unknown[] ? T[number][] : T;
+type SelectArray<V, O> = Omit<V[], "sort"> & {
+  sort(
+    compare?: (a: Exclude<O, undefined>, b: Exclude<O, undefined>) => number,
+  ): SelectArray<V, O>;
+};
 
-export type State<T, R> = Mutable<T> &
+type Mutable<T, O> = T extends readonly unknown[]
+  ? SelectArray<T[number], O extends readonly (infer E)[] ? E : never>
+  : T;
+
+export type State<T, R, O = Snapshot<T>> = Mutable<T, O> &
   AsyncIterable<R> &
   Disposable & { [CHAN]: Channel<R> };
 
@@ -133,6 +142,25 @@ const replace = <V>(list: V[], start: number, count: number, items: V[]) => {
   return removed;
 };
 
+// Follows Array.prototype.sort, which sorts undefined last without calling compare.
+const ranked = (items: unknown[], compare?: (a: any, b: any) => number) =>
+  items
+    .map((_, index) => index)
+    .sort((i, j) => {
+      const a = items[i],
+        b = items[j];
+      if (a === undefined)
+        // Stryker disable next-line ConditionalExpression,EqualityOperator: V8 only tests a result for being negative
+        return b === undefined ? 0 : 1;
+      if (b === undefined) return -1;
+      if (compare) return compare(a, b);
+      const x = `${a}`,
+        y = `${b}`;
+      if (x < y) return -1;
+      // Stryker disable next-line ConditionalExpression,EqualityOperator: V8 only tests a result for being negative
+      return x > y ? 1 : 0;
+    });
+
 type Slot = {
   key?: PropertyKey;
   source: any;
@@ -153,7 +181,7 @@ type Slot = {
 export function select<T extends SelectShape, R = Unwrapped<T>>(
   shape: T,
   options: SelectOptions<Unwrapped<T>, R> & { unwrap: true },
-): State<T, R>;
+): State<T, R, Unwrapped<T>>;
 export function select<T extends SelectShape, R = Snapshot<T>>(
   shape: T,
   options?: SelectOptions<Snapshot<T>, R> & { unwrap?: false },
@@ -189,7 +217,9 @@ export function select(shape: any, options: any = {}): any {
   let started = false,
     dirty: boolean | undefined,
     scheduled = false,
-    running = false;
+    running = false,
+    changed = true, // A silent update flushes without a snapshot
+    sorting = false;
 
   const out = (slot: Slot) =>
     unwrap && slot.kind !== PLAIN ? slot.state.value : slot.state;
@@ -205,17 +235,18 @@ export function select(shape: any, options: any = {}): any {
     queueMicrotask(flush);
   };
   const touch = () => {
-    dirty = true;
+    dirty = changed = true;
     schedule();
   };
 
-  const update = (slot: Slot, state: Val<unknown>) => {
+  const update = (slot: Slot, state: Val<unknown>, silent = false) => {
     if (slot.dead) return;
     const prev = out(slot);
     slot.state = state;
     if (!started) return;
     if (unwrap && state.status === "rejected")
       return channel.throw(state.reason);
+    if (silent) return schedule(); // SE-02B
     log(() => ({ op: "set", key: keyOf(slot), value: out(slot), prev }));
     touch();
   };
@@ -238,14 +269,11 @@ export function select(shape: any, options: any = {}): any {
     slot.busy = false;
     slot.fresh = true;
     slot.awaited = awaited;
+    const kept = value === undefined && done;
     update(
       slot,
-      val(
-        "fulfilled",
-        value === undefined && done ? slot.state.value : value,
-        undefined,
-        done,
-      ),
+      val("fulfilled", kept ? slot.state.value : value, undefined, done),
+      kept && unwrap,
     );
   };
 
@@ -389,7 +417,8 @@ export function select(shape: any, options: any = {}): any {
       for (let due: Slot[]; (due = slots().filter(advancing)).length; )
         for (const slot of due) if (advancing(slot)) pull(slot);
       if (signal.aborted) return;
-      dirty = false;
+      const publish = changed;
+      dirty = changed = false;
       for (const slot of slots()) {
         slot.due = slot.awaited;
         slot.awaited = slot.fresh = false;
@@ -400,7 +429,7 @@ export function select(shape: any, options: any = {}): any {
         onChanges(report);
       }
       if (signal.aborted) return;
-      if (!nonYielding) {
+      if (publish && !nonYielding) {
         const snap = snapshot();
         const value = mapSnapshot ? mapSnapshot(snap) : snap;
         if (backPressure) await channel.asend(value);
@@ -427,7 +456,13 @@ export function select(shape: any, options: any = {}): any {
       configurable: true,
     });
 
+  const unlocked = () => {
+    if (sorting)
+      throw new TypeError("A comparator cannot change a select proxy");
+  };
+
   const write = (key: any, source: unknown) => {
+    unlocked();
     if (signal.aborted) {
       define(key, source);
       return quiet(source);
@@ -446,6 +481,7 @@ export function select(shape: any, options: any = {}): any {
 
   const splice = (start: number, count: number, items: unknown[]) => {
     if (!count && !items.length) return [];
+    unlocked();
     if (signal.aborted) {
       items.forEach(quiet);
       return replace(target, start, count, items);
@@ -466,6 +502,38 @@ export function select(shape: any, options: any = {}): any {
     touch();
     if (started) added.forEach(activate);
     return removed;
+  };
+
+  const relocate = <V>(list: V[], order: number[]) => {
+    const old = [...list];
+    order.forEach((from, to) => {
+      list[to] = old[from];
+    });
+  };
+
+  const permute = (order: number[]) => {
+    unlocked();
+    if (order.every((from, to) => from === to)) return state; // SE-097
+    relocate(target, order);
+    relocate(array, order);
+    log(() => ({ op: "move", order }));
+    touch();
+    return state;
+  };
+
+  const sort = (compare?: (a: any, b: any) => number) => {
+    if (compare !== undefined && typeof compare !== "function")
+      throw new TypeError("sort comparator must be a function");
+    unlocked();
+    const items: unknown[] = signal.aborted ? target : array.map(out);
+    let order: number[];
+    sorting = true;
+    try {
+      order = ranked(items, compare);
+    } finally {
+      sorting = false;
+    }
+    return permute(order);
   };
 
   const blanks = (count: number) => Array.from({ length: count }) as unknown[];
@@ -515,6 +583,12 @@ export function select(shape: any, options: any = {}): any {
   };
 
   const integer = (value: unknown) => Math.trunc(Number(value)) || 0;
+  const position = (value: unknown, size: number) => {
+    const relative = integer(value);
+    return relative < 0
+      ? Math.max(size + relative, 0)
+      : Math.min(relative, size);
+  };
 
   const methods: Record<PropertyKey, unknown> = {
     __proto__: null as any,
@@ -526,9 +600,7 @@ export function select(shape: any, options: any = {}): any {
     unshift: (...items: unknown[]) => (splice(0, 0, items), target.length),
     splice: (...args: unknown[]) => {
       const size = target.length,
-        relative = integer(args[0]);
-      const begin =
-        relative < 0 ? Math.max(size + relative, 0) : Math.min(relative, size);
+        begin = position(args[0], size);
       const count = !args.length
         ? 0
         : args.length === 1
@@ -536,10 +608,28 @@ export function select(shape: any, options: any = {}): any {
           : Math.min(Math.max(integer(args[1]), 0), size - begin);
       return splice(begin, count, args.slice(2));
     },
-    sort: forbid,
-    reverse: forbid,
-    fill: forbid,
-    copyWithin: forbid,
+    fill: (source: unknown, from?: unknown, to?: unknown) => {
+      const size = target.length,
+        begin = position(from, size),
+        end = to === undefined ? size : position(to, size),
+        count = Math.max(end - begin, 0);
+      quiet(source); // SE-034 holds for an empty range too
+      splice(begin, count, blanks(count).fill(source));
+      return state;
+    },
+    sort,
+    reverse: () =>
+      permute(target.map((_: unknown, i: number) => target.length - 1 - i)),
+    copyWithin: (to: unknown, from: unknown, until?: unknown) => {
+      const size = target.length,
+        begin = position(to, size),
+        first = position(from, size),
+        end = until === undefined ? size : position(until, size),
+        count = Math.min(end - first, size - begin);
+      if (begin !== first)
+        splice(begin, Math.max(count, 0), target.slice(first, first + count));
+      return state;
+    },
   };
 
   const iterate = () => channel[Symbol.asyncIterator]();
@@ -563,7 +653,7 @@ export function select(shape: any, options: any = {}): any {
   if (autoStart) queueMicrotask(start);
   else attached(channel).then(start, noop);
 
-  return new Proxy(target, {
+  const state = new Proxy(target, {
     get(_, key, receiver) {
       if (key === Symbol.asyncIterator) return iterate;
       if (key === Symbol.dispose) return dispose;
@@ -582,4 +672,5 @@ export function select(shape: any, options: any = {}): any {
     preventExtensions: forbid,
     setPrototypeOf: forbid,
   });
+  return state;
 }

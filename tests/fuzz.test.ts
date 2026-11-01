@@ -133,7 +133,12 @@ const replay = (ops: Op[], base: any) => {
   for (const op of ops) {
     if (op.op === "set") base[op.key] = op.value;
     else if (op.op === "delete") delete base[op.key];
-    else base.splice(op.start, op.removed.length, ...op.added);
+    else if (op.op === "move") {
+      const old = [...base];
+      op.order.forEach((from, to) => {
+        base[to] = old[from];
+      });
+    } else base.splice(op.start, op.removed.length, ...op.added);
   }
   return base;
 };
@@ -195,9 +200,12 @@ async function arrayRun(seed: number) {
 
   await setImmediate();
   for (let step = 0; step < steps; step++) {
-    const action = roll(9),
+    const action = roll(12),
       index = roll(model.length + 3);
-    if (action === 0) both("push", make(), make());
+    if (action === 8) both("reverse");
+    else if (action === 10) both("copyWithin", index - 1, roll(5) - 1, roll(5));
+    else if (action === 9) both("fill", make(), index - 1, roll(5) - 1);
+    else if (action === 0) both("push", make(), make());
     else if (action === 1) both("pop");
     else if (action === 2) both("shift");
     else if (action === 3) both("unshift", make());

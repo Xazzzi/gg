@@ -105,3 +105,16 @@ new Channel<number>().close("end");
 new Channel<number, Promise<number>>().close(Promise.resolve(1));
 const op: Op = { op: "delete", key: "a", prev: 1 };
 void [source, op];
+
+const rows = select([Promise.resolve(1), 2], { unwrap: true });
+rows.sort((a, b) => {
+  yes<Eq<typeof a, number>>();
+  return a - b;
+});
+const vals = select([Promise.resolve(1)]);
+vals.sort((a, b) => {
+  yes<Eq<typeof a, Val<number>>>();
+  return Number(a.done) - Number(b.done);
+});
+yes<Eq<Extract<Op, { op: "move" }>["order"], number[]>>();
+rows.sort().reverse().fill(3);

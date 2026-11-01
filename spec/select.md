@@ -26,7 +26,8 @@ export type Val<T> =
 export type Op =
   | { op: "set"; key: string | symbol | number; value: unknown; prev: unknown }
   | { op: "delete"; key: string | symbol; prev: unknown }
-  | { op: "splice"; start: number; removed: unknown[]; added: unknown[] };
+  | { op: "splice"; start: number; removed: unknown[]; added: unknown[] }
+  | { op: "move"; order: number[] };
 
 export type SelectOptions<S, R> = ChannelOptions & {
   autoStart?: boolean;
@@ -41,7 +42,7 @@ export type SelectOptions<S, R> = ChannelOptions & {
 export function select<T extends SelectShape, R = Unwrapped<T>>(
   shape: T,
   options: SelectOptions<Unwrapped<T>, R> & { unwrap: true },
-): State<T, R>;
+): State<T, R, Unwrapped<T>>;
 
 export function select<T extends SelectShape, R = Snapshot<T>>(
   shape: T,
@@ -60,8 +61,10 @@ A plain key keeps its type.
 `Unwrapped<T>` is `Snapshot<T>`, with each source key mapped to `Y | undefined`.
 An `unwrap` of type `boolean` must be narrowed before the call, so an overload can match.
 
-`State<T, R>` is `Mutable<T>`, plus `AsyncIterable<R>`, `Disposable` and `{ [CHAN]: Channel<R> }`.
-For an array shape, `Mutable<T>` is `T[number][]`, because mutators can change the length.
+`State<T, R, O = Snapshot<T>>` is `Mutable<T, O>`, plus `AsyncIterable<R>`, `Disposable` and `{ [CHAN]: Channel<R> }`.
+`O` is the snapshot type, which is `Unwrapped<T>` under `unwrap`.
+For an array shape, `Mutable<T, O>` is `T[number][]` with `sort` retyped, because mutators can change the length and SE-099 compares outputs.
+The comparator takes elements of `O` without `undefined`, and `sort` returns the same retyped array.
 For an object shape, it is `T`.
 It keeps the input types because the proxy reads and writes sources, not states.
 
@@ -150,6 +153,9 @@ Kinds are detected in this order.
 - SE-02A: An iterator not yet finished when a value rejects MUST receive `return()` at once, if it has one.
   So MUST a sync iterator failing on a thenable result.
   The run does not await it, and errors from it MUST be ignored.
+- SE-02B: Under `unwrap`, a slot finishing by SE-024 MUST produce no snapshot and no operation, because its output is unchanged.
+  The flush MUST still run, so auto close happens.
+  Other changes in that flush still publish.
 
 ## Start
 
@@ -185,6 +191,7 @@ A flush runs these steps in order.
 
 - SE-040: Report MUST call `onChanges` with the operations since the last report, if `onChanges` exists and there are operations.
 - SE-041: Without `nonYielding`, publish MUST build a snapshot, apply `mapSnapshot`, and send it.
+  SE-02B skips steps 3 and 4 for a flush with no other change.
 - SE-042: With `backPressure` it MUST use `asend`, otherwise `send`.
 - SE-043: At most one flush MUST run at a time.
   A change during step 1 belongs to that flush.
@@ -248,7 +255,7 @@ A flush runs these steps in order.
   Deleting a missing key or an index at or past `length` MUST do nothing.
   Deleting `length` MUST fail as on an `Array`, so the trap returns false.
 - SE-08A: On a terminal channel, writes and mutators MUST succeed on the proxy without tracking, flushing or reopening.
-  SE-034, SE-085, SE-094, SE-095 and SE-098 still apply, and take precedence.
+  SE-034, SE-085, SE-095, SE-098, SE-099 and SE-09A still apply, and take precedence.
   No detection runs, except the `Promise` check of SE-034.
 - SE-08B: An own reserved key in `shape`, enumerable or not, MUST make `select` throw a `TypeError` synchronously.
 - SE-08C: `defineProperty`, `preventExtensions` and `setPrototypeOf` on the proxy MUST throw a `TypeError`.
@@ -256,32 +263,46 @@ A flush runs these steps in order.
 
 ## Arrays
 
-- SE-090: `push`, `pop`, `shift`, `unshift`, `splice` and `length` writes MUST move slots, not rebuild them.
+- SE-090: `push`, `pop`, `shift`, `unshift`, `splice`, `sort`, `reverse`, `fill`, `copyWithin` and `length` writes MUST move slots, not rebuild them.
   Reading a mutator MUST return one stable function per proxy, not the `Array.prototype` method.
 - SE-091: Mutators MUST return what the matching `Array` method returns, using sources.
 - SE-092: A slot's updates MUST reach its current index after any move.
 - SE-093: A removed slot's updates MUST be ignored.
-- SE-094: `sort`, `reverse`, `fill` and `copyWithin` MUST throw a `TypeError`.
-  They would restart sources, and no operation describes them.
 - SE-095: Assigning a non-index key other than `length` MUST throw a `TypeError`.
 - SE-096: Assigning an index at or past `length` MUST grow the array, and any skipped index MUST become a plain slot holding `undefined`.
 - SE-097: A mutator call that changes nothing MUST produce no operation and no flush.
   Adding a source a mutator just removed counts as a change, and restarts it.
 - SE-098: A `length` write MUST follow `Array` semantics, including a `RangeError` for an invalid length.
+- SE-099: `sort` MUST order slots by their outputs, and return the proxy.
+  Like `Array.prototype.sort`, it is stable, puts `undefined` outputs last without calling the comparator, and compares strings with no comparator.
+  A comparator that is neither a function nor `undefined` MUST throw a `TypeError`, and a comparator that throws MUST change nothing.
+  The order is a one-off, so later updates MUST NOT move slots.
+- SE-09A: Changing the shape while a comparator runs MUST throw a `TypeError`.
+- SE-09B: `reverse` MUST reverse the slots, and return the proxy.
+- SE-09C: `sort` and `reverse` MUST move slots without restarting them, and MUST produce one `move`.
+  An order that changes nothing falls under SE-097.
+  On a terminal channel, by SE-08A, `sort` orders sources.
+- SE-09D: `fill` MUST follow `Array` range rules, return the proxy, and act as one `splice` of the range.
+  Each slot in the range gets the source, and SE-132 applies to an iterator.
+  An empty range changes nothing, but SE-034 still applies to the source.
+- SE-09E: `copyWithin` MUST follow `Array` range rules, return the proxy, and act as one `splice` of the target range using the copied sources.
+  A copy onto the same index MUST change nothing, by SE-097.
+  A copied slot restarts as pending, and SE-132 applies to an iterator.
 
 ## Operation log
 
 - SE-100: Operations MUST appear in the order changes happened.
 - SE-101: Operations MUST NOT be merged.
 - SE-102: `value`, `prev`, `removed` and `added` MUST hold outputs.
-- SE-103: A state change, an assignment to an object key, or an assignment to an index below `length` MUST produce `set`.
+- SE-103: A state change, an assignment to an object key, or an assignment to an index below `length` MUST produce `set`, except under SE-02B.
   A new object key has `prev: undefined`.
   On an array, `key` MUST be a number.
 - SE-104: `delete` on an object MUST produce `delete`.
-- SE-105: Every array structure change MUST produce one `splice`.
+- SE-105: Every array structure change other than SE-09C MUST produce one `splice`.
   `push` and SE-096 use `start` equal to the old length.
   `length` growth and skipped indices add `undefined` entries.
 - SE-106: Each operation's indices MUST use the array as it stood after the previous operation.
+  In a `move`, `order[to]` is the index `from` that the slot at `to` held before the operation.
 - SE-107: The first report MUST start by describing the whole shape as it stood at start.
   Objects get one `set` per key, with `prev: undefined`.
   A non-empty array gets one `splice` with `start: 0`.
@@ -319,7 +340,9 @@ These behaviours follow from the rules above and are intentional.
   Use `autoStart` with `nonYielding` or `backPressure: false` for sources that must run unattended.
 - SE-131: `break` in a consumer does not close the channel.
   Use `using` or close the channel to stop `select`.
-- SE-132: A source object placed in two slots is pulled twice, and the outcome is unspecified.
+- SE-132: Slots sharing an iterator share its cursor, so each value reaches one slot, in pull order.
+  A `Channel` in several slots opens one reader per slot, so each slot reads every value.
+  `fill` and `copyWithin` can create this sharing, and SE-122 leaves any iterator they overwrite open.
 - SE-133: With `autoStart`, `backPressure` and a late `firstReceive: "next"` consumer, the first publish is never read.
   The flush stays at step 4 until the channel turns terminal.
 - SE-134: With `stopStyle: "stop"` and `backPressure: false`, auto close can drop the final snapshot by CH-065.
@@ -329,7 +352,7 @@ These behaviours follow from the rules above and are intentional.
   With a `thenReceive: "unread"` channel as the source, that item never reaches another worker.
   A caller calling `next()` on a removed iterator gets the value after the one in progress.
 - SE-137: With `backPressure: false` or `nonYielding`, an always-ready async source runs on microtasks alone and starves the event loop.
-- SE-138: `Array.prototype` mutators applied with `.call` bypass SE-090 and SE-094.
+- SE-138: `Array.prototype` mutators applied with `.call` bypass SE-090 and SE-09C.
   Each of their writes then follows the rules for index and `length` writes.
 - SE-139: Each index is a slot, so a huge `length` exhausts memory, unlike a sparse `Array`.
 - SE-13A: Objects inheriting from the proxy are unsupported, and a write through one is unspecified.
@@ -376,4 +399,6 @@ const s = select([] as Row[], {
 await null; // Start has run
 s.push(rowA, rowB); // { op: "splice", start: 0, removed: [], added: [rowA, rowB] }
 s.shift(); // { op: "splice", start: 0, removed: [rowA], added: [] }
+s.push(rowC);
+s.reverse(); // { op: "move", order: [1, 0] }
 ```

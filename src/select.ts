@@ -5,6 +5,8 @@ import {
   noop,
   quiet,
   quietReturn,
+  relocate,
+  replace,
   thenOf,
   VAL,
 } from "./source.ts";
@@ -132,14 +134,6 @@ const toIndex = (key: PropertyKey) => {
 
 const forbid = () => {
   throw new TypeError("Operation is not supported on a select proxy");
-};
-
-// Array.prototype.splice takes items as arguments, which limits their number.
-const replace = <V>(list: V[], start: number, count: number, items: V[]) => {
-  const rest = list.splice(start),
-    removed = rest.splice(0, count);
-  for (const item of items.concat(rest)) list.push(item);
-  return removed;
 };
 
 // Follows Array.prototype.sort, which sorts undefined last without calling compare.
@@ -502,13 +496,6 @@ export function select(shape: any, options: any = {}): any {
     touch();
     if (started) added.forEach(activate);
     return removed;
-  };
-
-  const relocate = <V>(list: V[], order: number[]) => {
-    const old = [...list];
-    order.forEach((from, to) => {
-      list[to] = old[from];
-    });
   };
 
   const permute = (order: number[]) => {

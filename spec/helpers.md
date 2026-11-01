@@ -1,6 +1,6 @@
 # Helpers
 
-This document is self-contained, except that `isVal` and `spread` build on `Val` from `select.md`.
+This document is self-contained, except that `isVal` and `spread` build on `Val`, and `applyOps` on `Op`, from `select.md`.
 `Channel`, `feed` and `Select` MUST NOT require callers to use a helper.
 The key words MUST, MUST NOT, SHOULD and MAY are normative.
 
@@ -23,6 +23,15 @@ export function catching<T>(
 
 export function isVal(value: unknown): value is Val<unknown>;
 export function spread<S>(snapshot: S): Spread<S>;
+
+type Entry<T> = T extends readonly (infer V)[] ? V : T[keyof T];
+
+export function applyOps<T extends object>(
+  target: T,
+  ops: readonly Op[],
+  map?: (value: unknown, prev: Entry<T> | undefined) => Entry<T>,
+  options?: { eager?: boolean },
+): T;
 ```
 
 `Source<T>` is any of `PromiseLike<T>`, `AsyncIterable<T>`, `AsyncIterator<T>`, `Iterable<T>`, `Iterator<T>`.
@@ -149,4 +158,48 @@ A key that is only sometimes a `Val` gets no suffix fields in `Spread`, though H
 const s = select({ p: promise }, { mapSnapshot: spread });
 // { p: undefined, pLoading: true, pError: null, pDone: false }
 // { p: 42, pLoading: false, pError: null, pDone: true }
+```
+
+## applyOps
+
+`applyOps` replays the operations from `onChanges` onto a mirror of the shape.
+It is lazy by default, so one call folds its operations first and `map` runs only for entries that land in `target`.
+With `eager: true`, each operation applies in turn and `map` runs for values a later operation overwrites.
+`map` turns each incoming output into the entry to store, so a mirror can hold derived values such as DOM nodes.
+Without `map`, each output is stored as it is.
+
+- HE-040: It MUST apply `ops` to `target` in order, in place, and return `target`.
+  An empty mirror replayed from the first report MUST equal the outputs, as SE-108 requires.
+- HE-041: Under `eager`, `set` MUST store `map(value, prev)`, where `prev` is the own entry at that key, or `undefined` if there is none.
+- HE-042: Under `eager`, `delete` MUST remove the key, and MUST NOT call `map`.
+- HE-043: Under `eager`, `splice` MUST call `map` once per added value, in order, before changing `target`.
+  `prev` MUST be the removed entry at the same index, or `undefined` past the removed range.
+- HE-044: `splice` MUST accept any number of added values, including more than a call can take as arguments.
+- HE-045: Under `eager`, `move` MUST place the entry from index `order[i]` at index `i`, and MUST NOT call `map`.
+- HE-046: A `__proto__` key MUST stay an own entry, and MUST NOT change the prototype of `target`.
+- HE-047: It MUST throw a `TypeError` if `target` is not an object, if `map` is given and is not a function, or if an operation is unknown.
+  Under `eager`, a `splice` or `move` on a target that is not an array MUST throw a `TypeError`.
+- HE-048: Under `eager`, an error from `map` MUST propagate, leave the current operation unapplied and keep earlier operations applied.
+- HE-049: `options.eager` MUST be a boolean when given, or `applyOps` MUST throw a `TypeError`.
+- HE-04A: Without `eager`, `target` MUST end equal to an eager replay of the same `ops` with the same `map` results, including key order.
+- HE-04B: Without `eager`, `map` MUST run once for each value still in place after all `ops`, and for no other value.
+  It MUST run in index order for an array, and in final key order among the written keys for an object.
+- HE-04C: Without `eager`, `prev` MUST be the entry from before the call that the position or key inherited, or `undefined` if there is none.
+  A moved entry carries its position, and a key removed and set again inherits its old entry.
+  One entry MUST reach `prev` at most once.
+- HE-04D: Without `eager`, `map` MUST run before `target` changes, so any error MUST leave `target` untouched.
+- HE-04E: Without `eager`, an index whose entry did not change MUST NOT be written.
+- HE-04F: Without `eager`, an operation that does not fit `target`, including `delete` on an array, MUST throw a `TypeError`.
+
+`target` is written through plain assignment and array methods, so a reactive array or object sees each change.
+Read-only views such as `node.children` cannot be a target.
+Lazy folding spans one call, which is one `onChanges` report, and costs one pass over an array target.
+
+```ts
+const rows: Row[] = [];
+const state = select(users, {
+  unwrap: true,
+  onChanges: ops =>
+    applyOps(rows, ops, (user, row) => row?.update(user) ?? new Row(user)),
+});
 ```

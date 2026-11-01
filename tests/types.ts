@@ -1,4 +1,5 @@
 import {
+  applyOps,
   CHAN,
   Channel,
   catching,
@@ -118,3 +119,11 @@ vals.sort((a, b) => {
 });
 yes<Eq<Extract<Op, { op: "move" }>["order"], number[]>>();
 rows.sort().reverse().fill(3);
+applyOps([1], [op], value => Number(value), { eager: true });
+// @ts-expect-error HE-049
+applyOps([1], [op], undefined, { eager: 1 });
+const mirror = applyOps(["a"], [op], value => String(value));
+yes<Eq<typeof mirror, string[]>>();
+applyOps({ a: 1 }, [op], (value, prev) => (prev ?? 0) + Number(value));
+// @ts-expect-error map must return an entry of the target
+applyOps([1], [op], () => "x");

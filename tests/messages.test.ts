@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CHAN, Channel, catching, feed, select, spread } from "../src/index.ts";
+import {
+  applyOps,
+  CHAN,
+  Channel,
+  catching,
+  feed,
+  select,
+  spread,
+} from "../src/index.ts";
 
 const noop = () => {};
 const ch = () => new Channel<any, any>();
@@ -13,6 +21,34 @@ const list = () =>
 
 // Messages are not in the spec, but a wrong one is still a defect in a developer-facing error.
 const cases: [string, () => unknown, RegExp][] = [
+  [
+    "applyOps misfit",
+    () => applyOps(["a"], [{ op: "delete", key: "0", prev: 1 }]),
+    /cannot replay delete on this target/,
+  ],
+  ["applyOps target", () => applyOps(1 as any, []), /target must be an object/],
+  ["applyOps map", () => applyOps([], [], 1 as any), /map must be a function/],
+  [
+    "applyOps op",
+    () => applyOps([], [{ op: "x" } as any], undefined, { eager: true }),
+    /unknown operation/,
+  ],
+  [
+    "applyOps move",
+    () => applyOps({}, [{ op: "move", order: [] }], undefined, { eager: true }),
+    /move needs an array target/,
+  ],
+  [
+    "applyOps splice",
+    () =>
+      applyOps(
+        {},
+        [{ op: "splice", start: 0, removed: [], added: [] }],
+        undefined,
+        { eager: true },
+      ),
+    /splice needs an array target/,
+  ],
   ["sort comparator", () => list().sort(1), /comparator must be a function/],
   [
     "sort mutation",

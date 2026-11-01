@@ -30,6 +30,7 @@ Gherkin is not used.
 - `unwrap` lets consumers read values without extracting `.value`.
   It replaces `simple`, and a rejection under it fails the channel.
 - `spread` is a snapshot projection, passed as `mapSnapshot: spread`.
+- `applyOps` is the one replay of `onChanges`, with an optional `map` for derived entries.
 - Proxy reads return sources, because `State` keeps the input types.
 - Removed sources are not closed, because they return to the caller.
 - `Channel` rejects thenables, and projections are synchronous.

@@ -89,6 +89,8 @@ for await (const { users } of state) if (users?.length) break;
 - `catching(source, onError)` wraps a source so a failure ends it quietly.
 - `spread` turns `Val` fields into `kLoading`, `kError` and `kDone`, for `mapSnapshot: spread`.
 - `isVal(value)` tests for a `Val`, across copies of the library.
+- `applyOps(target, ops, map?, { eager })` replays `onChanges` onto a mirror, and `map` derives each entry.
+  It folds a report first, so `map` runs only for entries that land, and `eager` maps every step.
 
 ## Specification
 

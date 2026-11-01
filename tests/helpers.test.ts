@@ -3,7 +3,15 @@ import { getEventListeners } from "node:events";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
-import { abortable, catching, isVal, select, spread } from "../src/index.ts";
+import {
+  abortable,
+  applyOps,
+  catching,
+  isVal,
+  type Op,
+  select,
+  spread,
+} from "../src/index.ts";
 
 const end = (value?: unknown) => ({ value, done: true });
 const val = (value: unknown) => ({ value, done: false });
@@ -648,4 +656,369 @@ test("HE-031 a __proto__ key stays an own field", () => {
   const out: any = spread(input);
   assert.equal(Object.getPrototypeOf(out), Object.prototype);
   assert.ok(Object.hasOwn(out, "__proto__"));
+});
+
+const eager = { eager: true };
+const added = (start: number, ...values: unknown[]): Op => ({
+  op: "splice",
+  start,
+  removed: [],
+  added: values,
+});
+
+test("HE-040 replay follows order, works in place and returns target", () => {
+  const target: unknown[] = [];
+  const ops: Op[] = [
+    added(0, "a", "b"),
+    { op: "set", key: 1, value: "c", prev: "b" },
+  ];
+  assert.equal(applyOps(target, ops), target);
+  assert.deepEqual(target, ["a", "c"]);
+});
+
+test("HE-040 a mirror equals the outputs of a real select", async () => {
+  const mirror: number[] = [];
+  const state = select([3, 1], {
+    autoStart: true,
+    autoClose: false,
+    nonYielding: true,
+    onChanges: ops => applyOps(mirror, ops),
+  });
+  await setImmediate();
+  state.push(2);
+  state.sort();
+  state.reverse();
+  state.splice(1, 1, 7, 8);
+  state[1] = 9;
+  state.fill(4, 3);
+  await setImmediate();
+  assert.deepEqual(mirror, [...state]);
+  state[Symbol.dispose]();
+});
+
+test("HE-041 set passes the own entry, and only an own one, as prev", () => {
+  const seen: unknown[][] = [];
+  const target: any = { a: "old" };
+  const map = (value: unknown, prev: unknown) => (
+    seen.push([value, prev]), `${value}!`
+  );
+  applyOps(
+    target,
+    [
+      { op: "set", key: "a", value: 1, prev: undefined },
+      { op: "set", key: "toString", value: 2, prev: undefined },
+    ],
+    map,
+    eager,
+  );
+  assert.deepEqual(seen, [
+    [1, "old"],
+    [2, undefined],
+  ]);
+  assert.equal(target.a, "1!");
+  assert.equal(target.toString, "2!");
+});
+
+test("HE-042 delete removes the key without map", () => {
+  const target: Record<string, unknown> = { a: 1, b: 2 };
+  const map = () => assert.fail("map ran");
+  applyOps(target, [{ op: "delete", key: "a", prev: 1 }], map, eager);
+  assert.deepEqual(target, { b: 2 });
+});
+
+test("HE-043 splice maps in order, pairing removed entries by index", () => {
+  const seen: unknown[][] = [];
+  const target = ["x", "A", "B", "y"];
+  applyOps(
+    target,
+    [{ op: "splice", start: 1, removed: [0, 0], added: ["p", "q", "r"] }],
+    (value, prev) => {
+      seen.push([value, prev, target.length]);
+      return value as string;
+    },
+    eager,
+  );
+  assert.deepEqual(seen, [
+    ["p", "A", 4],
+    ["q", "B", 4],
+    ["r", undefined, 4],
+  ]);
+  assert.deepEqual(target, ["x", "p", "q", "r", "y"]);
+});
+
+test("HE-044 splice takes more values than a call has arguments", () => {
+  const values = Array.from({ length: 500_000 }, (_, index) => index);
+  const target: number[] = [];
+  for (const options of [eager, {}]) {
+    target.length = 0;
+    applyOps(
+      target,
+      [{ op: "splice", start: 0, removed: [], added: values }],
+      undefined,
+      options,
+    );
+    assert.equal(target.length, values.length);
+  }
+});
+
+test("HE-045 move reads each entry from order without map", () => {
+  const target = ["a", "b", "c"];
+  const map = () => assert.fail("map ran");
+  applyOps(target, [{ op: "move", order: [2, 0, 1] }], map, eager);
+  assert.deepEqual(target, ["c", "a", "b"]);
+});
+
+test("HE-046 a __proto__ key stays an own entry", () => {
+  const target: any = {};
+  const value = { polluted: true };
+  const op: Op = { op: "set", key: "__proto__", value, prev: undefined };
+  applyOps(target, [op], undefined, eager);
+  assert.equal(Object.getPrototypeOf(target), Object.prototype);
+  assert.equal(
+    Object.getOwnPropertyDescriptor(target, "__proto__")?.value,
+    value,
+  );
+  applyOps(
+    target,
+    [{ ...op, value: 2 }],
+    (next, prev) => {
+      assert.equal(prev, value);
+      return next;
+    },
+    eager,
+  );
+  const entry = Object.getOwnPropertyDescriptor(target, "__proto__");
+  assert.deepEqual(entry, {
+    value: 2,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+});
+
+test("HE-047 invalid arguments throw a TypeError", () => {
+  for (const target of [null, 1, "x"])
+    assert.throws(() => applyOps(target as any, []), TypeError);
+  assert.throws(() => applyOps([], [], 1 as any), TypeError);
+  assert.throws(
+    () => applyOps([], [{ op: "x" } as any], undefined, eager),
+    TypeError,
+  );
+  assert.throws(() => applyOps({}, [added(0, 1)], undefined, eager), TypeError);
+  assert.throws(
+    () => applyOps({}, [{ op: "move", order: [] }], undefined, eager),
+    TypeError,
+  );
+});
+
+test("HE-048 a map error keeps earlier operations only", () => {
+  const failure = new Error("x");
+  const target: number[] = [];
+  const map = (value: unknown) => {
+    if (value === 2) throw failure;
+    return value as number;
+  };
+  assert.throws(
+    () => applyOps(target, [added(0, 1), added(1, 3, 2)], map, eager),
+    e => e === failure,
+  );
+  assert.deepEqual(target, [1]);
+});
+
+const tag = (seen: unknown[][]) => (value: unknown, prev: unknown) => (
+  seen.push([value, prev]), `${value}!`
+);
+const set = (key: string | number, value: unknown): Op => ({
+  op: "set",
+  key,
+  value,
+  prev: undefined,
+});
+const drop = (key: string): Op => ({ op: "delete", key, prev: undefined });
+const cut = (start: number, count: number, ...values: unknown[]): Op => ({
+  op: "splice",
+  start,
+  removed: Array.from({ length: count }),
+  added: values,
+});
+
+test("HE-049 eager must be a boolean", () => {
+  assert.throws(
+    () => applyOps([], [], undefined, { eager: 1 as any }),
+    TypeError,
+  );
+});
+
+test("HE-04A lazy matches an eager replay on arrays", () => {
+  let seed = 7;
+  const rand = (n: number) => (seed = (seed * 48271) % 2147483647) % n;
+  for (let run = 0; run < 200; run++) {
+    const start = Array.from({ length: rand(5) }, (_, i) => `s${i}`);
+    const ops: Op[] = [];
+    let size = start.length;
+    for (let step = 0, id = 0; step < 8; step++) {
+      const kind = rand(3);
+      if (kind === 0 && size) ops.push(set(rand(size), `v${id++}`));
+      else if (kind === 1 && size)
+        ops.push({
+          op: "move",
+          order: Array.from({ length: size }, (_, i) => size - 1 - i),
+        });
+      else {
+        const at = rand(size + 1),
+          count = rand(size - at + 1);
+        const values = Array.from({ length: rand(3) }, () => `v${id++}`);
+        ops.push(cut(at, count, ...values));
+        size += values.length - count;
+      }
+    }
+    assert.deepEqual(
+      applyOps([...start], ops, value => value as string),
+      applyOps([...start], ops, value => value as string, eager),
+    );
+  }
+});
+
+test("HE-04A lazy keeps the key order of an eager replay", () => {
+  const ops = [drop("a"), set("c", 1), set("a", 2), drop("b"), set("b", 3)];
+  const stepped = applyOps({ a: 0, b: 0, k: 0 } as any, ops, undefined, eager);
+  const folded = applyOps({ a: 0, b: 0, k: 0 } as any, ops);
+  assert.deepEqual(Object.entries(folded), Object.entries(stepped));
+});
+
+test("HE-04B lazy maps only values that land, once, in index order", () => {
+  const seen: unknown[][] = [];
+  const target = applyOps(
+    [] as string[],
+    [
+      cut(0, 0, "a", "b", "c"),
+      set(0, "x"),
+      set(0, "y"),
+      cut(1, 1),
+      { op: "move", order: [1, 0] },
+    ],
+    tag(seen),
+  );
+  assert.deepEqual(target, ["c!", "y!"]);
+  assert.deepEqual(seen, [
+    ["c", undefined],
+    ["y", undefined],
+  ]);
+});
+
+test("HE-04B lazy on an object maps the last set only, and a move skips map", () => {
+  const seen: unknown[][] = [];
+  const target: any = applyOps(
+    { a: "A" } as any,
+    [set("a", 1), set("a", 2), set("b", 3), drop("b")],
+    tag(seen),
+  );
+  assert.deepEqual(target, { a: "2!" });
+  assert.deepEqual(seen, [[2, "A"]]);
+  const map = () => assert.fail("map ran");
+  const list = applyOps(["a", "b"], [{ op: "move", order: [1, 0] }], map);
+  assert.deepEqual(list, ["b", "a"]);
+});
+
+test("HE-04C prev follows the position through moves and repeat writes", () => {
+  const seen: unknown[][] = [];
+  applyOps(
+    ["A", "B", "C"],
+    [
+      { op: "move", order: [2, 1, 0] },
+      set(0, 1),
+      set(0, 2),
+      cut(1, 2, 3, 4, 5),
+    ],
+    tag(seen),
+  );
+  assert.deepEqual(seen, [
+    [2, "C"],
+    [3, "B"],
+    [4, "A"],
+    [5, undefined],
+  ]);
+});
+
+test("HE-04C a key removed and set again inherits its entry, once", () => {
+  const seen: unknown[][] = [];
+  applyOps(
+    { a: "A", toString: "own" } as any,
+    [
+      drop("a"),
+      drop("a"),
+      set("a", 1),
+      drop("a"),
+      set("a", 2),
+      set("valueOf", 3),
+    ],
+    tag(seen),
+  );
+  assert.deepEqual(seen, [
+    [2, "A"],
+    [3, undefined],
+  ]);
+  const fresh: unknown[][] = [];
+  applyOps({} as any, [set("hasOwnProperty", 1)], tag(fresh));
+  assert.deepEqual(fresh, [[1, undefined]]);
+});
+
+test("HE-04C a set past the end has no prev", () => {
+  const seen: unknown[][] = [];
+  const target = applyOps(["a"], [set(1, "b")], tag(seen));
+  assert.deepEqual(seen, [["b", undefined]]);
+  assert.deepEqual(target, ["a", "b!"]);
+});
+
+test("HE-04D a lazy map error leaves target untouched", () => {
+  const failure = new Error("x");
+  const fail = () => {
+    throw failure;
+  };
+  const list = ["a"];
+  const ops = [cut(1, 0, "b"), cut(0, 1)];
+  assert.throws(
+    () => applyOps(list, ops, fail),
+    e => e === failure,
+  );
+  assert.deepEqual(list, ["a"]);
+  const object = { a: 1, b: 2 };
+  assert.throws(
+    () => applyOps(object, [drop("a"), set("b", 3)], fail),
+    e => e === failure,
+  );
+  assert.deepEqual(object, { a: 1, b: 2 });
+});
+
+test("HE-04E lazy writes only the indexes that changed", () => {
+  const writes: PropertyKey[] = [];
+  const target = new Proxy(["a", "b", "c"], {
+    set(list, key, value) {
+      writes.push(key);
+      return Reflect.set(list, key, value);
+    },
+  });
+  applyOps(target, [set(1, "x")]);
+  assert.deepEqual(writes, ["1", "length"]);
+});
+
+test("HE-04E lazy stores an undefined entry, and shrinks the target", () => {
+  const grown = applyOps([] as unknown[], [cut(0, 0, undefined)], undefined);
+  assert.ok(Object.hasOwn(grown, 0));
+  const empty = applyOps(["a", "b"], [cut(0, 2)]);
+  assert.equal(empty.length, 0);
+});
+
+test("HE-04F an operation that does not fit throws under lazy", () => {
+  const list = ["a"];
+  assert.throws(() => applyOps(list, [drop("0")]), TypeError);
+  assert.throws(() => applyOps({}, [cut(0, 0)]), TypeError);
+  assert.throws(() => applyOps({}, [{ op: "move", order: [] }]), TypeError);
+  assert.deepEqual(list, ["a"]);
+});
+
+test("HE-04A a __proto__ key stays an own entry under lazy", () => {
+  const target: any = applyOps({} as any, [set("__proto__", 1)], undefined);
+  assert.equal(Object.getPrototypeOf(target), Object.prototype);
+  assert.ok(Object.hasOwn(target, "__proto__"));
 });

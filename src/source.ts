@@ -53,6 +53,26 @@ export function detect(
     : undefined;
 }
 
+// Array.prototype.splice takes items as arguments, which limits their number.
+export const replace = <V>(
+  list: V[],
+  start: number,
+  count: number,
+  items: V[],
+) => {
+  const rest = list.splice(start),
+    removed = rest.splice(0, count);
+  for (const item of items.concat(rest)) list.push(item);
+  return removed;
+};
+
+export const relocate = <V>(list: V[], order: number[]) => {
+  const old = [...list];
+  order.forEach((from, to) => {
+    list[to] = old[from];
+  });
+};
+
 export const checkOptions = (options: any, types: Record<string, string>) => {
   for (const key in types) {
     const value = options[key];

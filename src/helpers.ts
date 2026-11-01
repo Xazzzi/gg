@@ -1,6 +1,14 @@
 import type { Source } from "./feed.ts";
-import type { Val } from "./select.ts";
-import { detect, quiet, quietReturn, VAL } from "./source.ts";
+import type { Op, Val } from "./select.ts";
+import {
+  checkOptions,
+  detect,
+  quiet,
+  quietReturn,
+  relocate,
+  replace,
+  VAL,
+} from "./source.ts";
 
 export function abortable<T>(
   promise: PromiseLike<T>,
@@ -173,4 +181,132 @@ export function spread<S>(snapshot: S): Spread<S> {
     out[names[2]] = val.done;
   }
   return out;
+}
+
+type Entry<T> = T extends readonly (infer V)[] ? V : T[keyof T];
+
+const same = (value: unknown) => value;
+
+const store = (target: any, key: PropertyKey, value: unknown) => {
+  if (key === "__proto__")
+    Object.defineProperty(target, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  else target[key] = value;
+};
+
+type Cell = {
+  entry?: unknown;
+  value?: unknown;
+  prev?: unknown;
+  fresh?: boolean;
+};
+
+const incoming = (value: unknown, prev: unknown): Cell => ({
+  fresh: true,
+  value,
+  prev,
+});
+const inherited = (cell?: Cell) => (cell?.fresh ? cell.prev : cell?.entry);
+const misfit = (op: Op) =>
+  new TypeError(`applyOps cannot replay ${op.op} on this target`);
+
+const foldArray = (target: any[], ops: readonly Op[], map: any) => {
+  const cells: Cell[] = target.map(entry => ({ entry }));
+  for (const op of ops) {
+    if (op.op === "set")
+      cells[op.key as number] = incoming(
+        op.value,
+        inherited(cells[op.key as number]),
+      );
+    else if (op.op === "move") relocate(cells, op.order);
+    else if (op.op === "splice") {
+      const { start, removed, added } = op,
+        count = removed.length;
+      const items = added.map((value, index) =>
+        incoming(
+          value,
+          index < count ? inherited(cells[start + index]) : undefined,
+        ),
+      );
+      replace(cells, start, count, items);
+    } else throw misfit(op);
+  }
+  const items = cells.map(cell =>
+    cell.fresh ? map(cell.value, cell.prev) : cell.entry,
+  );
+  items.forEach((item, index) => {
+    if (index >= target.length || !Object.is(target[index], item))
+      target[index] = item;
+  });
+  target.length = items.length;
+  return target;
+};
+
+const foldObject = (target: any, ops: readonly Op[], map: any) => {
+  const sets = new Map<PropertyKey, Cell>(),
+    gone = new Map<PropertyKey, unknown>();
+  const before = (key: PropertyKey) => {
+    if (sets.has(key)) return (sets.get(key) as Cell).prev;
+    if (gone.has(key)) return gone.get(key);
+    return Object.hasOwn(target, key) ? target[key] : undefined;
+  };
+  for (const op of ops) {
+    if (op.op === "set") sets.set(op.key, incoming(op.value, before(op.key)));
+    else if (op.op === "delete") {
+      gone.set(op.key, before(op.key));
+      sets.delete(op.key);
+    } else throw misfit(op);
+  }
+  const entries = [...sets].map(
+    ([key, cell]) => [key, map(cell.value, cell.prev)] as const,
+  );
+  for (const key of gone.keys()) delete target[key];
+  for (const [key, value] of entries) store(target, key, value);
+  return target;
+};
+
+export function applyOps<T extends object>(
+  target: T,
+  ops: readonly Op[],
+  map?: (value: unknown, prev: Entry<T> | undefined) => Entry<T>,
+  options?: { eager?: boolean },
+): T;
+export function applyOps(
+  target: any,
+  ops: readonly Op[],
+  map: any = same,
+  options: { eager?: boolean } = {},
+) {
+  if (Object(target) !== target)
+    throw new TypeError("applyOps target must be an object");
+  if (typeof map !== "function")
+    throw new TypeError("applyOps map must be a function");
+  checkOptions(options, { eager: "boolean" });
+  if (!options.eager)
+    return (Array.isArray(target) ? foldArray : foldObject)(target, ops, map);
+  for (const op of ops) {
+    if (op.op === "set") {
+      const prev = Object.hasOwn(target, op.key) ? target[op.key] : undefined;
+      store(target, op.key, map(op.value, prev));
+    } else if (op.op === "delete") delete target[op.key];
+    else if (op.op === "move") {
+      if (!Array.isArray(target))
+        throw new TypeError("applyOps move needs an array target");
+      relocate(target, op.order);
+    } else if (op.op === "splice") {
+      if (!Array.isArray(target))
+        throw new TypeError("applyOps splice needs an array target");
+      const { start, removed, added } = op,
+        count = removed.length;
+      const items = added.map((value, index) =>
+        map(value, index < count ? target[start + index] : undefined),
+      );
+      replace(target, start, count, items);
+    } else throw new TypeError("applyOps got an unknown operation");
+  }
+  return target;
 }

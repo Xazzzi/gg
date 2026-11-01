@@ -10,6 +10,7 @@
 import { styleText } from "node:util";
 import {
   abortable,
+  applyOps,
   CHAN,
   Channel,
   catching,
@@ -451,6 +452,43 @@ topic("abortable", "- ");
     console.log((error as Error).message); // => gave up
   }
 }
+topic("applyOps", "- ");
+{
+  // applyOps replays ops onto a mirror, and map derives each entry.
+  // prev is the entry being replaced, so it can be reused.
+  const labels: string[] = [];
+  const rows = select(["a"], {
+    autoStart: true,
+    autoClose: false,
+    nonYielding: true,
+    onChanges: ops =>
+      applyOps(labels, ops, (value, prev) => `${value} (was ${prev})`),
+  });
+  await tick();
+
+  rows[0] = "b";
+  rows.push("c");
+  await tick();
+  console.log(labels); // => [ 'b (was a (was undefined))', 'c (was undefined)' ]
+  rows[CHAN].close();
+}
+{
+  // One report folds first, so map runs only for entries that land.
+  // Pass { eager: true } to map every step, which here would also map a and b.
+  const calls: unknown[] = [];
+  const ops: Op[] = [
+    { op: "splice", start: 0, removed: [], added: ["a", "b"] },
+    { op: "set", key: 0, value: "c", prev: "a" },
+    { op: "splice", start: 1, removed: ["b"], added: [] },
+  ];
+  const list = applyOps(
+    [] as string[],
+    ops,
+    value => (calls.push(value), String(value)),
+  );
+  console.log(list, calls); // => [ 'c' ] [ 'c' ]
+}
+
 // # Traps
 // asend with no consumer stays pending until the channel ends.
 // A next() left pending on a work queue still takes a value, which is then lost.

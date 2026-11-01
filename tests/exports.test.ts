@@ -9,6 +9,7 @@ test("Package exports the root exports the public names", () => {
     "Channel",
     "StopError",
     "abortable",
+    "applyOps",
     "catching",
     "feed",
     "isVal",

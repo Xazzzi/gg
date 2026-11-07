@@ -1,7 +1,7 @@
 # Scope
 
 This file records the intended features of the library and the decisions behind them.
-The rules are in `channel.md`, `feed.md`, `select.md` and `helpers.md`.
+The rules are in `channel.md`, `feed.md`, `select.md`, `helpers.md`, `jsx.md` and `devtools.md`.
 If the specs and the docs, tests or code do not agree, the specs have priority.
 
 ## Purpose
@@ -50,22 +50,30 @@ These words have one meaning in all specs:
 - `onChanges` gets an operation log. It replaces `changeValues` and `RelocatedProxy`.
 - With `unwrap`, consumers read values and do not extract `.value`. `unwrap` replaces `simple`. A rejection under `unwrap` fails the channel.
 - `spread` is a snapshot projection. Use it as `mapSnapshot: spread`.
-- `applyOps` is the only replay of `onChanges`. Its optional `map` makes derived entries.
+- `applyOps` is the only replay of operations. Its optional `map` makes derived entries.
+- `changes` gives readers of one shared operation log for each `select`. A read takes all reported operations since the previous read, so a busy observer skips intermediate states. A reader carries `outputs`, because a proxy read returns sources.
+- State does not depend on the UI. Code can read the changes of any `select` after construction, so `onChanges` is only the synchronous path.
 - A proxy read returns a source, because `State` keeps the input types.
 - `sort` compares sources, because all proxy methods operate on sources. `sortOutputs` is the explicit method that compares outputs.
 - `select` does not call `return()` on a removed source, because the source returns to the caller.
 - `Channel` rejects thenables. Projections are synchronous.
+- A global devtools hook gives the Chrome extension in `devtools/` access to internal state. The hook is not public API. The extension needs no full spec coverage.
 - `StopError`, `isVal` and `CHAN` operate across copies of the library. A `Channel` and the `feed` that uses it MUST come from one copy.
+- The root exports the JSX runtime too, because it adds little to a bundle, and `sideEffects: false` lets a bundler drop it. The `@xazzzi/gg/jsx-runtime` entry exists for the JSX transform. The runtime has no virtual DOM. A component instance changes its own nodes, `select` drives the instances, and `each` replays a reader of `changes` with `applyOps`.
+- `each` is a dynamic child, so it shares a host with other children and owns only its own nodes.
+- A host tracks dynamic children by key, not by index, because an index write to a `select` replaces the source (SE-088).
 
 ## Package exports
 
 The package root MUST export these names.
+The `./jsx-runtime` and `./jsx-dev-runtime` entries MUST export the names of `jsx.md`, which the JSX transform imports.
 No other name is public.
 The package MUST set `sideEffects: false`, so that a bundler can remove unused helpers.
 
-| Spec         | Values                                                 | Types                                                                         |
-| ------------ | ------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `channel.md` | `Channel`, `StopError`                                 | `ChannelOptions`, `FirstReceive`, `ThenReceive`, `StopStyle`                  |
-| `feed.md`    | `feed`                                                 | `Source`, `FeedOptions`                                                       |
-| `select.md`  | `select`, `CHAN`                                       | `SelectShape`, `SelectOptions`, `Snapshot`, `Unwrapped`, `State`, `Val`, `Op` |
-| `helpers.md` | `abortable`, `applyOps`, `catching`, `isVal`, `spread` | `Caught`, `Spread`                                                            |
+| Spec         | Values                                                 | Types                                                                                    |
+| ------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `channel.md` | `Channel`, `StopError`                                 | `ChannelOptions`, `FirstReceive`, `ThenReceive`, `StopStyle`                             |
+| `feed.md`    | `feed`                                                 | `Source`, `FeedOptions`                                                                  |
+| `select.md`  | `select`, `changes`, `CHAN`                            | `SelectShape`, `SelectOptions`, `Snapshot`, `Unwrapped`, `State`, `Val`, `Op`, `Changes` |
+| `helpers.md` | `abortable`, `applyOps`, `catching`, `isVal`, `spread` | `Caught`, `Spread`                                                                       |
+| `jsx.md`     | `jsx`, `jsxs`, `jsxDEV`, `Fragment`, `mount`, `each`   | `Static`, `Dynamic`, `Child`, `Props`, `Item`, `JSX` (also entry `./jsx-runtime`)        |

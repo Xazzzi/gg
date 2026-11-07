@@ -1,4 +1,5 @@
 import { attached, type Channel, isChannel } from "./channel.ts";
+import { register } from "./devtools.ts";
 import { checkOptions, detect, noop, quiet, quietReturn } from "./source.ts";
 
 export type Source<T> =
@@ -22,8 +23,10 @@ const OPTION_TYPES = {
   backPressure: "boolean",
   sendReturn: "boolean",
 };
+/** Counts the active feeds of each channel, so the last one closes it. */
 const runs = new WeakMap<object, { active: number }>();
 
+/** Pulls the source into the channel until either ends, and calls `return()` on the iterator when the channel ends first. */
 async function run(
   source: any,
   { stream, open }: NonNullable<ReturnType<typeof detect>>,
@@ -45,6 +48,7 @@ async function run(
     cancel: (value: unknown) => void = noop;
   // One listener per run, so the race retains nothing per pull.
   const onAbort = () => cancel(ABORTED);
+  /** Calls `next` one time, checks the result, and gives the value to send. */
   const pull = async () => {
     const result = await next.call(iterator);
     if (Object(result) !== result)
@@ -78,6 +82,7 @@ async function run(
   }
 }
 
+/** Sends the values of a source to a channel, and closes the channel after its last feed with `autoClose`. */
 export function feed<T, TReturn>(
   source: Source<T>,
   channel: Channel<T, TReturn>,
@@ -95,6 +100,13 @@ export function feed<T, TReturn>(
     sendReturn = false,
   } = options;
   quiet(source);
+  const emit = register("feed", source as object, {
+    channel,
+    autoStart,
+    autoClose,
+    backPressure,
+    sendReturn,
+  });
   const count = runs.get(channel) ?? { active: 0 };
   runs.set(channel, count);
   count.active++;
@@ -106,6 +118,7 @@ export function feed<T, TReturn>(
     backPressure,
     sendReturn,
   ).then(() => {
+    emit?.("end");
     if (!--count.active && autoClose) channel.close();
   });
 }

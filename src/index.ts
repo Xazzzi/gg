@@ -10,6 +10,16 @@ export { feed } from "./feed.ts";
 export type { Caught, Spread } from "./helpers.ts";
 export { abortable, applyOps, catching, isVal, spread } from "./helpers.ts";
 export type {
+  Child,
+  Dynamic,
+  Item,
+  JSX,
+  Props,
+  Static,
+} from "./jsx.ts";
+export { each, Fragment, jsx, jsxDEV, jsxs, mount } from "./jsx.ts";
+export type {
+  Changes,
   Op,
   SelectOptions,
   SelectShape,
@@ -18,4 +28,4 @@ export type {
   Unwrapped,
   Val,
 } from "./select.ts";
-export { CHAN, select } from "./select.ts";
+export { CHAN, changes, select } from "./select.ts";

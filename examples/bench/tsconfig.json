@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "@xazzzi/gg",
+    "paths": {
+      "@xazzzi/gg": ["../../src/index.ts"],
+      "@xazzzi/gg/jsx-runtime": ["../../src/jsx.ts"]
+    },
+    "noEmit": true
+  },
+  "include": ["src"]
+}

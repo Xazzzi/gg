@@ -8,27 +8,41 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx.d.ts",
+      "import": "./dist/jsx.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/jsx.d.ts",
+      "import": "./dist/jsx.js"
     }
   },
   "sideEffects": false,
   "files": [
     "dist",
-    "src"
+    "src",
+    "SKILL.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "prepack": "npm run build",
-    "type": "tsc --noEmit",
+    "type": "tsc --noEmit && tsc -p devtools --noEmit",
     "lint": "biome check",
     "pretest": "node generate-tests-index.ts",
     "test": "node --expose-gc --test --test-timeout=250 --test-reporter=dot tests/index.test.ts",
     "test:human": "node --expose-gc --test --test-timeout=250 --experimental-test-coverage tests/index.test.ts",
-    "examples": "node update-spec-examples.ts",
     "test:branches": "node find-uncovered-branches.ts",
     "test:perf": "node tests/perf.ts",
     "test:mutations": "npm run pretest && stryker run; node generate-surviving-mutants.ts",
     "test:redundant": "npm run pretest && node find-redundant-tests.ts",
-    "checks": "npm run type && npm run lint && npm run test && node update-spec-examples.ts --check"
+    "checks": "npm run type && npm run lint && npm run test && node update-spec-examples.ts --check",
+    "build": "npm run build:index && npm run build:devtools",
+    "build:index": "tsc -p tsconfig.build.json",
+    "build:devtools": "tsc -p devtools && node devtools/link.ts",
+    "minify": "echo 'export * from \"./dist/index.js\"; export * from \"./dist/jsx.js\";' | esbuild --bundle --minify --format=esm --outfile=dist/index.min.js",
+    "postbuild": "npm run minify",
+    "prepack": "npm run build",
+    "spec:examples": "node update-spec-examples.ts",
+    "serve:examples": "esbuild examples/todomvc/dist/main=examples/todomvc/src/main.tsx examples/bench/dist/main=examples/bench/src/main.tsx --bundle --format=esm --outdir=. --servedir=. --serve=localhost:5173"
   },
   "keywords": [
     "generator",
@@ -52,6 +66,7 @@
     "@biomejs/biome": "2.6.4",
     "@stryker-mutator/core": "10.1.1",
     "@types/node": "26.6.6",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2"
   },
   "overrides": {

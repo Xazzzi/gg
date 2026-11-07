@@ -1,18 +1,22 @@
 // Internal helpers shared by feed, select and catching. Not exported from the package.
 export const VAL = Symbol.for("gg.Val");
+/** Does nothing, as a default callback and a rejection sink. */
 export const noop = () => {};
 
+/** Tells if a value is a function. */
 const callable = (value: unknown) => typeof value === "function";
 
+/** Reads `then` from an object or a function, and gives undefined for primitives. */
 export const thenOf = (value: any) =>
   (typeof value === "object" && value !== null) || callable(value)
     ? value.then
     : undefined;
 
+/** Tells if a value has a callable `then`. */
 export const isThenable = (value: any): value is PromiseLike<unknown> =>
   callable(thenOf(value));
 
-// A thenable acts as an iterator of one value, so it needs no pull path of its own.
+/** Wraps a thenable as an iterator of one value, so it needs no pull path of its own. */
 const once = (source: any, then: any) => {
   let pulled = false;
   return {
@@ -31,9 +35,12 @@ const once = (source: any, then: any) => {
   };
 };
 
+/** Pairs an iterator with its `next` method, read one time. */
 const record = (iterator: any): [any, any] => [iterator, iterator.next];
 
-// Runs once per call, and keeps what it read, so a later use never detects again.
+/**
+ * Finds how to read a source as a promise, an async iterable, an iterable or an iterator.
+ * Runs once per call, and keeps what it read, so a later use never detects again. */
 export function detect(
   source: any,
 ): { stream: boolean; open: () => [any, any] } | undefined {
@@ -53,7 +60,9 @@ export function detect(
     : undefined;
 }
 
-// Array.prototype.splice takes items as arguments, which limits their number.
+/**
+ * Splices items into a list in place, and gives the removed items.
+ * Array.prototype.splice takes items as arguments, which limits their number. */
 export const replace = <V>(
   list: V[],
   start: number,
@@ -66,6 +75,7 @@ export const replace = <V>(
   return removed;
 };
 
+/** Reorders a list in place, so index `to` takes the old item at `order[to]`. */
 export const relocate = <V>(list: V[], order: number[]) => {
   const old = [...list];
   order.forEach((from, to) => {
@@ -73,6 +83,7 @@ export const relocate = <V>(list: V[], order: number[]) => {
   });
 };
 
+/** Throws a `TypeError` for an option that is defined and not of its type. */
 export const checkOptions = (options: any, types: Record<string, string>) => {
   for (const key in types) {
     const value = options[key];
@@ -81,12 +92,15 @@ export const checkOptions = (options: any, types: Record<string, string>) => {
   }
 };
 
+/** Marks a native promise as handled, so its rejection is not reported. */
 export const quiet = (value: unknown) => {
   if (value instanceof Promise)
     Promise.prototype.then.call(value, undefined, noop);
 };
 
-// The call happens synchronously, and the promise settles with the iterator's return().
+/**
+ * Calls `return()` on an iterator, and ignores what it throws or rejects with.
+ * The call happens synchronously, and the promise settles with the iterator's return(). */
 export const quietReturn = async (iterator: any) => {
   try {
     await iterator.return(); // A missing method throws here, and is ignored too

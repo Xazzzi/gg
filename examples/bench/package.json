@@ -1,0 +1,25 @@
+{
+  "name": "js-framework-benchmark-gg",
+  "version": "1.0.0",
+  "type": "module",
+  "js-framework-benchmark": {
+    "frameworkVersion": "0.2.0",
+    "frameworkHomeURL": "https://github.com/Xazzzi/gg",
+    "language": "TypeScript",
+    "repoURL": "https://github.com/Xazzzi/gg"
+  },
+  "scripts": {
+    "dev": "esbuild src/main.tsx --bundle --format=esm --tsconfig=tsconfig.json --outfile=dist/main.js --watch",
+    "build-prod": "esbuild src/main.tsx --bundle --format=esm --tsconfig=tsconfig.json --minify --legal-comments=none --outfile=dist/main.js"
+  },
+  "author": "Vitalii Yakovenko",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/krausest/js-framework-benchmark",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/krausest/js-framework-benchmark.git"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.3"
+  }
+}

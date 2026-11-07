@@ -10,8 +10,13 @@
     "module": "nodenext",
     "lib": ["ESNext", "DOM"],
     "types": ["node"],
-    "paths": { "@xazzzi/gg": ["./src/index.ts"] },
+    "jsx": "react-jsx",
+    "jsxImportSource": "@xazzzi/gg",
+    "paths": {
+      "@xazzzi/gg": ["./src/index.ts"],
+      "@xazzzi/gg/jsx-runtime": ["./src/jsx.ts"]
+    },
     "noEmit": true
   },
-  "include": ["src", "tests", "learn-gg.ts"]
+  "include": ["src", "tests", "examples", "learn-gg.ts"]
 }

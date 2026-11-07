@@ -1,13 +1,16 @@
 import {
   applyOps,
   CHAN,
+  type Changes,
   Channel,
   catching,
+  changes,
   feed,
   type Op,
   type SelectOptions,
   type Snapshot,
   type Spread,
+  type State,
   select,
   spread,
   type Unwrapped,
@@ -144,3 +147,17 @@ yes<Eq<typeof mirror, string[]>>();
 applyOps({ a: 1 }, [op], (value, prev) => (prev ?? 0) + Number(value));
 // @ts-expect-error map must return an entry of the target
 applyOps([1], [op], () => "x");
+
+const strings = changes(select(["a"]));
+yes<Eq<typeof strings, Changes<string[]>>>();
+const unwrapped = changes(rows).outputs,
+  states = changes(vals).outputs,
+  fields = changes(a).outputs;
+yes<Eq<typeof unwrapped, (number | undefined)[]>>();
+yes<Eq<typeof states, Val<number>[]>>();
+yes<Eq<typeof fields, { p: Val<number>; n: number }>>();
+const outputsOf = <T>(state: State<readonly unknown[], any, T[]>) =>
+  changes(state).outputs;
+yes<Eq<ReturnType<typeof outputsOf<boolean>>, boolean[]>>();
+// @ts-expect-error SE-140 needs a select proxy
+changes({});

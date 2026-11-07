@@ -10,6 +10,7 @@ import {
   VAL,
 } from "./source.ts";
 
+/** Settles as the promise does, or rejects with the signal reason when the signal aborts first. */
 export function abortable<T>(
   promise: PromiseLike<T>,
   signal: AbortSignal,
@@ -31,12 +32,15 @@ export interface Caught<T> extends AsyncIterableIterator<T, unknown, void> {
   return(value?: unknown): Promise<IteratorResult<T, unknown>>;
 }
 
+/** Gives a finished iterator result with value. */
 const end = (value?: unknown): IteratorResult<any, unknown> => ({
   done: true,
   value,
 });
 
-// HE-018 and HE-01A rule out a plain async generator here.
+/**
+ * Reads a source as an async iterator that hands its failure to onError and then finishes.
+ * HE-018 and HE-01A rule out a plain async generator here. */
 export function catching<T>(
   source: Source<T>,
   onError: (error: unknown) => void | PromiseLike<void>,
@@ -52,6 +56,7 @@ export function catching<T>(
     next: any,
     finished = false;
 
+  /** Reads one result from the source, and settles its value or catches its failure. */
   const step = async () => {
     if (finished) return end();
     let answered: any, done: any;
@@ -75,6 +80,7 @@ export function catching<T>(
     }
   };
 
+  /** Serves the queued `next()` calls one at a time, in order. */
   const pump = () => {
     const request = pending[0];
     step()
@@ -106,6 +112,7 @@ export function catching<T>(
   };
 }
 
+/** Tells if a value is a `Val` that select made. */
 export function isVal(value: unknown): value is Val<unknown> {
   return Object(value) === value && Object.hasOwn(value as object, VAL);
 }
@@ -143,11 +150,14 @@ export type Spread<S> = S extends readonly unknown[]
       [K in ValKeys<S> as `${K}Done`]: boolean;
     };
 
+/** Caches the spread fields of each `Val`, so a spread array keeps item identity. */
 const fields = new WeakMap<object, object>();
 
+/** Gives the rejection reason of a `Val`, or null. */
 const errorOf = (val: Val<unknown>) =>
   val.status === "rejected" ? val.reason : null;
 
+/** Gives the frozen `{ value, loading, error, done }` of a `Val`. */
 const fieldsOf = (val: Val<unknown>) => {
   let entry = fields.get(val);
   if (!entry)
@@ -163,6 +173,7 @@ const fieldsOf = (val: Val<unknown>) => {
   return entry;
 };
 
+/** Flattens the `Val` entries of a snapshot into plain values and `Loading`, `Error` and `Done` fields. */
 export function spread<S>(snapshot: S): Spread<S> {
   if (typeof snapshot !== "object" || snapshot === null)
     return snapshot as Spread<S>;
@@ -185,10 +196,13 @@ export function spread<S>(snapshot: S): Spread<S> {
 
 type Entry<T> = T extends readonly (infer V)[] ? V : T[keyof T];
 
+/** The default map of applyOps, which keeps the value. */
 const same = (value: unknown) => value;
+/** Reads an own property, and ignores inherited ones. */
 const own = (target: any, key: PropertyKey) =>
   Object.hasOwn(target, key) ? target[key] : undefined;
 
+/** Sets a property, and defines `__proto__` as data so it never sets the prototype. */
 const store = (target: any, key: PropertyKey, value: unknown) => {
   if (key === "__proto__")
     Object.defineProperty(target, key, {
@@ -200,22 +214,31 @@ const store = (target: any, key: PropertyKey, value: unknown) => {
   else target[key] = value;
 };
 
+// An array fold links each fresh cell to the cell it took over in prev, and gives a leaving cell the output it had.
 type Cell = {
   entry?: unknown;
   value?: unknown;
-  prev?: unknown;
+  prev?: any;
   fresh?: boolean;
+  taken?: boolean;
 };
 
+/** Makes a cell for a value that lands, with what it replaces. */
 const incoming = (value: unknown, prev: unknown): Cell => ({
   fresh: true,
   value,
   prev,
 });
-const inherited = (cell?: Cell) => (cell?.fresh ? cell.prev : cell?.entry);
-// A symbol throws a TypeError here, as HE-04F needs.
+const MINUS_ZERO = Symbol();
+/** Gives a Map key that tells -0 from 0, as `Object.is` does. */
+// Stryker disable next-line UnaryOperator: a symbol key for 0 instead of -0 tells them apart too
+const keyOf = (value: unknown) => (Object.is(value, -0) ? MINUS_ZERO : value);
+/**
+ * Tells if a key is a valid array index.
+ * A symbol throws a TypeError here, as HE-04F needs. */
 const isIndex = (key: any) => key >>> 0 === key && key !== 2 ** 32 - 1;
 
+/** Throws a `TypeError` for an operation that the target kind cannot replay. */
 const checkFit = (op: Op, array: boolean) => {
   const fits = array
     ? op.op === "splice" ||
@@ -226,32 +249,68 @@ const checkFit = (op: Op, array: boolean) => {
     throw new TypeError(`applyOps cannot replay ${op.op} on this target`);
 };
 
+/**
+ * Replays ops onto cells first, so each value that lands takes over a leaving cell by value (HE-04H) or by position.
+ * Then reuses the entry of a value that comes back, and maps each other value one time. */
 const foldArray = (target: any[], ops: readonly Op[], map: any) => {
-  const cells: Cell[] = target.map(entry => ({ entry }));
+  const cells: Cell[] = target.map(entry => ({ entry })),
+    left = new Map<unknown, Cell[]>();
+  /** Gives a cell that leaves its index the output it had, which for a fresh cell is its own value. */
+  const leave = (cell: Cell | undefined, value: unknown) => {
+    if (cell) cell.value = value;
+    return cell;
+  };
+  /** Marks a cell as taken over by a value that lands. */
+  const take = (cell?: Cell) => {
+    if (cell) cell.taken = true;
+    return cell;
+  };
+  /** Takes the first leaving cell with this value, in leaving order. */
+  const match = (value: unknown) => {
+    const list = left.get(keyOf(value));
+    for (let cell: Cell | undefined; (cell = list?.shift()); )
+      if (!cell.taken) return take(cell);
+  };
   for (const op of ops) {
     checkFit(op, true);
     if (op.op === "set")
       cells[op.key as number] = incoming(
         op.value,
-        inherited(cells[op.key as number]),
+        take(leave(cells[op.key as number], op.prev)),
       );
     else if (op.op === "move") relocate(cells, op.order);
     else {
       const { start, removed, added } = op as Extract<Op, { op: "splice" }>,
-        count = removed.length;
-      const items = added.map((value, index) =>
-        incoming(
+        count = removed.length,
+        gone = cells.slice(start, start + count);
+      gone.forEach((cell, index) => {
+        if (!leave(cell, removed[index])) return;
+        const key = keyOf(cell.value);
+        left.get(key)?.push(cell) ?? left.set(key, [cell]);
+      });
+      // Values claim by value first, so a position gives only a cell that no value takes.
+      const found = added.map(match);
+      const items = added.map((value, index) => {
+        const at = gone[index];
+        return incoming(
           value,
-          index < count ? inherited(cells[start + index]) : undefined,
-        ),
-      );
+          found[index] ?? (at?.taken ? undefined : take(at)),
+        );
+      });
       replace(cells, start, count, items);
     }
   }
+  /** Gives the original cell at the start of a chain of fresh cells. */
+  const origin = (cell: Cell): Cell | undefined =>
+    cell?.fresh ? origin(cell.prev) : cell;
   // Relocating a hole makes it an undefined cell, which reads as an undefined entry (HE-04G).
-  const items = cells.map(cell =>
-    cell?.fresh ? map(cell.value, cell.prev) : cell?.entry,
-  );
+  const items = cells.map(cell => {
+    if (!cell?.fresh) return cell?.entry;
+    const from = origin(cell.prev);
+    return from && Object.is(from.value, cell.value)
+      ? from.entry
+      : map(cell.value, from?.entry);
+  });
   items.forEach((item, index) => {
     if (index >= target.length || !Object.is(target[index], item))
       target[index] = item;
@@ -260,6 +319,7 @@ const foldArray = (target: any[], ops: readonly Op[], map: any) => {
   return target;
 };
 
+/** Replays ops onto an object, maps each key that ends set one time, and keeps the final key order. */
 const foldObject = (target: any, ops: readonly Op[], map: any) => {
   const sets = new Map<PropertyKey, Cell>(),
     gone = new Set<PropertyKey>();
@@ -288,6 +348,7 @@ const foldObject = (target: any, ops: readonly Op[], map: any) => {
   return target;
 };
 
+/** Replays select operations onto a mirror, and derives each entry that lands with map. */
 export function applyOps<T extends object>(
   target: T,
   ops: readonly Op[],

@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM"],
+    "types": [],
+    "strict": true,
+    "rewriteRelativeImportExtensions": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@xazzzi/gg",
+    "paths": {
+      "@xazzzi/gg": ["../src/index.ts"],
+      "@xazzzi/gg/jsx-runtime": ["../src/jsx.ts"]
+    },
+    "rootDir": "..",
+    "outDir": "build"
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,257 @@
+:root {
+  --bg: #fff;
+  --fg: #1f1f1f;
+  --muted: #6b6b6b;
+  --line: #e2e2e2;
+  --hover: #f2f5fa;
+  --active: #dbe7fb;
+  --green: #1a7f37;
+  --amber: #9a6700;
+  --red: #c4314b;
+  --blue: #1a5fb4;
+  font:
+    12px system-ui,
+    sans-serif;
+}
+body.dark {
+  --bg: #202124;
+  --fg: #e3e3e3;
+  --muted: #9aa0a6;
+  --line: #3c4043;
+  --hover: #2a2d31;
+  --active: #263f62;
+  --green: #5cc27a;
+  --amber: #e0b04a;
+  --red: #f28b82;
+  --blue: #8ab4f8;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+body {
+  display: flex;
+  flex-direction: column;
+}
+header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+input,
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+button {
+  cursor: pointer;
+}
+header input {
+  width: 220px;
+}
+#status {
+  color: var(--muted);
+  margin-left: auto;
+}
+main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+nav {
+  width: 340px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+}
+nav h3 {
+  margin: 0;
+  padding: 6px 8px 2px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.row:hover {
+  background: var(--hover);
+}
+.row.selected {
+  background: var(--active);
+}
+.row.child {
+  padding-left: 24px;
+}
+/* Right to left puts the ellipsis at the start, so the file name and line stay visible. */
+.row .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  flex: 1;
+}
+.id {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+}
+.count {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+}
+.tabs {
+  display: flex;
+}
+.tab {
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+}
+.tab.active {
+  border-bottom-color: var(--green);
+}
+.filters {
+  display: flex;
+  gap: 6px;
+  margin: 2px 0 4px;
+}
+.twisty {
+  display: inline-block;
+  width: 12px;
+  color: var(--muted);
+}
+.name.each,
+.name.mount {
+  color: var(--muted);
+}
+.pill {
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 10px;
+  border: 1px solid currentColor;
+}
+.open,
+.started,
+.running,
+.live,
+.fulfilled {
+  color: var(--green);
+}
+.waiting,
+.pending {
+  color: var(--amber);
+}
+.failed,
+.rejected {
+  color: var(--red);
+}
+.closed,
+.ended,
+.static,
+.plain {
+  color: var(--muted);
+}
+#detail {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+}
+#detail h2 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+#detail h4 {
+  margin: 14px 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 0;
+}
+dt {
+  color: var(--muted);
+}
+dd {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: ui-monospace, monospace;
+}
+th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: normal;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+td,
+th {
+  padding: 2px 8px 2px 0;
+  vertical-align: top;
+}
+td.text {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+tr + tr td {
+  border-top: 1px solid var(--line);
+}
+.log {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  padding: 0 6px;
+}
+a {
+  color: var(--blue);
+  cursor: pointer;
+}
+pre {
+  margin: 4px 0;
+  color: var(--muted);
+}
+.source {
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+}
+summary {
+  cursor: pointer;
+  font-family: ui-monospace, monospace;
+}
+.empty {
+  color: var(--muted);
+  padding: 12px;
+}
+.name {
+  font-weight: 600;
+}
+.row .name + .label {
+  color: var(--muted);
+}

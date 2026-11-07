@@ -1,3 +1,4 @@
+import { type Emit, register } from "./devtools.ts";
 import { isThenable, noop } from "./source.ts";
 
 export type FirstReceive = "first" | "unread" | "latest" | "next";
@@ -23,6 +24,7 @@ const FIRST_RECEIVE = ["first", "unread", "latest", "next"];
 const THEN_RECEIVE = ["every", "latest", "unread"];
 const STOP_STYLE = ["drain", "stop"];
 
+/** The error that producers and `signal` get after a channel closes or throws. */
 export class StopError extends Error {
   readonly name = "StopError" as const;
   readonly reason: unknown;
@@ -33,21 +35,29 @@ export class StopError extends Error {
     Object.defineProperty(this, STOP_BRAND, { value: true });
   }
 
+  /** Matches stop errors by brand, so copies from other realms or bundles match too. */
   static [Symbol.hasInstance](value: unknown) {
     return (value as any)?.[STOP_BRAND] === true;
   }
 }
 
+/** Resolves when the channel has an active consumer, and rejects when it ends first. */
 export let attached: (channel: Channel<any, any>) => Promise<void>;
+/** Tells if a value is a real `Channel`, by its private field. */
 export let isChannel: (value: unknown) => boolean;
+/** Tells if the channel ended with `throw`. */
+export let failed: (channel: Channel<any, any>) => boolean;
 
+/** An async stream with many producers and consumers, whose options set what each consumer reads. */
 export class Channel<T, TReturn = undefined>
   implements AsyncIterable<T, TReturn | undefined>, Disposable
 {
   #first: FirstReceive;
   #then: ThenReceive;
   #stops: boolean;
-  #control = new AbortController();
+  #control?: AbortController; // Made on the first read of signal
+  #stop?: StopError;
+  #ended = false;
   #tail: Cell<T> = { n: 1 };
   #anchor!: Cell<T>; // The head for "unread", value 1 for "first", and read only once set
   #newest?: Cell<T>;
@@ -60,19 +70,29 @@ export class Channel<T, TReturn = undefined>
   #consumer?: PromiseWithResolvers<void>;
   #failed?: boolean;
   #result: unknown;
-
-  readonly signal = this.#control.signal;
+  #emit?: Emit;
 
   static {
     attached = channel =>
-      channel.signal.aborted
-        ? Promise.reject(channel.signal.reason)
+      channel.#ended
+        ? Promise.reject(channel.#stopError())
         : channel.#active
           ? Promise.resolve()
           : (channel.#consumer ??= Promise.withResolvers()).promise;
     isChannel = value => Object(value) === value && #tail in (value as object);
+    failed = channel => !!channel.#failed;
   }
 
+  /** Aborts when the channel is terminal, with the stop error as its reason. */
+  get signal(): AbortSignal {
+    if (!this.#control) {
+      this.#control = new AbortController();
+      if (this.#ended) this.#control.abort(this.#stopError());
+    }
+    return this.#control.signal;
+  }
+
+  /** Checks the options, and registers the channel with devtools. */
   constructor({
     firstReceive = "unread",
     thenReceive = "every",
@@ -93,12 +113,18 @@ export class Channel<T, TReturn = undefined>
     this.#stops = stopStyle === "stop";
     if (firstReceive === "first" || firstReceive === "unread")
       this.#anchor = this.#tail;
+    this.#emit = register("channel", this, {
+      firstReceive,
+      thenReceive,
+      stopStyle,
+    });
   }
 
+  /** Appends a value to the log, and wakes blocked consumers. */
   send(value: Sendable<T>): void {
-    if (this.signal.aborted) throw this.signal.reason;
+    if (this.#ended) throw this.#stopError();
     const thenable = isThenable(value);
-    if (this.signal.aborted) throw this.signal.reason; // A then getter can close the channel
+    if (this.#ended) throw this.#stopError(); // A then getter can close the channel
     if (thenable) throw new TypeError("Channel does not accept thenables");
     const cell: Cell<T> = this.#tail;
     this.#tail = { n: cell.n + 1 };
@@ -109,8 +135,10 @@ export class Channel<T, TReturn = undefined>
     this.#newest = this.#keepsNewest() ? cell : undefined;
     this.#wake?.resolve();
     this.#wake = undefined;
+    this.#emit?.("send", value, cell.n);
   }
 
+  /** Sends a value, and resolves when a consumer reads it or a later value. */
   asend(value: Sendable<T>): Promise<void> {
     const ack: Ack = { ...Promise.withResolvers<void>(), n: 0 };
     try {
@@ -118,29 +146,32 @@ export class Channel<T, TReturn = undefined>
       ack.n = this.#tail.n - 1; // Read after send, because a then getter can send too
       this.#lastAck = this.#lastAck.next = ack;
     } catch (error) {
-      if (!this.signal.aborted || error !== this.signal.reason)
-        return Promise.reject(error); // CH-013 stays loud when ignored
+      if (!this.#ended || error !== this.#stop) return Promise.reject(error); // CH-013 stays loud when ignored
       ack.reject(error);
     }
     ack.promise.catch(noop); // CH-01C, and an awaiting producer still sees the rejection
     return ack.promise;
   }
 
+  /** Ends the channel, so consumers finish with value after the values that stopStyle keeps. */
   close(value?: Sendable<TReturn>): void {
     // The second check is CH-061, because a then getter can close the channel.
-    if (!this.signal.aborted && isThenable(value) && !this.signal.aborted)
+    if (!this.#ended && isThenable(value) && !this.#ended)
       throw new TypeError("Channel does not accept thenables");
     this.#end(false, value);
   }
 
+  /** Ends the channel, so consumers reject with value after the values that stopStyle keeps. */
   throw(value: unknown): void {
     this.#end(true, value);
   }
 
+  /** Closes the channel with no value. */
   [Symbol.dispose](): void {
     this.close();
   }
 
+  /** Gives a new consumer, which attaches at its first `next()`. */
   async *[Symbol.asyncIterator](): AsyncGenerator<
     T,
     TReturn | undefined,
@@ -151,7 +182,7 @@ export class Channel<T, TReturn = undefined>
       for (;;) {
         await null; // A read always happens in a microtask
         while (!this.#readable(reader)) {
-          if (this.signal.aborted) {
+          if (this.#ended) {
             if (this.#failed) throw this.#result;
             return this.#result as TReturn;
           }
@@ -165,6 +196,7 @@ export class Channel<T, TReturn = undefined>
               : this.#tail;
       }
     } finally {
+      this.#emit?.("detach", reader);
       this.#active--;
       if (reader.placed) {
         this.#placed--;
@@ -174,6 +206,7 @@ export class Channel<T, TReturn = undefined>
     }
   }
 
+  /** Counts a new consumer, and starts it where its first receive mode says. */
   #attach(): Reader<T> {
     this.#active++;
     this.#consumer?.resolve();
@@ -188,22 +221,26 @@ export class Channel<T, TReturn = undefined>
     // Stryker disable next-line ArithmeticOperator: pos only matters after a read, as a reader with no read ends only under "stop", which drops the newest
     const reader: Reader<T> = { at, pos: at ? at.n - 1 : 0 };
     if (at) this.#place(reader);
+    this.#emit?.("attach", reader);
     return reader;
   }
 
+  /** Marks a reader as one that follows the newest value. */
   #place(reader: Reader<T>) {
     reader.placed = true;
     this.#placed++;
     if (reader.pos < this.#tail.n - 1) this.#behind++;
   }
 
+  /** Tells if the reader has a value to take now. */
   #readable(reader: Reader<T>) {
     return (
-      !(this.#stops && this.signal.aborted) &&
+      !(this.#stops && this.#ended) &&
       (reader.at ?? this.#anchor).n < this.#tail.n
     );
   }
 
+  /** Reads the next value for the reader, moves the head, and resolves acks up to it. */
   #take(reader: Reader<T>) {
     const cell = reader.at ?? this.#anchor;
     const { n, next, value } = cell;
@@ -220,10 +257,11 @@ export class Channel<T, TReturn = undefined>
       this.#acked = ack;
       ack = ack.next;
     }
+    this.#emit?.("read", value, n, reader);
     return value as T;
   }
 
-  // CH-050 keeps the newest value for a latest holder, and for a later "then newest" read.
+  /** Tells if the newest value must stay, for a latest holder or a later "then newest" read (CH-050). */
   #keepsNewest() {
     const first = this.#first;
     if (first === "latest") return true;
@@ -235,18 +273,29 @@ export class Channel<T, TReturn = undefined>
     );
   }
 
+  /** Drops the newest value when no reader can need it. */
   #prune() {
     if (!this.#keepsNewest()) this.#newest = undefined;
   }
 
+  /**
+   * Gives the one stop error of the channel, and makes it on first use.
+   * Most channels end with no producer and no signal reader, so they never pay for its stack. */
+  #stopError() {
+    return (this.#stop ??= new StopError(
+      this.#failed ? this.#result : undefined,
+    ));
+  }
+
+  /** Makes the channel terminal one time, rejects pending acks, and aborts the signal. */
   #end(failed: boolean, result: unknown) {
-    if (this.signal.aborted) return;
-    const stop = new StopError(failed ? result : undefined);
+    if (this.#ended) return;
     this.#failed = failed;
     this.#result = result;
-    for (let ack = this.#acked.next; ack; ack = ack.next) ack.reject(stop);
+    for (let ack = this.#acked.next; ack; ack = ack.next)
+      ack.reject(this.#stopError());
     this.#acked = this.#lastAck;
-    this.#consumer?.reject(stop);
+    this.#consumer?.reject(this.#stopError());
     this.#consumer = undefined;
     this.#wake?.resolve();
     this.#wake = undefined;
@@ -254,6 +303,8 @@ export class Channel<T, TReturn = undefined>
       this.#newest = undefined;
       this.#anchor = this.#tail;
     }
-    this.#control.abort(stop);
+    this.#emit?.("end", failed, result);
+    this.#ended = true;
+    this.#control?.abort(this.#stopError());
   }
 }

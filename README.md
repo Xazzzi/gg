@@ -3,8 +3,11 @@
 Tiny zero-dependency concurrent primitives for JavaScript and TypeScript.
 `Channel` moves values, `feed` fills channels from sources, and `select` combines sources into one state.
 
-Requires Node 22 or later, and is ESM only.
+9kB gzipped, tree-shakeable.
+Features 100% coverage, including Stryker mutation tests.
+Requires Node 22 or later. ESM only.
 
+WARNING: Experimental project coded by Opus 5.5. No warranty, use at own risk.
 
 ```sh
 npm install @xazzzi/gg
@@ -73,6 +76,7 @@ for await (const { title, users } of state) render(title, users);
 
 Without `unwrap`, each source appears as a `Val` with `status`, `value`, `reason` and `done`.
 `onChanges` receives each change as an ordered operation, so arrays can be replayed without diffing.
+`changes(state)` gives a reader of those operations at any time, and each read takes all of them since the last read.
 `sort` and `reverse` move slots without restarting sources, and `sort` compares sources.
 `sortOutputs` moves slots the same way, and compares outputs once.
 
@@ -90,8 +94,51 @@ for await (const { users } of state) if (users?.length) break;
 - `catching(source, onError)` wraps a source so a failure ends it quietly.
 - `spread` turns `Val` fields into `kLoading`, `kError` and `kDone`, for `mapSnapshot: spread`.
 - `isVal(value)` tests for a `Val`, across copies of the library.
-- `applyOps(target, ops, map?, { eager })` replays `onChanges` onto a mirror, and `map` derives each entry.
-  It folds a report first, so `map` runs only for entries that land, and `eager` maps every step.
+- `applyOps(target, ops, map?, { eager })` replays operations onto a mirror, and `map` derives each entry.
+  An item that leaves and comes back in one call keeps its entry.
+  It folds a report or a read first, so `map` runs only for entries that land, and `eager` maps every step.
+
+## JSX
+
+The JSX runtime builds DOM nodes from JSX, with no virtual DOM.
+Set `"jsx": "react-jsx"` and `"jsxImportSource": "@xazzzi/gg"`.
+A bundler drops it from code that does not use it.
+
+A component is an async generator function, and each use gives one instance.
+The instance yields its node, then changes the nodes it owns.
+It yields again only to replace its node, or to wake its host with the same node.
+A promise or an async iterable is a child, so a channel of strings is live text.
+
+```tsx
+import { type Channel, each, mount, select } from "@xazzzi/gg";
+
+async function* Row({ todo }: { todo: Channel<Todo> }) {
+  const li = (<li />) as HTMLLIElement;
+  yield li;
+  for await (const { title } of todo) li.textContent = title;
+}
+
+const todos = select([] as Todo[], {
+  autoStart: true,
+  autoClose: false,
+  nonYielding: true,
+});
+mount(
+  document.body,
+  <ul>
+    {each(todos, todo => (
+      <Row todo={todo} />
+    ))}
+  </ul>,
+);
+```
+
+`each` reads the changes of `todos` with `changes`, and replays them onto its rows.
+It gives each item a channel, sends it each new value, and closes it when the item leaves.
+A row that finishes renders again with the next value, so a row can also read its item once.
+So a row updates itself, and the list moves only nodes that change place.
+State needs no UI code, and a busy list renders all changes since its last read in one pass.
+[`examples/todomvc`](examples/todomvc) renders with it.
 
 ## Specification
 

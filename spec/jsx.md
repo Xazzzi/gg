@@ -1,0 +1,249 @@
+# JSX
+
+This document uses `Channel` from `channel.md`, `select`, `changes`, `State` and `Val` from `select.md`, and `applyOps` from `helpers.md`.
+The key words MUST, MUST NOT, SHOULD and MAY are normative.
+
+## Purpose
+
+The JSX runtime builds DOM nodes from JSX, with no virtual DOM and no diff.
+A component is a function.
+An async generator function gives a component instance for each use.
+The instance yields its node, and then changes the nodes that it owns.
+It yields again only when its host must know about it.
+`select` drives the instances, and `each` replays lists from `changes` with `applyOps`.
+So components compose with the same primitives as app state.
+
+The package root exports the runtime, and the `@xazzzi/gg/jsx-runtime` entry exports it for the JSX transform.
+A bundler drops it from code that does not use it.
+Set `"jsx": "react-jsx"` and `"jsxImportSource": "@xazzzi/gg"` to use it.
+
+## Public API
+
+```ts
+export type Static =
+  | Node
+  | string
+  | number
+  | bigint
+  | boolean
+  | null
+  | undefined
+  | readonly Static[];
+export type Dynamic = PromiseLike<Static> | AsyncIterable<Child>;
+export type Child = Static | Dynamic | readonly Child[];
+export type Props = {
+  [name: `on${string}`]: ((event: any) => void) | undefined;
+} & { [name: string]: unknown; children?: Child };
+
+export function jsx(
+  type: string | ((props: any) => Child),
+  props: Props,
+  key?: unknown,
+): Child;
+export const jsxs: typeof jsx;
+export const jsxDEV: typeof jsx;
+export function Fragment(props: { children?: Child }): DocumentFragment;
+export function mount(parent: Element, ...children: Child[]): void;
+export type Item<T> = AsyncIterable<T> & {
+  readonly value: T;
+  readonly signal: AbortSignal;
+};
+export function each<T>(
+  state: State<readonly unknown[], any, T[]>,
+  render: (item: Item<T>) => Child,
+): AsyncGenerator<Node[], void, void>;
+
+export declare namespace JSX {
+  type Element = Child;
+  interface IntrinsicElements {
+    [tag: string]: Props;
+  }
+  interface ElementChildrenAttribute {
+    children: unknown;
+  }
+}
+```
+
+A JSX expression has the type `Child`.
+An async iterable child can produce any `Child` in its type, so a component yields JSX with no cast.
+A dynamic value in an output still fails at runtime (JX-027, JX-028).
+Cast an element to its DOM type, such as `<input /> as HTMLInputElement`.
+The runtime uses the global `document` when it creates nodes.
+
+## Terms
+
+- **Dynamic child**: a value with a callable `then`, or with a callable `Symbol.asyncIterator`.
+- **Static child**: any other child.
+- **Host**: an element whose children the runtime owns.
+- **Entry**: one part of a host, with the nodes that the part has now.
+  A host keeps its entries in order.
+- **Output**: the last value that the source of a dynamic entry produced.
+- **Place**: put the nodes of all entries into the host in order, and remove all other children of the host.
+- **Text value**: a string, a number or a bigint.
+
+## Elements
+
+- JX-001: `jsx` with a string `type` MUST create an element with `document.createElement(type)`, and return it.
+- JX-002: For each own enumerable key of `props` other than `children`, `jsx` MUST apply the value in key order.
+  A function value at a key that starts with `on` MUST become a listener, with `addEventListener`.
+  The event type is the rest of the key in lower case.
+  `null`, `undefined` and `false` MUST set nothing.
+  `true` MUST set the attribute to `""`.
+  Other values MUST set the attribute to `String(value)`.
+- JX-003: `jsx` MUST mount `props.children` into the element, as `mount` does.
+- JX-004: `jsx` MUST ignore `key`.
+- JX-005: `jsx` with a function `type` MUST return `type(props)` unchanged.
+  So a call of an async generator function gives one instance for each use.
+- JX-006: `jsxs` and `jsxDEV` MUST be `jsx`.
+- JX-007: `Fragment` MUST return a new `DocumentFragment` with the nodes of its children.
+  A dynamic child in a `Fragment` MUST throw a `TypeError`.
+
+## Children
+
+The runtime converts a child to nodes by these rules, in order.
+
+- JX-010: An array MUST convert each item in order, at any depth.
+- JX-011: A dynamic child MUST become an entry, if the place permits it.
+  Otherwise it MUST throw a `TypeError`.
+- JX-012: A value with a `nodeType` of type number is a node.
+  A `DocumentFragment` MUST give its child nodes at the time of the conversion.
+  Another node MUST give itself.
+- JX-013: A text value MUST give a new `Text` node with the data `String(value)`.
+- JX-014: `null`, `undefined` and booleans MUST give no node.
+- JX-015: Any other value MUST throw a `TypeError`.
+- JX-016: A conversion that throws MUST change nothing.
+
+## Mount
+
+- JX-020: `mount` MUST make `parent` a host for `children`.
+  Each dynamic child is one entry.
+  The static nodes between two dynamic children are one entry.
+- JX-021: `mount` MUST place the static nodes synchronously.
+- JX-022: `mount` MUST drive the dynamic children with one `select`, with `autoStart`, `nonYielding` and `autoClose`.
+  So the children start in a microtask (SE-031), and the host does no more work when they all finish (SE-070).
+  `mount` does no `select` call if there is no dynamic child.
+- JX-023: The runtime MUST place after each report of that `select`.
+- JX-024: A pending state MUST keep the nodes of the entry.
+- JX-025: An output that is the `Object.is` same as the previous output MUST keep the nodes.
+  So a component yields its node again to wake a host with no change to the DOM.
+- JX-026: A text value output MUST change the `data` of the entry's `Text` node, if the runtime made that node for the previous output.
+- JX-027: Another output MUST replace the nodes of the entry with the conversion of the output.
+  A dynamic child in an output is not permitted (JX-011).
+- JX-028: A rejected state MUST call `globalThis.reportError` with the reason.
+  A conversion error MUST call `globalThis.reportError` with that error.
+  The entry MUST keep its nodes.
+  The other entries continue.
+- JX-029: To place, the runtime MUST NOT move a node that stays in order.
+  It MUST move only the nodes outside one longest run of nodes that keep their order, so a swap moves two nodes.
+  It MUST remove a node that leaves the host, and MUST NOT move the nodes after it.
+  A node that two entries give MUST land at its last place.
+
+## Each
+
+`each` is a dynamic child that renders one entry for each item of a `select` with an array shape.
+It reads the changes of that `select`, and gives each new value of an item to the `Item` of that item.
+An `Item` has the current value, and makes a channel only when code iterates it.
+So a component instance updates its own nodes, and the host moves only nodes that change place.
+A component instance that finishes renders again with the next value of its item, so a component can read its item once.
+`each` owns only the nodes of its entries, so the other children of its host keep their nodes.
+
+- JX-030: `each` MUST throw a `TypeError` synchronously if `state` is not a `select` proxy with an array shape, or if `render` is not a function.
+  It MUST return an async generator, and MUST NOT call `changes` before the first `next()`.
+- JX-031: The first `next()` MUST call `changes(state)`, make one entry for each item of `outputs`, and yield the nodes of all entries in order.
+- JX-032: For a new item, `each` MUST create an `Item` with the value, and call `render` with it.
+  The result of `render` is the child of the entry.
+  It MUST be a static child, or one dynamic child.
+- JX-033: `each` MUST replay each read onto its mirror of entries with `applyOps`.
+  So an item that leaves and comes back in one read keeps its entry, its `Item` and its instance (HE-04H).
+- JX-034: For an item that keeps its entry, `each` MUST give the new value to the `Item` of that entry.
+  The `Item` MUST set `value`, and then send the value to its channel, if it has one.
+  It MUST NOT call `render`, unless JX-03C applies.
+- JX-035: For an item that leaves the mirror, `each` MUST end its `Item` and stop the drive of its child.
+  To end an `Item`, `each` MUST close its channel if it has one, and abort its `signal`.
+- JX-036: `each` MUST drive the dynamic children of its entries with one `select`, with `autoStart`, `nonYielding` and no `autoClose`.
+  JX-024 to JX-028 apply.
+- JX-037: When the nodes of its entries changed after its last yield, `each` MUST yield a new array of the nodes of all entries in order.
+  A read with only `set` operations changes no node of `each` itself.
+  `each` MUST NOT yield while no node changed.
+  So a host that is busy gets one output for all changes since its last pull.
+- JX-038: `each` MUST NOT change a node outside its entries.
+  JX-029 keeps the order of the other children of its host.
+- JX-039: When the reader finishes, `each` MUST end the `Item` of each entry, stop its drive and finish.
+  The host keeps the last nodes of `each` (SE-024).
+  If the reader rejects, `each` MUST do the same, and then reject with the unchanged error.
+- JX-03A: An error from `render` or from `applyOps` MUST end `each` as a rejection of the reader does.
+  `each` MUST finish its reader first.
+- JX-03B: `return()` on the generator MUST finish the reader, end the `Item` of each entry and stop the drive.
+  A pending `next()` delays `return()` (JX-041).
+- JX-03C: When the dynamic child of an entry finishes and the item stays, `each` MUST render the item again.
+  It MUST end the `Item` of the entry, and call `render` with a new `Item` as JX-032 does.
+  It MUST do so at once if it gave a value to the `Item` after the last `render`, and at the next value of the item otherwise.
+  The entry keeps its nodes until the new child gives an output (JX-024).
+  A rejected child also finishes.
+- JX-03D: `value` MUST give the last value that `each` gave the `Item`.
+  It keeps that value after the `Item` ends.
+- JX-03E: `signal` MUST give one `AbortSignal`, which aborts with no reason when the `Item` ends.
+- JX-03F: The first iteration of an `Item` MUST create a `Channel` with `firstReceive: "latest"` and `thenReceive: "latest"`, send `value`, and close it if the `Item` ended.
+  Each iteration MUST give a reader of that one channel.
+  So a component that never iterates its `Item` costs no channel.
+
+## Limits
+
+- JX-040: The runtime does not end a dynamic child when its nodes leave the host.
+  A dynamic child ends when its source finishes.
+  So close the channels that a component reads to end the component, as `each` does.
+  In `each`, a child that finishes renders again (JX-03C).
+- JX-041: An async generator queues `return()` behind a pending `next()`.
+  So a component that waits on an open channel ends only when that channel closes, or at its next `yield`.
+- JX-042: A node in the entries of two hosts, or in two entries of one host, has no defined position.
+- JX-043: The children of a host belong to the runtime.
+  A place removes nodes that other code adds.
+  Code can change the attributes and the content of the nodes in an entry.
+
+## Example
+
+```tsx
+import { Channel } from "@xazzzi/gg";
+
+async function* Counter({ count }: { count: Channel<number> }) {
+  const value = (<b>0</b>) as HTMLElement;
+  yield <p>Clicks: {value}</p>;
+  for await (const n of count) value.textContent = `${n}`;
+}
+
+const count = new Channel<number>({
+  firstReceive: "latest",
+  thenReceive: "latest",
+});
+mount(document.body, <Counter count={count} />);
+count.send(1);
+```
+
+A list beside static siblings:
+
+```tsx
+import { type Channel, select } from "@xazzzi/gg";
+
+async function* Item({ name }: { name: Channel<string> }) {
+  const li = (<li />) as HTMLElement;
+  yield li;
+  for await (const value of name) li.textContent = value;
+}
+
+const names = select(["ann", "bob"], {
+  autoStart: true,
+  autoClose: false,
+  nonYielding: true,
+});
+mount(
+  document.body,
+  <ul>
+    <li>first</li>
+    {each(names, name => (
+      <Item name={name} />
+    ))}
+    <li>last</li>
+  </ul>,
+);
+names.reverse(); // Moves two nodes, and keeps "first" and "last" in place
+```

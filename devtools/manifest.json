@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "gg devtools",
+  "version": "0.1.0",
+  "description": "Inspect gg channels, feeds and selects",
+  "host_permissions": ["<all_urls>"],
+  "devtools_page": "devtools.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["build/devtools/src/hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["build/devtools/src/relay.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "background": {
+    "service_worker": "build/devtools/src/background.js"
+  }
+}

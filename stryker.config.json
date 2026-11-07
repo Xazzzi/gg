@@ -7,5 +7,6 @@
     "command": "node --expose-gc --test-timeout=250 --test-reporter=./tests/bail-reporter.ts tests/index.test.ts"
   },
   "coverageAnalysis": "all",
+  "ignorePatterns": ["/js-framework-benchmark"],
   "tsconfigFile": "tsconfig.stryker-none.json"
 }

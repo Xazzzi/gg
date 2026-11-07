@@ -1071,6 +1071,13 @@ test("HE-04G lazy treats a hole as an undefined entry, as eager does", () => {
       [{ op: "splice", start: 0, removed: [1], added: [] }],
     ],
     [[], [set(2, 1), { op: "splice", start: 0, removed: [], added: ["a"] }]],
+    [
+      sparse(2, { 1: 1 }),
+      [
+        { op: "move", order: [1, 0] },
+        { op: "splice", start: 1, removed: [undefined], added: ["a"] },
+      ],
+    ],
   ];
   for (const [target, ops] of cases)
     assert.deepEqual(replay(target, ops), replay(target, ops, eager));
@@ -1126,4 +1133,67 @@ test("HE-04A a __proto__ key stays an own entry under lazy", () => {
   const target: any = applyOps({} as any, [set("__proto__", 1)], undefined);
   assert.equal(Object.getPrototypeOf(target), Object.prototype);
   assert.ok(Object.hasOwn(target, "__proto__"));
+});
+
+const splice = (start: number, removed: unknown[], added: unknown[]): Op => ({
+  op: "splice",
+  start,
+  removed,
+  added,
+});
+
+test("HE-04H a splice that keeps values moves their entries, and maps only new values", () => {
+  const seen: unknown[][] = [];
+  const target = applyOps(
+    ["a!", "b!", "c!"],
+    [splice(0, ["a", "b", "c"], ["c", "a", "x"])],
+    tag(seen),
+  );
+  assert.deepEqual(target, ["c!", "a!", "x!"]);
+  assert.deepEqual(seen, [["x", undefined]]);
+});
+
+test("HE-04H equal values take entries in leaving order, and -0 differs from 0", () => {
+  const target = applyOps(
+    ["d1", "d2", "zero", "minus"],
+    [splice(0, ["d", "d", 0, -0], [-0, "d", 0, "d"])],
+    () => assert.fail("map runs"),
+  );
+  assert.deepEqual(target, ["minus", "d1", "zero", "d2"]);
+});
+
+test("HE-04H a value that left and was taken over by position is not taken again", () => {
+  const seen: unknown[][] = [];
+  const target = applyOps(
+    ["a!"],
+    [splice(0, ["a"], ["x"]), splice(1, [], ["a"])],
+    tag(seen),
+  );
+  assert.deepEqual(target, ["x!", "a!"]);
+  assert.deepEqual(seen, [
+    ["x", "a!"],
+    ["a", undefined],
+  ]);
+});
+
+test("HE-04H a value traces back through sets, and reuses an entry with the same output", () => {
+  const seen: unknown[][] = [];
+  const update = (key: number, value: unknown, prev: unknown): Op => ({
+    op: "set",
+    key,
+    value,
+    prev,
+  });
+  const target = applyOps(
+    ["a!", "b!", "c!"],
+    [
+      update(0, "a2", "a"),
+      splice(0, ["a2", "b"], ["b", "a2"]),
+      update(2, "x", "c"),
+      update(2, "c", "x"),
+    ],
+    tag(seen),
+  );
+  assert.deepEqual(target, ["b!", "a2!", "c!"]);
+  assert.deepEqual(seen, [["a2", "a!"]]);
 });

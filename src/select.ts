@@ -1,4 +1,5 @@
-import { attached, Channel, type ChannelOptions } from "./channel.ts";
+import { attached, Channel, type ChannelOptions, failed } from "./channel.ts";
+import { register } from "./devtools.ts";
 import {
   checkOptions,
   isThenable,
@@ -12,6 +13,7 @@ import {
 } from "./source.ts";
 
 export const CHAN: unique symbol = Symbol.for("gg.CHAN") as any;
+declare const OUTPUTS: unique symbol; // Type only, so changes infers the outputs
 
 export type SelectShape = Record<string | symbol, unknown> | readonly unknown[];
 
@@ -86,12 +88,35 @@ type Mutable<T, O> = T extends readonly unknown[]
 
 export type State<T, R, O = Snapshot<T>> = Mutable<T, O> &
   AsyncIterable<R> &
-  Disposable & { [CHAN]: Channel<R> };
+  Disposable & { [CHAN]: Channel<R>; readonly [OUTPUTS]?: O };
+
+export type Changes<O> = Disposable & {
+  readonly outputs: O;
+  next(): Promise<IteratorResult<Op[], undefined>>;
+  return(): Promise<IteratorReturnResult<undefined>>;
+  [Symbol.asyncIterator](): Changes<O>;
+};
+
+/** Maps each select proxy to the function that opens a `changes` reader on it. */
+const openers = new WeakMap<object, () => Changes<unknown>>();
+/** Tells if a value is a select proxy. */
+export const isState = (value: unknown) => openers.has(value as object);
+
+/** Opens a reader that gives the outputs now, then the operations of each report since the last read. */
+export function changes<O>(state: {
+  [CHAN]: Channel<any>;
+  readonly [OUTPUTS]?: O;
+}): Changes<O> {
+  const open = openers.get(state);
+  if (!open) throw new TypeError("changes needs a select proxy");
+  return open() as Changes<O>;
+}
 
 const PLAIN = 0,
   PROMISE = 1,
   ASYNC = 2,
   RAW = 3;
+const KINDS = ["plain", "promise", "async", "raw"];
 const RESERVED: PropertyKey[] = [Symbol.asyncIterator, Symbol.dispose, CHAN];
 const OPTION_TYPES = {
   autoStart: "boolean",
@@ -103,7 +128,9 @@ const OPTION_TYPES = {
   mapSnapshot: "function",
 };
 
-// SE-016 keeps the method detection read, so later steps never read it again.
+/**
+ * Finds the slot kind of a source: a promise, an async iterable, a raw iterator, or a plain value.
+ * SE-016 keeps the method detection read, so later steps never read it again. */
 const detect = (source: any): { kind: number; method?: any } => {
   const then = thenOf(source);
   if (typeof then === "function") return { kind: PROMISE, method: then };
@@ -116,6 +143,7 @@ const detect = (source: any): { kind: number; method?: any } => {
     : { kind: PLAIN };
 };
 
+/** Makes a frozen, branded `Val`. */
 const val = (
   status: Val<unknown>["status"],
   value: unknown,
@@ -128,17 +156,21 @@ const val = (
     }),
   ) as Val<unknown>;
 
+/** Gives the array index of a canonical index string, or undefined. */
 const toIndex = (key: PropertyKey) => {
   if (typeof key !== "string") return undefined;
   const index = Number(key) >>> 0;
   return String(index) === key && index !== 2 ** 32 - 1 ? index : undefined;
 };
 
+/** A proxy trap for operations that a select proxy does not support. */
 const forbid = () => {
   throw new TypeError("Operation is not supported on a select proxy");
 };
 
-// Follows Array.prototype.sort, which sorts undefined last without calling compare.
+/**
+ * Gives the indexes of items in sorted order, for a move operation.
+ * Follows Array.prototype.sort, which sorts undefined last without calling compare. */
 const ranked = (items: unknown[], compare?: (a: any, b: any) => number) =>
   items
     .map((_, index) => index)
@@ -174,10 +206,12 @@ type Slot = {
   due?: boolean; // SE-064 applies in step 5 of this flush
 };
 
+/** Wraps a shape of values and sources in a proxy, and publishes a snapshot or operations when a source settles or code writes. */
 export function select<T extends SelectShape, R = Unwrapped<T>>(
   shape: T,
   options: SelectOptions<Unwrapped<T>, R> & { unwrap: true },
 ): State<T, R, Unwrapped<T>>;
+/** Wraps a shape of values and sources in a proxy, and publishes a snapshot or operations when a source settles or code writes. */
 export function select<T extends SelectShape, R = Snapshot<T>>(
   shape: T,
   options?: SelectOptions<Snapshot<T>, R> & { unwrap?: false },
@@ -208,8 +242,14 @@ export function select(shape: any, options: any = {}): any {
   const target: any = isArray ? Array.from(shape) : { ...shape };
   const array: Slot[] = [];
   const map = new Map<PropertyKey, Slot>();
+  /** Gives a copy of the slots in shape order. */
   const slots = () => (isArray ? [...array] : [...map.values()]);
   let ops: any[] | undefined = onChanges && [];
+  // Reported operations that a reader did not read, from the absolute index base.
+  // Stryker disable next-line ArrayDeclaration: a reader starts after all that the log holds
+  let reported: Op[] = [],
+    base = 0;
+  const readers = new Set<{ at: number; wake: () => void }>();
   let started = false,
     dirty: boolean | undefined,
     scheduled = false,
@@ -217,24 +257,30 @@ export function select(shape: any, options: any = {}): any {
     changed = true, // A silent update flushes without a snapshot
     sorting = false;
 
+  /** Gives the output of a slot: its `Val`, or its value under `unwrap`. */
   const out = (slot: Slot) =>
     unwrap && slot.kind !== PLAIN ? slot.state.value : slot.state;
+  /** Records an operation, if anyone reads operations and the select started. */
   const log = (op: () => Op) => {
     if (ops && started) ops.push(op()); // SE-10A
   };
+  /** Gives the current key or index of a slot. */
   const keyOf = (slot: Slot) =>
     isArray ? array.indexOf(slot) : (slot.key as string);
 
+  /** Queues one flush in a microtask, unless one is queued or running. */
   const schedule = () => {
     if (scheduled || running || !started || signal.aborted) return;
     scheduled = true;
     queueMicrotask(flush);
   };
+  /** Marks the state changed, and schedules a flush. */
   const touch = () => {
     dirty = changed = true;
     schedule();
   };
 
+  /** Sets the state of a live slot, and logs and schedules the change once started. */
   const update = (slot: Slot, state: Val<unknown>, silent = false) => {
     if (slot.dead) return;
     const prev = out(slot);
@@ -247,6 +293,7 @@ export function select(shape: any, options: any = {}): any {
     touch();
   };
 
+  /** Finishes a slot with a rejected state, and calls `return()` on its iterator when its value failed. */
   const fail = (slot: Slot, error: unknown, valueFailed = false) => {
     const open = !slot.finished;
     slot.busy = false;
@@ -256,6 +303,7 @@ export function select(shape: any, options: any = {}): any {
     update(slot, val("rejected", undefined, error, true));
   };
 
+  /** Sets a fulfilled state from an iterator result, and keeps the last value for an empty final result. */
   const commit = (
     slot: Slot,
     value: unknown,
@@ -273,6 +321,7 @@ export function select(shape: any, options: any = {}): any {
     );
   };
 
+  /** Checks an iterator result, and commits its value now, or after a yielded promise settles. */
   const receive = (slot: Slot, result: any) => {
     if (Object(result) !== result)
       throw new TypeError("Iterator result is not an object");
@@ -293,6 +342,7 @@ export function select(shape: any, options: any = {}): any {
     );
   };
 
+  /** Calls `next` on the iterator of a slot, and learns on the first call if it is sync. */
   const pull = (slot: Slot) => {
     let result: any;
     try {
@@ -317,8 +367,10 @@ export function select(shape: any, options: any = {}): any {
       .catch(error => fail(slot, error));
   };
 
+  /** Tells if a slot can be pulled now. */
   const idle = (slot: Slot) => !slot.dead && !slot.finished && !slot.busy;
 
+  /** Subscribes to a promise slot, and updates it when the promise settles. */
   const listen = (slot: Slot) => {
     const { source, method: then } = slot;
     const fulfilled = (value: unknown) =>
@@ -336,6 +388,7 @@ export function select(shape: any, options: any = {}): any {
       );
   };
 
+  /** Creates a slot for a source, and listens to a native promise at once. */
   const make = (
     source: unknown,
     key: PropertyKey | undefined,
@@ -353,6 +406,7 @@ export function select(shape: any, options: any = {}): any {
     return slot;
   };
 
+  /** Opens the iterator or the promise of a slot, when the select starts or the slot arrives after. */
   const activate = (slot: Slot) => {
     if (slot.dead) return;
     if (slot.kind === RAW) {
@@ -370,8 +424,10 @@ export function select(shape: any, options: any = {}): any {
     }
   };
 
+  /** Starts the select, logs the initial shape, and activates all slots. */
   const start = () => {
     started = true;
+    emit?.("start");
     const all = slots();
     if (!isArray)
       for (const slot of all)
@@ -391,19 +447,25 @@ export function select(shape: any, options: any = {}): any {
     schedule();
   };
 
+  /** Gives the outputs of all slots, in the shape of the target. */
   const snapshot = () =>
     isArray
       ? array.map(out)
       : Object.fromEntries([...map].map(([key, slot]) => [key, out(slot)]));
 
-  // Step 6 has just pulled every idle async iterator, so an unfinished one is busy here.
+  /**
+   * Tells if a slot can still change, which keeps an autoClose select open.
+   * Step 6 has just pulled every idle async iterator, so an unfinished one is busy here. */
   const live = (slot: Slot) =>
     slot.kind === PROMISE ? slot.state.status === "pending" : slot.busy;
 
-  // An idle async raw iterator is always fresh here, because step 6 pulls it right after each report.
+  /**
+   * Tells if step 1 of a flush pulls a raw iterator before the report.
+   * An idle async raw iterator is always fresh here, because step 6 pulls it right after each report. */
   const advancing = (slot: Slot) =>
     slot.kind === RAW && idle(slot) && !slot.fresh;
 
+  /** Advances sources, reports operations, publishes a snapshot, pulls the next values, and closes with autoClose. */
   async function flush() {
     scheduled = false;
     running = true;
@@ -422,7 +484,12 @@ export function select(shape: any, options: any = {}): any {
       if (ops?.length) {
         const report = ops;
         ops = [];
-        onChanges(report);
+        emit?.("report", report);
+        if (readers.size) {
+          for (const op of report) reported.push(op); // A spread overflows the stack on a large report
+          for (const reader of readers) reader.wake();
+        }
+        onChanges?.(report);
       }
       if (signal.aborted) return;
       if (publish && !nonYielding) {
@@ -444,6 +511,7 @@ export function select(shape: any, options: any = {}): any {
     }
   }
 
+  /** Writes a source to the target as a plain data property. */
   const define = (key: any, source: unknown) =>
     Reflect.defineProperty(target, key, {
       value: source,
@@ -452,11 +520,13 @@ export function select(shape: any, options: any = {}): any {
       configurable: true,
     });
 
+  /** Throws if a sort comparator tries to change the proxy. */
   const unlocked = () => {
     if (sorting)
       throw new TypeError("A comparator cannot change a select proxy");
   };
 
+  /** Replaces the source at a key with a new slot, and logs a set. */
   const write = (key: any, source: unknown) => {
     unlocked();
     if (signal.aborted) {
@@ -475,6 +545,7 @@ export function select(shape: any, options: any = {}): any {
     if (started) activate(slot);
   };
 
+  /** Replaces a range of an array shape with new slots, logs a splice, and gives the removed sources. */
   const splice = (start: number, count: number, items: unknown[]) => {
     if (!count && !items.length) return [];
     unlocked();
@@ -500,6 +571,7 @@ export function select(shape: any, options: any = {}): any {
     return removed;
   };
 
+  /** Reorders an array shape and its slots, and logs a move. */
   const permute = (order: number[]) => {
     unlocked();
     if (order.every((from, to) => from === to)) return state; // SE-097
@@ -512,12 +584,14 @@ export function select(shape: any, options: any = {}): any {
     return state;
   };
 
+  /** Checks a sort comparator, and that no sort is running. */
   const checkCompare = (compare?: (a: any, b: any) => number) => {
     if (compare !== undefined && typeof compare !== "function")
       throw new TypeError("sort comparator must be a function");
     unlocked();
   };
 
+  /** Sorts by items with compare, and locks the proxy while compare runs. */
   const arrange = (items: unknown[], compare?: (a: any, b: any) => number) => {
     let order: number[];
     sorting = true;
@@ -529,8 +603,10 @@ export function select(shape: any, options: any = {}): any {
     return permute(order);
   };
 
+  /** Gives an array of count undefined items. */
   const blanks = (count: number) => Array.from({ length: count }) as unknown[];
 
+  /** Sets the length of an array shape, with a splice. */
   const resize = (value: unknown) => {
     const length = +(value as number), // Unlike Number(), this throws on a BigInt
       size = target.length;
@@ -539,6 +615,7 @@ export function select(shape: any, options: any = {}): any {
     else splice(size, 0, blanks(length - size));
   };
 
+  /** Handles a proxy write, which skips an `Object.is` same source. */
   const assign = (key: PropertyKey, source: unknown) => {
     if (RESERVED.includes(key)) throw new TypeError("Reserved select key");
     if (!isArray) {
@@ -555,6 +632,7 @@ export function select(shape: any, options: any = {}): any {
     }
   };
 
+  /** Handles a proxy delete, which sets an array item to undefined and deletes an object key. */
   const remove = (key: PropertyKey) => {
     if (RESERVED.includes(key)) throw new TypeError("Reserved select key");
     if (isArray) {
@@ -575,7 +653,9 @@ export function select(shape: any, options: any = {}): any {
     return true;
   };
 
+  /** Converts an argument to an integer, as array methods do. */
   const integer = (value: unknown) => Math.trunc(+(value as number)) || 0;
+  /** Resolves a relative array index, clamped to the array. */
   const position = (value: unknown, size: number) => {
     const relative = integer(value);
     return relative < 0
@@ -583,6 +663,7 @@ export function select(shape: any, options: any = {}): any {
       : Math.min(relative, size);
   };
 
+  /** Array methods of an array proxy, which change the shape through splice and permute. */
   const methods: Record<PropertyKey, unknown> = {
     __proto__: null as any,
     push: (...items: unknown[]) => (
@@ -634,7 +715,9 @@ export function select(shape: any, options: any = {}): any {
     },
   };
 
+  /** Gives a consumer of the snapshot channel. */
   const iterate = () => channel[Symbol.asyncIterator]();
+  /** Closes the snapshot channel. */
   const dispose = () => channel[Symbol.dispose]();
 
   if (isArray)
@@ -650,11 +733,13 @@ export function select(shape: any, options: any = {}): any {
       if (slot.kind >= ASYNC && !slot.finished)
         void quietReturn(slot.iterator ?? slot.source);
     }
+    for (const reader of readers) reader.wake(); // SE-14A
   });
 
   if (autoStart) queueMicrotask(start);
   else attached(channel).then(start, noop);
 
+  /** The select proxy, which reads the target and routes writes to slots. */
   const state = new Proxy(target, {
     get(_, key, receiver) {
       if (key === Symbol.asyncIterator) return iterate;
@@ -677,5 +762,87 @@ export function select(shape: any, options: any = {}): any {
     preventExtensions: forbid,
     setPrototypeOf: forbid,
   });
+  /**
+   * Drops reported operations that every reader read.
+   * SE-14B drops what each reader read, and SE-14C stops the log with no reader. */
+  const trim = () => {
+    let low = base + reported.length;
+    for (const reader of readers) low = Math.min(low, reader.at);
+    reported.splice(0, low - base);
+    base = low;
+    if (!readers.size && !onChanges && !emit) ops = undefined;
+  };
+
+  openers.set(state, () => {
+    const outputs = started ? snapshot() : isArray ? [] : {};
+    const waiting: PromiseWithResolvers<IteratorResult<Op[], undefined>>[] = [];
+    let closed = false; // By return() or dispose, or by the SE-14A rejection
+    const reader = { at: base + reported.length, wake: () => settle() };
+    /** Resolves waiting reads with new operations, or ends them when the reader closes. */
+    const settle = () => {
+      while (waiting.length) {
+        const end = base + reported.length;
+        // biome-ignore lint/style/noNonNullAssertion: the loop runs while a read waits
+        const read = waiting[0]!;
+        if (readers.has(reader) && reader.at < end) {
+          const value = reported.slice(reader.at - base);
+          reader.at = end;
+          trim();
+          read.resolve({ done: false, value });
+        } else if (!signal.aborted && !closed) return;
+        else {
+          readers.delete(reader);
+          trim();
+          if (!closed && failed(channel)) read.reject(signal.reason.reason);
+          else read.resolve({ done: true, value: undefined });
+          closed = true;
+        }
+        waiting.shift();
+      }
+    };
+    /** Stops the reader, and ends its waiting reads. */
+    const close = () => {
+      closed = true;
+      readers.delete(reader) && trim();
+      settle();
+    };
+    if (!signal.aborted) {
+      if (ops) reader.at += ops.length;
+      else ops = [];
+      readers.add(reader);
+    }
+    const it = {
+      outputs,
+      next() {
+        const read = Promise.withResolvers<IteratorResult<Op[], undefined>>();
+        waiting.push(read);
+        settle();
+        return read.promise;
+      },
+      return: () => (
+        close(), Promise.resolve({ done: true, value: undefined })
+      ),
+      [Symbol.asyncIterator]: () => it,
+      [Symbol.dispose]: close,
+    };
+    return it as Changes<unknown>;
+  });
+
+  const emit = register("select", state, {
+    channel,
+    array: isArray,
+    unwrap,
+    slots: () =>
+      slots().map(slot => ({
+        key: keyOf(slot),
+        kind: KINDS[slot.kind],
+        sync: slot.sync,
+        source: slot.source,
+        state: slot.state,
+        busy: !!slot.busy,
+        finished: !!slot.finished,
+      })),
+  });
+  if (emit) ops ??= []; // DV-030 builds operations for devtools too
   return state;
 }

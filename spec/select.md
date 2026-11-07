@@ -9,6 +9,7 @@ The key words MUST, MUST NOT, SHOULD and MAY are normative.
 It publishes a snapshot of the whole shape when a source changes.
 It also reports each change as an ordered operation.
 So consumers can replay changes and need no diff.
+Readers from `changes` take those operations in batches.
 The shape stays mutable.
 So code can add, replace and remove sources at any time.
 `select` tracks only the top level of the shape.
@@ -51,6 +52,15 @@ export function select<T extends SelectShape, R = Snapshot<T>>(
   shape: T,
   options?: SelectOptions<Snapshot<T>, R> & { unwrap?: false },
 ): State<T, R>;
+
+export type Changes<O> = Disposable & {
+  readonly outputs: O;
+  next(): Promise<IteratorResult<Op[], undefined>>;
+  return(): Promise<IteratorReturnResult<undefined>>;
+  [Symbol.asyncIterator](): Changes<O>;
+};
+
+export function changes<O>(state: State<any, any, O>): Changes<O>;
 ```
 
 `Snapshot<T>` maps each key of `T`.
@@ -74,6 +84,8 @@ The `sortOutputs` comparator gets elements of `O` without `undefined`.
 `sort`, `sortOutputs`, `reverse` and `fill` return the same array type.
 For an object shape, it is `T`.
 It keeps the input types because the proxy reads and writes sources, not states.
+`State` also carries `O` under a key that exists only as a type.
+The parameter of `changes` reads `CHAN` and that key, so `changes` infers the type of `outputs` from any `State`.
 
 ## Terms
 
@@ -96,6 +108,9 @@ It keeps the input types because the proxy reads and writes sources, not states.
 - **Sync iterator**: a raw iterator that SE-014 makes sync.
 - **Finished**: an iterator produced `done: true`, or failed (SE-025).
 - **Idle**: a slot's iterator has no pull in progress and did not finish.
+- **Reader**: an object that `changes` returns.
+- **Attached**: the state of a reader that did not finish.
+- **Position**: the last operation of the log that a reader read.
 - **Reserved key**: `Symbol.asyncIterator`, `Symbol.dispose` or `CHAN`.
 - **Terminal**: the state of a channel after its first `close` or `throw` call.
 
@@ -209,7 +224,7 @@ All changes in one synchronous run MUST share one flush.
 A flush runs these steps in order.
 
 1. Advance idle sync iterators, and make the first pull on each new raw iterator.
-2. Report.
+2. Report to readers and to `onChanges`.
 3. Publish.
 4. With `backPressure`, wait until a consumer reads that publish.
 5. Advance each sync iterator due under SE-064.
@@ -218,6 +233,7 @@ A flush runs these steps in order.
 8. If changes collected during this flush, schedule the next flush.
 
 - SE-040: Report MUST call `onChanges` with the operations since the last report, if `onChanges` exists and there are operations.
+  It MUST make those operations readable to readers before it calls `onChanges`.
 - SE-041: Without `nonYielding`, publish MUST build a snapshot.
   It MUST then apply `mapSnapshot` and send the result.
   SE-02B skips steps 3 and 4 for a flush with no other change.
@@ -370,8 +386,45 @@ A flush runs these steps in order.
   Changes before start MUST NOT produce their own operations.
 - SE-108: After each report, replaying all operations reported so far onto an empty object or array MUST equal the outputs at that report.
 - SE-109: `onChanges` MUST run on each flush with changes, even if consumers skip snapshots.
-- SE-10A: Without `onChanges`, the library MUST NOT build operations.
+- SE-10A: Without `onChanges` and with no attached reader, the library MUST NOT build operations.
+  DV-030 in `devtools.md` is the exception.
 - SE-10B: `select` MUST discard the operations that no report contains when the channel becomes terminal.
+
+## Change readers
+
+`changes` gives a reader of the operation log.
+All readers of one `select` share one log, and each reader keeps its own position.
+A read takes the operations of all reports after that position, in one array.
+So an observer that is busy skips the states between its reads, and replays the changes in one pass.
+A proxy read returns sources (SE-080), so a reader carries the `outputs` that its operations start from.
+
+- SE-140: `changes` MUST throw a `TypeError` if `state` is not a proxy that `select` returned.
+  The proxy MUST come from the same copy of the library.
+- SE-141: `changes` MUST return a new reader.
+  `[Symbol.asyncIterator]()` of a reader MUST return that reader.
+- SE-142: `outputs` MUST be a new shallow copy of the outputs at the call, in slot order, as a snapshot is (SE-050).
+  It MUST NOT apply `mapSnapshot`.
+  Before start, `outputs` MUST be an empty array for an array shape, and an empty object otherwise.
+  So the first read of that reader starts with the description of SE-107.
+- SE-143: The position MUST start at the last operation that the log holds at the call.
+  So a read covers only the changes after the call.
+- SE-144: A replay of all reads of a reader onto `outputs` MUST equal the outputs at the last report that a read covered.
+- SE-145: `next()` MUST resolve with `{ done: false, value }`.
+  `value` MUST be a new array of all operations of the reports after the position, in log order.
+  The read MUST move the position to the last of those operations.
+  A read MUST NOT include an operation that no report contains.
+- SE-146: If no report has operations after the position, `next()` MUST block until a report adds operations or the reader finishes.
+- SE-147: The `next()` calls of a reader MUST settle in call order.
+  Each read MUST start at the position that the previous read left.
+- SE-148: `return()` and `[Symbol.dispose]()` MUST finish the reader.
+  `return()` MUST resolve with `{ done: true, value: undefined }`.
+- SE-149: A pending `next()` of a reader that finishes, and each later `next()`, MUST resolve with `{ done: true, value: undefined }`.
+  SE-14A is the exception.
+- SE-14A: When the channel becomes terminal, a reader MUST finish after it reads the operations of all reports.
+  After `throw(error)`, the read that finds no more operations MUST reject with the unchanged `error`, as CH-067 does.
+  A reader made on a terminal channel MUST act the same, with no operations to read.
+- SE-14B: The log MUST NOT retain an operation that each attached reader has read.
+- SE-14C: When no reader stays attached and `onChanges` does not exist, the log MUST drop its operations and build no more (SE-10A).
 
 ## Errors
 
@@ -428,6 +481,10 @@ These behaviours come from the rules above and are intentional.
 - SE-139: Each index is a slot.
   So a huge `length` can use all memory, unlike a sparse `Array`.
 - SE-13A: The library does not support objects that inherit from the proxy.
+- SE-13B: A reader that makes no more `next()` calls and does not finish retains each later operation.
+  So finish a reader with `return()`, `[Symbol.dispose]()` or `using` when its observer ends.
+- SE-13C: Readers and `onChanges` can get the same operation objects.
+  So an observer that changes an operation changes it for the others.
   This spec does not define a write through such an object.
 
 ## Examples
@@ -485,4 +542,26 @@ await setImmediate(); // => { op: 'splice', start: 0, removed: [ 'a' ], added: [
 s.push("c");
 s.reverse();
 await setImmediate(); // => { op: 'splice', start: 1, removed: [], added: [ 'c' ] } { op: 'move', order: [ 1, 0 ] }
+```
+
+Read batched changes, where one read covers two reports:
+
+```ts
+import { setImmediate } from "node:timers/promises";
+const s = select(["a"], {
+  nonYielding: true,
+  autoClose: false,
+  autoStart: true,
+});
+await setImmediate(); // Start has run
+const reader = changes(s);
+reader.outputs; // => [ 'a' ]
+s.push("b");
+await setImmediate();
+s.shift();
+await setImmediate();
+const { value: ops = [] } = await reader.next();
+ops; // => [ { op: 'splice', start: 1, removed: [], added: [ 'b' ] }, { op: 'splice', start: 0, removed: [ 'a' ], added: [] } ]
+applyOps([...reader.outputs], ops); // => [ 'b' ] (SE-144)
+await reader.return(); // => { done: true, value: undefined }
 ```

@@ -743,6 +743,20 @@ test("CH-062 signal aborts synchronously with the stop error", () => {
   assert.ok(seen instanceof StopError);
 });
 
+test("CH-062 CH-082 signal is one object, before and after the end", () => {
+  const before = new Channel();
+  const signal = before.signal;
+  before.close();
+  assert.equal(before.signal, signal);
+  const after = new Channel();
+  after.close();
+  assert.equal(after.signal, after.signal);
+  assert.throws(
+    () => after.send(1),
+    e => e === after.signal.reason,
+  );
+});
+
 test("CH-063 dispose acts as close", async () => {
   const ch = new Channel<number>();
   ch[Symbol.dispose]();

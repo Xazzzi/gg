@@ -1,0 +1,9 @@
+{
+  "name": "gg-todomvc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "esbuild src/main.tsx --bundle --format=esm --outfile=dist/main.js --watch",
+    "build-prod": "esbuild src/main.tsx --bundle --format=esm --minify --legal-comments=none --outfile=dist/main.js"
+  }
+}

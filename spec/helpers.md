@@ -195,11 +195,12 @@ resolve(42);
 
 ## applyOps
 
-`applyOps` replays the operations from `onChanges` onto a mirror.
+`applyOps` replays the operations from `onChanges` or from a reader of `changes` onto a mirror.
 A **mirror** is an object or array that holds one entry for each output of the shape.
 By default, it is lazy.
 One call first computes the combined result of its operations.
 `map` then runs only for entries that stay in `target`.
+An array value that leaves and comes back in one call keeps its entry, so `map` does not run for it.
 With `eager: true`, `applyOps` applies each operation in turn.
 `map` then also runs for values that a later operation overwrites.
 `map` changes each output into the entry to store.
@@ -228,10 +229,12 @@ Without `map`, `applyOps` stores each output unchanged.
   Earlier operations MUST stay applied.
 - HE-049: If `options.eager` is not a boolean and not `undefined`, `applyOps` MUST throw a `TypeError`.
 - HE-04A: Without `eager`, the final `target` MUST equal an eager replay of the same `ops` with the same `map` results, including key order.
-- HE-04B: Without `eager`, `map` MUST run one time for each value that stays in place after all `ops`, and for no other value.
+  For a value that reuses an entry (HE-04H), the `map` result is that entry.
+- HE-04B: Without `eager`, `map` MUST run one time for each value that stays in place after all `ops` and reuses no entry, and for no other value.
   For an array, it MUST run in index order.
   For an object, it MUST run in final key order among the written keys.
 - HE-04C: Without `eager`, `prev` MUST be the entry that the position or key inherited from before the call.
+  For an array, HE-04H defines what a position inherits.
   If there is no such entry, `prev` MUST be `undefined`.
   A `move` takes the inherited entry with it to the new position.
   A key that one operation removes and a later operation sets inherits its old entry.
@@ -248,11 +251,19 @@ Without `map`, `applyOps` stores each output unchanged.
   The result MAY have a hole or an `undefined` entry at that index.
   HE-04A treats these two as equal.
   `select` produces no holes (SE-010, SE-096).
+- HE-04H: Without `eager`, a value that lands in an array MUST take over at most one value that leaves, and a leaving value MUST be taken over at most one time.
+  A `set` value takes over the value at its index.
+  A `splice` value first takes over the first value that left by a `splice` in the same call with the `Object.is` same output, in leaving order.
+  Otherwise it takes over the value that it removes at its own index, if no other value took that over.
+  The value at a position after all `ops` traces back through what it took over to an entry from before the call.
+  If the output of that entry is the `Object.is` same value, the value MUST reuse that entry, with no `map` call.
+  Otherwise that entry is `prev`.
+  So a `splice` that keeps values, such as a filter, moves their entries and calls no `map`.
 
 `applyOps` writes `target` with plain assignment and array methods.
 So a reactive array or object sees each change.
 A read-only view, such as `node.children`, cannot be a target.
-Lazy replay covers one call, which is one `onChanges` report.
+Lazy replay covers one call, which is one report or one read.
 It costs one pass over an array target.
 
 ```ts

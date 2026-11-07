@@ -31,12 +31,12 @@ const cases: [string, () => unknown, RegExp][] = [
   [
     "applyOps op",
     () => applyOps([], [{ op: "x" } as any], undefined, { eager: true }),
-    /unknown operation/,
+    /cannot replay x on this target/,
   ],
   [
     "applyOps move",
     () => applyOps({}, [{ op: "move", order: [] }], undefined, { eager: true }),
-    /move needs an array target/,
+    /cannot replay move on this target/,
   ],
   [
     "applyOps splice",
@@ -47,7 +47,7 @@ const cases: [string, () => unknown, RegExp][] = [
         undefined,
         { eager: true },
       ),
-    /splice needs an array target/,
+    /cannot replay splice on this target/,
   ],
   ["sort comparator", () => list().sort(1), /comparator must be a function/],
   [

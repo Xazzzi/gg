@@ -9,6 +9,7 @@ const collect = globalThis.gc as () => void; // --expose-gc is in the test comma
 const iter = <T, R>(ch: Channel<T, R>) => ch[Symbol.asyncIterator]();
 const val = (value: unknown) => ({ value, done: false });
 const end = (value?: unknown) => ({ value, done: true });
+const noop = () => {};
 const isPending = (promise: Promise<unknown>) =>
   inspect(promise).includes("<pending>");
 
@@ -135,6 +136,40 @@ test("CH-014 a then getter that closes the channel stops the send", async () => 
   };
   await assert.rejects(ch.asend(value), e => e === ch.signal.reason);
   assert.deepEqual(await iter(ch).next(), end());
+});
+
+test("CH-014 CH-016 a then getter that closes the channel wins over the thenable check", async () => {
+  const closing = (ch: Channel<any>) => ({
+    get then() {
+      ch.close();
+      return noop;
+    },
+  });
+  const sent = new Channel<any>();
+  assert.throws(
+    () => sent.send(closing(sent)),
+    e => e === sent.signal.reason,
+  );
+  const awaited = new Channel<any>();
+  await assert.rejects(
+    awaited.asend(closing(awaited)),
+    e => e === awaited.signal.reason,
+  );
+});
+
+test("CH-014 CH-016 a terminal channel does not read then", async () => {
+  const ch = new Channel<any>();
+  ch.close();
+  const value = {
+    get then() {
+      return assert.fail();
+    },
+  };
+  assert.throws(
+    () => ch.send(value),
+    e => e === ch.signal.reason,
+  );
+  await assert.rejects(ch.asend(value), e => e === ch.signal.reason);
 });
 
 test("CH-014 CH-016 terminal send wins over the thenable check", async () => {
@@ -823,12 +858,40 @@ test("CH-06C a then getter error propagates and the channel stays open", () => {
   assert.ok(!ch.signal.aborted);
 });
 
+test("CH-06C a then getter error has priority after that getter closes the channel", async () => {
+  const ch = new Channel<number, any>();
+  const error = new Error("then");
+  assert.throws(
+    () =>
+      ch.close({
+        get then() {
+          ch.close("inner" as any);
+          throw error;
+        },
+      } as any),
+    error,
+  );
+  const result = await ch[Symbol.asyncIterator]().next();
+  assert.deepEqual(result, { done: true, value: "inner" });
+});
+
 test("CH-06C CH-061 takes precedence on a terminal channel", async () => {
   const ch = new Channel<number, any>();
   ch.close("a");
   ch.close({
     get then() {
       return assert.fail();
+    },
+  });
+  assert.deepEqual(await iter(ch).next(), end("a"));
+});
+
+test("CH-06C CH-061 a then getter that closes the channel wins over the thenable check", async () => {
+  const ch = new Channel<number, any>();
+  ch.close({
+    get then() {
+      ch.close("a");
+      return noop;
     },
   });
   assert.deepEqual(await iter(ch).next(), end("a"));

@@ -97,9 +97,9 @@ export class Channel<T, TReturn = undefined>
 
   send(value: Sendable<T>): void {
     if (this.signal.aborted) throw this.signal.reason;
-    if (isThenable(value))
-      throw new TypeError("Channel does not accept thenables");
+    const thenable = isThenable(value);
     if (this.signal.aborted) throw this.signal.reason; // A then getter can close the channel
+    if (thenable) throw new TypeError("Channel does not accept thenables");
     const cell: Cell<T> = this.#tail;
     this.#tail = { n: cell.n + 1 };
     cell.value = value;
@@ -127,7 +127,8 @@ export class Channel<T, TReturn = undefined>
   }
 
   close(value?: Sendable<TReturn>): void {
-    if (!this.signal.aborted && isThenable(value))
+    // The second check is CH-061, because a then getter can close the channel.
+    if (!this.signal.aborted && isThenable(value) && !this.signal.aborted)
       throw new TypeError("Channel does not accept thenables");
     this.#end(false, value);
   }

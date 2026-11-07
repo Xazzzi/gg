@@ -498,7 +498,7 @@ topic("applyOps", "- ");
 // break does not stop select, so use `using` or close the channel.
 // sortOutputs is a one-off, so later updates do not move slots.
 // A comparator that changes the shape gets a TypeError.
-// sortOutputs throws on a terminal channel, where slots have no outputs.
+// sortOutputs throws on a terminal channel, where writes are no longer tracked.
 // One iterator in two slots shares a cursor, so each value reaches one slot.
 // fill and copyWithin can do this silently, and leave overwritten iterators open.
 // An attached consumer that is dropped without return() keeps its backlog alive.

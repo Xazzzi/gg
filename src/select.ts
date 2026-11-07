@@ -504,6 +504,8 @@ export function select(shape: any, options: any = {}): any {
     unlocked();
     if (order.every((from, to) => from === to)) return state; // SE-097
     relocate(target, order);
+    // Stryker disable next-line ConditionalExpression: slots and operations are unobservable on a terminal channel
+    if (signal.aborted) return state;
     relocate(array, order);
     log(() => ({ op: "move", order }));
     touch();
@@ -530,7 +532,7 @@ export function select(shape: any, options: any = {}): any {
   const blanks = (count: number) => Array.from({ length: count }) as unknown[];
 
   const resize = (value: unknown) => {
-    const length = Number(value),
+    const length = +(value as number), // Unlike Number(), this throws on a BigInt
       size = target.length;
     if (length >>> 0 !== length) throw new RangeError("Invalid array length");
     if (length < size) splice(length, size, []);
@@ -573,7 +575,7 @@ export function select(shape: any, options: any = {}): any {
     return true;
   };
 
-  const integer = (value: unknown) => Math.trunc(Number(value)) || 0;
+  const integer = (value: unknown) => Math.trunc(+(value as number)) || 0;
   const position = (value: unknown, size: number) => {
     const relative = integer(value);
     return relative < 0

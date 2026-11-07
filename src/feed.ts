@@ -64,7 +64,7 @@ async function run(
         cancel = resolve;
         pull().then(resolve, reject);
       });
-      if (value === ABORTED) return void quietReturn(iterator);
+      if (value === ABORTED) return void (done || quietReturn(iterator));
       if (done && value === undefined) return;
       if (backPressure) await channel.asend(value);
       else channel.send(value);

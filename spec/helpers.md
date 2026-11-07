@@ -1,7 +1,8 @@
 # Helpers
 
-This document is self-contained, except that `isVal` and `spread` build on `Val`, and `applyOps` on `Op`, from `select.md`.
-`Channel`, `feed` and `Select` MUST NOT require callers to use a helper.
+`isVal` and `spread` in this document use `Val` from `select.md`.
+`applyOps` uses `Op` from `select.md`.
+`Channel`, `feed` and `select` MUST NOT require callers to use a helper.
 The key words MUST, MUST NOT, SHOULD and MAY are normative.
 
 ## Public API
@@ -35,75 +36,99 @@ export function applyOps<T extends object>(
 ```
 
 `Source<T>` is any of `PromiseLike<T>`, `AsyncIterable<T>`, `AsyncIterator<T>`, `Iterable<T>`, `Iterator<T>`.
-Helpers are exported from the package root, so unused helpers can be tree-shaken.
+The package root exports the helpers.
+So a bundler can remove unused helpers.
 
 ## abortable
 
 `abortable` waits for a promise until a signal aborts.
-It suits APIs without signal support.
+Use it for APIs that have no signal support.
 It does not cancel the underlying work.
 
-- HE-001: It MUST settle as `promise` settles if `signal` has not aborted.
-- HE-002: It MUST reject with `signal.reason` when `signal` aborts first.
-- HE-003: If `signal` is already aborted, it MUST reject with `signal.reason`.
-  It MUST NOT call `then` on a thenable that is not a `Promise`, because `then` may trigger work.
-- HE-004: It MUST remove its abort listener once it settles.
-  A loop over one long-lived signal therefore retains nothing per pass.
+- HE-001: `abortable` MUST settle as `promise` settles if `signal` did not abort.
+- HE-002: `abortable` MUST reject with `signal.reason` when `signal` aborts first.
+- HE-003: If `signal` aborted already, `abortable` MUST reject with `signal.reason`.
+  It MUST NOT call `then` on a thenable that is not a `Promise`, because `then` can start work.
+- HE-004: `abortable` MUST remove its abort listener when it settles.
+  So a loop over one long-lived signal retains nothing per pass.
 - HE-005: A later rejection of a `Promise` MUST NOT cause an `unhandledRejection`.
 
 ## catching
 
-`catching` wraps a source so that a failure ends it quietly.
-The wrapped source is a normal source for `feed` and `Select`.
+`catching` wraps a source.
+On a failure, the wrapper calls `onError` and finishes with no error (HE-014).
+The wrapped source is a normal source for `feed` and `select`.
 
-A **failure** is a thenable source rejecting, `next()` throwing or rejecting, or a value awaited by HE-013 rejecting.
+A **pull** is a call of `next()` on the inner iterator, and the await of the result and of its value (HE-013).
+
+A **failure** occurs when a thenable source rejects, `next()` throws or rejects, or a value that HE-013 awaits rejects.
 A `next()` result that is not an object is also a failure, with a `TypeError`.
-So is an error from calling `Symbol.asyncIterator` or `Symbol.iterator`, or from reading `next` on the iterator, which happens at the first `next()`.
-So is an error from reading `done` or `value` on a result, and no `return()` follows, as in `for await`.
+A call of `Symbol.asyncIterator` or `Symbol.iterator` that throws is also a failure.
+A read of `next` on the iterator that throws is also a failure.
+These two failures occur at the first `next()`.
+A read of `done` or `value` on a result that throws is also a failure.
+No `return()` follows this failure, as in `for await`.
 
-- HE-010: `onError` is required, so swallowing an error is always explicit.
-  A non-function `onError` MUST make `catching` throw a `TypeError` synchronously.
-- HE-011: Source kinds MUST be detected in this order:
+- HE-010: `catching` requires `onError`.
+  So each failure reaches code that the caller supplied.
+  If `onError` is not a function, `catching` MUST throw a `TypeError` synchronously.
+- HE-011: `catching` MUST detect source kinds in this order:
   thenable, `Symbol.asyncIterator`, `Symbol.iterator`, callable `next`.
-  A primitive string or any other value MUST make `catching` throw a `TypeError` synchronously.
+  For a primitive string or any other value, `catching` MUST throw a `TypeError` synchronously.
 - HE-012: A thenable source MUST yield one value.
-- HE-013: Each value MUST be awaited before it is yielded, and a return value MUST be awaited before it finishes the wrapper.
-- HE-014: On a failure, it MUST call and await `onError` once with the unchanged error, then finish.
+- HE-013: `catching` MUST await each value before it yields the value.
+  It MUST await a return value before the wrapper finishes.
+- HE-014: On a failure, `catching` MUST call and await `onError` one time with the unchanged error.
+  The wrapper MUST then finish.
 - HE-015: If `onError` throws or rejects, that error MUST reject the pending `next()`.
-- HE-016: If a value rejects and the inner iterator has not finished, the iterator MUST also receive `return()`.
-  That `return()` is not awaited, and errors from it MUST be ignored.
-- HE-017: It MUST finish with the source's return value.
-- HE-018: `return()` MUST forward to the inner iterator at once, including before the first `next()` and during a pending `next()`.
+- HE-016: If a value rejects and the inner iterator did not finish, `catching` MUST also call `return()` on the iterator.
+  It does not await that `return()`.
+  It MUST ignore errors from that `return()`.
+- HE-017: The wrapper MUST finish with the return value of the source.
+- HE-018: `return()` MUST forward to the inner iterator immediately, also before the first `next()` and during a pending `next()`.
   Before the first `next()`, this applies only if the source itself has `return`.
-  It MUST settle as the inner `return()` settles, and resolve with `{ done: true, value }` if there is none.
-  A thenable source has no iterator, so its `return` MUST NOT be called.
+  `return()` MUST settle as the inner `return()` settles.
+  If there is no inner `return()`, it MUST resolve with `{ done: true, value }`.
+  A thenable source has no iterator.
+  So `catching` MUST NOT call its `return`.
 - HE-019: A `Promise` source MUST have a rejection handler from the `catching` call.
-  Other thenables MUST NOT have `then` called before the first `next()`.
-- HE-01A: During `return()`, a pending `next()` MUST resolve with `{ done: true, value: undefined }`, without waiting for the inner pull.
-  A late result or failure from that pull MUST be discarded, and `onError` MUST NOT run.
-  A discarded result whose `value` is a rejecting `Promise` MUST NOT cause an `unhandledRejection`.
-  If `onError` is already running, `return()` MUST NOT wait for it, and the pending `next()` follows HE-014 and HE-015.
-- HE-01B: After it finishes, `next()` MUST resolve with `{ done: true, value: undefined }`, and `return(value)` with `{ done: true, value }`.
-- HE-01C: Overlapping `next()` calls MUST run in order, one pull at a time.
+  `catching` MUST NOT call `then` on other thenables before the first `next()`.
+- HE-01A: During `return()`, a pending `next()` MUST resolve with `{ done: true, value: undefined }`.
+  It MUST NOT wait for the inner pull.
+  `catching` MUST discard a late result or failure from that pull.
+  `onError` MUST NOT run for that pull.
+  A discarded result with a `value` that is a rejecting `Promise` MUST NOT cause an `unhandledRejection`.
+  If `onError` is running, `return()` MUST NOT wait for it.
+  HE-014 and HE-015 then apply to the pending `next()`.
+- HE-01B: After the wrapper finishes, `next()` MUST resolve with `{ done: true, value: undefined }`.
+  `return(value)` MUST resolve with `{ done: true, value }`.
+- HE-01C: `next()` calls that overlap MUST run in order, with one pull at a time.
 - HE-01D: `Caught` has no `throw` method.
-- HE-01E: Detection MUST run once, at the `catching` call, and an error from it MUST propagate to the caller.
-  Later steps MUST use what it read, and an iterator's `next` MUST be read once.
+- HE-01E: Detection MUST run one time, at the `catching` call.
+  An error from detection MUST propagate to the caller.
+  Later steps MUST use the values that detection read.
+  `catching` MUST read the `next` of an iterator one time.
 
-An async generator body does not run on an early `return()`, and its `return()` queues behind a pending `next()`.
-HE-018 and HE-01A therefore rule out a plain `async function*` wrapper.
+The body of an async generator does not run on an early `return()`.
+Its `return()` also goes in a queue behind a pending `next()`.
+So HE-018 and HE-01A do not permit a plain `async function*` wrapper.
 
-Wrapping a sync source makes it an async iterator.
-In `select`, it then follows the async rules, not SE-060 and SE-073, so it is pulled freely and keeps the channel open.
+A wrapped sync source becomes an async iterator.
+In `select`, it follows the async rules and not SE-060 and SE-073.
+So `select` pulls it freely.
+It also keeps the channel open.
 
 ## isVal
 
-- HE-020: `isVal` MUST return true for a `Val` from any copy of the library, and false for all other values.
-  It reads the brand from SE-029, so a plain object with the same fields is not a `Val`.
+- HE-020: `isVal` MUST return true for a `Val` from any copy of the library.
+  It MUST return false for all other values.
+  It reads the brand from SE-029.
+  So a plain object with the same fields is not a `Val`.
 
 ## spread
 
 `spread` is a pure snapshot projection for UI code.
-It is typically passed as `mapSnapshot: spread`.
+The usual use is `mapSnapshot: spread`.
 
 ```ts
 type ValKeys<S> = {
@@ -140,66 +165,108 @@ export type Spread<S> = S extends readonly unknown[]
     };
 ```
 
-A key that is only sometimes a `Val` gets no suffix fields in `Spread`, though HE-031 still adds them when it holds one.
+If a key is only sometimes a `Val`, `Spread` gives it no suffix fields.
+HE-031 still adds the fields when the key holds a `Val`.
 
-- HE-030: It MUST NOT mutate its input.
+- HE-030: `spread` MUST NOT change its input.
 - HE-031: For an object snapshot, a `Val` at key `k` MUST become four fields:
   `k` with the value, `kLoading`, `kError` and `kDone`.
-- HE-032: `kLoading` MUST be true when pending, `kError` MUST be `reason` when rejected and `null` otherwise, and `kDone` MUST be `done`.
-  A rejection with reason `null` looks like no error in `kError`, so read the `Val` if that matters.
+- HE-032: `kLoading` MUST be true when the `Val` has status `pending`.
+  `kError` MUST be `reason` when the `Val` has status `rejected`, and `null` otherwise.
+  `kDone` MUST be `done`.
+  A rejection with reason `null` looks like no error in `kError`.
+  If this is a problem, read the `Val`.
 - HE-033: For an array snapshot, a `Val` MUST become `{ value, loading, error, done }` at the same index.
-  For one `Val`, this object MUST be frozen, and MUST be the same object across calls.
-- HE-034: Other values MUST be copied unchanged.
-- HE-035: Symbol keys holding a `Val` MUST be copied unchanged, because a suffix cannot apply.
-- HE-036: A generated field name that collides with another field MUST make `spread` throw a `TypeError`.
-- HE-037: A snapshot that is not a non-null object MUST be returned unchanged.
+  `spread` MUST freeze this object.
+  For one `Val`, it MUST be the same object across calls.
+- HE-034: `spread` MUST copy other values unchanged.
+- HE-035: `spread` MUST copy a symbol key that holds a `Val` unchanged, because a suffix cannot apply.
+- HE-036: If a generated field name collides with another field, `spread` MUST throw a `TypeError`.
+- HE-037: If a snapshot is not a non-null object, `spread` MUST return it unchanged.
 
 ```ts
+const { promise, resolve } = Promise.withResolvers<number>();
 const s = select({ p: promise }, { mapSnapshot: spread });
-// { p: undefined, pLoading: true, pError: null, pDone: false }
-// { p: 42, pLoading: false, pError: null, pDone: true }
+const it = s[Symbol.asyncIterator]();
+(await it.next()).value; // => { p: undefined, pLoading: true, pError: null, pDone: false }
+resolve(42);
+(await it.next()).value; // => { p: 42, pLoading: false, pError: null, pDone: true }
 ```
 
 ## applyOps
 
-`applyOps` replays the operations from `onChanges` onto a mirror of the shape.
-It is lazy by default, so one call folds its operations first and `map` runs only for entries that land in `target`.
-With `eager: true`, each operation applies in turn and `map` runs for values a later operation overwrites.
-`map` turns each incoming output into the entry to store, so a mirror can hold derived values such as DOM nodes.
-Without `map`, each output is stored as it is.
+`applyOps` replays the operations from `onChanges` onto a mirror.
+A **mirror** is an object or array that holds one entry for each output of the shape.
+By default, it is lazy.
+One call first computes the combined result of its operations.
+`map` then runs only for entries that stay in `target`.
+With `eager: true`, `applyOps` applies each operation in turn.
+`map` then also runs for values that a later operation overwrites.
+`map` changes each output into the entry to store.
+So a mirror can hold derived values, such as DOM nodes.
+Without `map`, `applyOps` stores each output unchanged.
 
-- HE-040: It MUST apply `ops` to `target` in order, in place, and return `target`.
-  An empty mirror replayed from the first report MUST equal the outputs, as SE-108 requires.
-- HE-041: Under `eager`, `set` MUST store `map(value, prev)`, where `prev` is the own entry at that key, or `undefined` if there is none.
-- HE-042: Under `eager`, `delete` MUST remove the key, and MUST NOT call `map`.
-- HE-043: Under `eager`, `splice` MUST call `map` once per added value, in order, before changing `target`.
+- HE-040: `applyOps` MUST apply `ops` to `target` in order and in place.
+  It MUST return `target`.
+  An empty mirror replayed from the first report MUST equal the outputs (SE-108).
+- HE-041: Under `eager`, `set` MUST store `map(value, prev)`.
+  `prev` is the own entry at that key, or `undefined` if there is none.
+- HE-042: Under `eager`, `delete` MUST remove the key.
+  It MUST NOT call `map`.
+- HE-043: Under `eager`, `splice` MUST call `map` one time for each added value, in order, before it changes `target`.
   `prev` MUST be the removed entry at the same index, or `undefined` past the removed range.
-- HE-044: `splice` MUST accept any number of added values, including more than a call can take as arguments.
-- HE-045: Under `eager`, `move` MUST place the entry from index `order[i]` at index `i`, and MUST NOT call `map`.
-- HE-046: A `__proto__` key MUST stay an own entry, and MUST NOT change the prototype of `target`.
-- HE-047: It MUST throw a `TypeError` if `target` is not an object, if `map` is given and is not a function, or if an operation is unknown.
-  Under `eager`, a `splice` or `move` on a target that is not an array MUST throw a `TypeError`.
-- HE-048: Under `eager`, an error from `map` MUST propagate, leave the current operation unapplied and keep earlier operations applied.
-- HE-049: `options.eager` MUST be a boolean when given, or `applyOps` MUST throw a `TypeError`.
-- HE-04A: Without `eager`, `target` MUST end equal to an eager replay of the same `ops` with the same `map` results, including key order.
-- HE-04B: Without `eager`, `map` MUST run once for each value still in place after all `ops`, and for no other value.
-  It MUST run in index order for an array, and in final key order among the written keys for an object.
-- HE-04C: Without `eager`, `prev` MUST be the entry from before the call that the position or key inherited, or `undefined` if there is none.
-  A moved entry carries its position, and a key removed and set again inherits its old entry.
-  One entry MUST reach `prev` at most once.
-- HE-04D: Without `eager`, `map` MUST run before `target` changes, so any error MUST leave `target` untouched.
-- HE-04E: Without `eager`, an index whose entry did not change MUST NOT be written.
-- HE-04F: Without `eager`, an operation that does not fit `target`, including `delete` on an array, MUST throw a `TypeError`.
+- HE-044: `splice` MUST accept any number of added values, also more than a function call can take as arguments.
+- HE-045: Under `eager`, `move` MUST place the entry from index `order[i]` at index `i`.
+  It MUST NOT call `map`.
+- HE-046: A `__proto__` key MUST stay an own entry.
+  It MUST NOT change the prototype of `target`.
+- HE-047: `applyOps` MUST throw a `TypeError` if `target` is not an object.
+  It MUST throw a `TypeError` if `map` is not a function and not `undefined`.
+  It MUST throw a `TypeError` for an operation that does not fit `target` (HE-04F).
+- HE-048: Under `eager`, an error from `map` MUST propagate.
+  The current operation MUST stay unapplied.
+  Earlier operations MUST stay applied.
+- HE-049: If `options.eager` is not a boolean and not `undefined`, `applyOps` MUST throw a `TypeError`.
+- HE-04A: Without `eager`, the final `target` MUST equal an eager replay of the same `ops` with the same `map` results, including key order.
+- HE-04B: Without `eager`, `map` MUST run one time for each value that stays in place after all `ops`, and for no other value.
+  For an array, it MUST run in index order.
+  For an object, it MUST run in final key order among the written keys.
+- HE-04C: Without `eager`, `prev` MUST be the entry that the position or key inherited from before the call.
+  If there is no such entry, `prev` MUST be `undefined`.
+  A `move` takes the inherited entry with it to the new position.
+  A key that one operation removes and a later operation sets inherits its old entry.
+  One entry MUST be `prev` at most one time.
+- HE-04D: Without `eager`, `map` MUST run before `target` changes.
+  So any error MUST leave `target` unchanged.
+- HE-04E: Without `eager`, `applyOps` MUST NOT write an index with an unchanged entry.
+- HE-04F: Only `splice`, `move` and `set` with an index as a number `key` fit an array target.
+  Only `set` and `delete` fit other targets.
+  An unknown operation fits no target.
+  Under `eager`, the operations before a misfit stay applied.
+- HE-04G: `applyOps` MUST treat a hole in `target` as an entry that holds `undefined`.
+  `map` MUST NOT run for a hole, because a hole is not an output.
+  The result MAY have a hole or an `undefined` entry at that index.
+  HE-04A treats these two as equal.
+  `select` produces no holes (SE-010, SE-096).
 
-`target` is written through plain assignment and array methods, so a reactive array or object sees each change.
-Read-only views such as `node.children` cannot be a target.
-Lazy folding spans one call, which is one `onChanges` report, and costs one pass over an array target.
+`applyOps` writes `target` with plain assignment and array methods.
+So a reactive array or object sees each change.
+A read-only view, such as `node.children`, cannot be a target.
+Lazy replay covers one call, which is one `onChanges` report.
+It costs one pass over an array target.
 
 ```ts
-const rows: Row[] = [];
-const state = select(users, {
-  unwrap: true,
+import { setImmediate } from "node:timers/promises";
+const rows: { user: unknown }[] = [];
+const users = select(["ann", "bob"], {
+  autoStart: true,
+  autoClose: false,
+  nonYielding: true,
   onChanges: ops =>
-    applyOps(rows, ops, (user, row) => row?.update(user) ?? new Row(user)),
+    applyOps(rows, ops, (user, row) => Object.assign(row ?? {}, { user })),
 });
+await setImmediate();
+users.reverse();
+await setImmediate();
+rows; // => [ { user: 'bob' }, { user: 'ann' } ]
 ```

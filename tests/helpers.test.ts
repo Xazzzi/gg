@@ -935,6 +935,28 @@ test("HE-04B lazy on an object maps the last set only, and a move skips map", ()
   assert.deepEqual(list, ["b", "a"]);
 });
 
+test("HE-04B lazy on an object maps in final key order", () => {
+  const seen: unknown[] = [];
+  const mark = (value: unknown) => (seen.push(value), value);
+  const target: any = applyOps(
+    { b: 0, a: 0, c: 0, 2: 0 } as any,
+    [set("a", "a"), set("b", "b"), drop("c"), set("c", "c"), set("n", "n")],
+    mark,
+  );
+  assert.deepEqual(seen, ["b", "a", "c", "n"]);
+  assert.deepEqual(Object.keys(target), ["2", "b", "a", "c", "n"]);
+  seen.length = 0;
+  applyOps({ b: 0, 1: 0 } as any, [set("b", "b"), set(1, "one")], mark);
+  assert.deepEqual(seen, ["one", "b"]);
+});
+
+test("HE-04B lazy keeps a symbol key after the string keys", () => {
+  const key = Symbol();
+  const target: any = applyOps({ a: 0 } as any, [set(key as any, 1)]);
+  assert.deepEqual(Reflect.ownKeys(target), ["a", key]);
+  assert.equal(target[key], 1);
+});
+
 test("HE-04C prev follows the position through moves and repeat writes", () => {
   const seen: unknown[][] = [];
   applyOps(
@@ -1034,12 +1056,70 @@ test("HE-04E lazy stores an undefined entry, and shrinks the target", () => {
   assert.equal(empty.length, 0);
 });
 
-test("HE-04F an operation that does not fit throws under lazy", () => {
+test("HE-04G lazy treats a hole as an undefined entry, as eager does", () => {
+  const sparse = (length: number, entries: object) => {
+    const list: unknown[] = [];
+    list.length = length;
+    return Object.assign(list, entries);
+  };
+  const replay = (target: unknown[], ops: Op[], options?: { eager: boolean }) =>
+    Array.from(applyOps(target.slice(), ops, undefined, options));
+  const cases: [unknown[], Op[]][] = [
+    [sparse(2, { 1: 1 }), [{ op: "move", order: [1, 0] }]],
+    [
+      sparse(3, { 0: 1, 2: 2 }),
+      [{ op: "splice", start: 0, removed: [1], added: [] }],
+    ],
+    [[], [set(2, 1), { op: "splice", start: 0, removed: [], added: ["a"] }]],
+  ];
+  for (const [target, ops] of cases)
+    assert.deepEqual(replay(target, ops), replay(target, ops, eager));
+  const seen: unknown[] = [];
+  applyOps(sparse(2, { 1: "a" }), [{ op: "move", order: [1, 0] }], value => {
+    seen.push(value);
+    return value;
+  });
+  assert.deepEqual(seen, []);
+});
+
+test("HE-04F an index ends below the maximum array length", () => {
+  const list: unknown[] = [];
+  applyOps(list, [set(2 ** 32 - 2, 1)], undefined, eager);
+  assert.equal(list.length, 2 ** 32 - 1);
+  for (const options of [{}, eager])
+    assert.throws(
+      () => applyOps([], [set(2 ** 32 - 1, 1)], undefined, options),
+      TypeError,
+    );
+});
+
+test("HE-04F an operation that does not fit throws", () => {
   const list = ["a"];
-  assert.throws(() => applyOps(list, [drop("0")]), TypeError);
-  assert.throws(() => applyOps({}, [cut(0, 0)]), TypeError);
-  assert.throws(() => applyOps({}, [{ op: "move", order: [] }]), TypeError);
+  for (const options of [{}, eager]) {
+    for (const key of ["x", "0", -1, 0.5, Symbol()])
+      assert.throws(
+        () => applyOps(list, [set(key as any, 1)], undefined, options),
+        TypeError,
+      );
+    assert.throws(
+      () => applyOps(list, [drop("0")], undefined, options),
+      TypeError,
+    );
+    assert.throws(
+      () => applyOps(list, [drop(0 as any)], undefined, options),
+      TypeError,
+    );
+    assert.throws(
+      () => applyOps({}, [cut(0, 0)], undefined, options),
+      TypeError,
+    );
+    assert.throws(
+      () => applyOps({}, [{ op: "move", order: [] }], undefined, options),
+      TypeError,
+    );
+  }
   assert.deepEqual(list, ["a"]);
+  assert.deepEqual(Reflect.ownKeys(list), ["0", "length"]);
 });
 
 test("HE-04A a __proto__ key stays an own entry under lazy", () => {

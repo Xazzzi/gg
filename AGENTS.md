@@ -1,6 +1,6 @@
 # Project
 
-The library provides `Channel`, `feed` and `Select`.
+The library provides `Channel`, `feed` and `select`.
 `spec/` defines intended behaviour and takes precedence over docs, tests and code.
 All source needs 100% V8 branch coverage and 100% Stryker mutation coverage.
 
@@ -11,6 +11,7 @@ Include `.ts` in imports.
 Write condensed code.
 Run tests with `node --expose-gc --test --test-timeout=250 --test-reporter=dot tests/index.test.ts`.
 `npm test` regenerates `tests/index.test.ts`, so use it after adding a test file.
+Run `npm run examples` after a change to a spec example or to behaviour that it shows.
 The user runs Stryker (`npm run test:mutations`).
 Mark untestable optimizations with `// Stryker disable next-line ConditionalExpression`, followed by a reason.
 

@@ -5,6 +5,7 @@ import { setImmediate } from "node:timers/promises";
 import { Channel, feed, type Source, StopError } from "../src/index.ts";
 
 const collect = globalThis.gc as () => void; // --expose-gc is in the test command
+const noop = () => {};
 const iter = <T, R>(ch: Channel<T, R>) => ch[Symbol.asyncIterator]();
 const all = async <T, R>(ch: Channel<T, R>) => {
   const out: T[] = [];
@@ -197,7 +198,7 @@ test("FE-017 a Promise's then is not read again", async () => {
   assert.equal(reads, 1);
 });
 
-test("FE-054 a Channel lookalike throws", () => {
+test("FE-054 FE-065 a Channel lookalike throws", () => {
   assert.throws(() => feed([1], Object.create(Channel.prototype)), TypeError);
 });
 
@@ -689,6 +690,23 @@ test("FE-003 options of the wrong type throw, and undefined selects the default"
   assert.deepEqual(await all(ch), [1]);
 });
 
+test("FE-046 no return when the channel ends during the await of a return value", async () => {
+  const ch = every<number>();
+  let returned = 0;
+  const source = {
+    next: () => ({ done: true, value: new Promise(noop) }),
+    return() {
+      returned++;
+      return {};
+    },
+  };
+  const run = feed(source as any, ch, { autoStart: true, sendReturn: true });
+  await setImmediate();
+  ch.close();
+  await run;
+  assert.equal(returned, 0);
+});
+
 test("FE-046 an error from reading done or value is a source failure", async () => {
   for (const key of ["done", "value"]) {
     const failure = new Error(key);
@@ -947,4 +965,91 @@ test("FE-015 a thenable return value is not touched", async () => {
   await feed(raw([{ done: true, value }]), ch, { autoStart: true });
   assert.equal(called, false);
   assert.deepEqual(await all(ch), []);
+});
+
+test("FE-060 return takes effect only after the generator's await settles", async () => {
+  const gate = Promise.withResolvers<void>();
+  const log: string[] = [];
+  async function* source() {
+    try {
+      yield 1;
+      await gate.promise;
+    } finally {
+      log.push("finally");
+    }
+  }
+  const ch = every<number>();
+  const run = feed(source(), ch, { autoStart: true, backPressure: false });
+  await setImmediate();
+  ch.close();
+  await run;
+  assert.deepEqual(log, []);
+  gate.resolve();
+  await setImmediate();
+  assert.deepEqual(log, ["finally"]);
+});
+
+test("FE-061 a value pulled for a terminal channel never gets to another consumer", async () => {
+  const queue = new Channel<number>({ thenReceive: "unread" });
+  const ch = every<number>();
+  const run = feed(queue, ch, { autoStart: true });
+  await setImmediate();
+  ch.close();
+  await run;
+  queue.send(1);
+  await setImmediate();
+  queue.close();
+  assert.equal((await iter(queue).next()).done, true);
+});
+
+test("FE-062 a run with no read stays blocked until the channel is terminal", async () => {
+  const ch = every<number>();
+  let ended = false;
+  const run = feed([1], ch, { autoStart: true }).then(() => {
+    ended = true;
+  });
+  await setImmediate();
+  assert.equal(ended, false);
+  ch.close();
+  await run;
+});
+
+test("FE-063 a failed run stops the other runs", async () => {
+  const ch = every<number>();
+  const failure = new Error("x");
+  let returned = 0;
+  const open = {
+    next: () => new Promise(noop),
+    return() {
+      returned++;
+      return {};
+    },
+  };
+  await Promise.all([
+    feed(open as any, ch, { autoStart: true }),
+    feed(Promise.reject(failure), ch, { autoStart: true }),
+  ]);
+  assert.equal(returned, 1);
+  await assert.rejects(iter(ch).next(), e => e === failure);
+});
+
+test("FE-064 an always-ready source starves the event loop", async () => {
+  let ticked = false;
+  setImmediate().then(() => {
+    ticked = true;
+  });
+  async function* source() {
+    for (let i = 0; i < 100; i++) yield i;
+  }
+  await feed(source(), every<number>(), {
+    autoStart: true,
+    backPressure: false,
+  });
+  assert.equal(ticked, false);
+});
+
+test("FE-066 stop with no backPressure can discard the final values", async () => {
+  const ch = new Channel<number>({ stopStyle: "stop" });
+  await feed([1], ch, { autoStart: true, backPressure: false });
+  assert.equal((await iter(ch).next()).done, true);
 });

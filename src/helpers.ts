@@ -213,20 +213,31 @@ const incoming = (value: unknown, prev: unknown): Cell => ({
   prev,
 });
 const inherited = (cell?: Cell) => (cell?.fresh ? cell.prev : cell?.entry);
-const misfit = (op: Op) =>
-  new TypeError(`applyOps cannot replay ${op.op} on this target`);
+// A symbol throws a TypeError here, as HE-04F needs.
+const isIndex = (key: any) => key >>> 0 === key && key !== 2 ** 32 - 1;
+
+const checkFit = (op: Op, array: boolean) => {
+  const fits = array
+    ? op.op === "splice" ||
+      op.op === "move" ||
+      (op.op === "set" && isIndex(op.key))
+    : op.op === "set" || op.op === "delete";
+  if (!fits)
+    throw new TypeError(`applyOps cannot replay ${op.op} on this target`);
+};
 
 const foldArray = (target: any[], ops: readonly Op[], map: any) => {
   const cells: Cell[] = target.map(entry => ({ entry }));
   for (const op of ops) {
+    checkFit(op, true);
     if (op.op === "set")
       cells[op.key as number] = incoming(
         op.value,
         inherited(cells[op.key as number]),
       );
     else if (op.op === "move") relocate(cells, op.order);
-    else if (op.op === "splice") {
-      const { start, removed, added } = op,
+    else {
+      const { start, removed, added } = op as Extract<Op, { op: "splice" }>,
         count = removed.length;
       const items = added.map((value, index) =>
         incoming(
@@ -235,10 +246,11 @@ const foldArray = (target: any[], ops: readonly Op[], map: any) => {
         ),
       );
       replace(cells, start, count, items);
-    } else throw misfit(op);
+    }
   }
+  // Relocating a hole makes it an undefined cell, which reads as an undefined entry (HE-04G).
   const items = cells.map(cell =>
-    cell.fresh ? map(cell.value, cell.prev) : cell.entry,
+    cell?.fresh ? map(cell.value, cell.prev) : cell?.entry,
   );
   items.forEach((item, index) => {
     if (index >= target.length || !Object.is(target[index], item))
@@ -252,16 +264,25 @@ const foldObject = (target: any, ops: readonly Op[], map: any) => {
   const sets = new Map<PropertyKey, Cell>(),
     gone = new Set<PropertyKey>();
   for (const op of ops) {
-    if (op.op === "set")
-      sets.set(op.key, incoming(op.value, own(target, op.key)));
-    else if (op.op === "delete") {
-      gone.add(op.key);
-      sets.delete(op.key);
-    } else throw misfit(op);
+    checkFit(op, false);
+    const { key } = op as Extract<Op, { key: unknown }>,
+      name = typeof key === "number" ? `${key}` : key;
+    if (op.op === "set") sets.set(name, incoming(op.value, own(target, name)));
+    else {
+      gone.add(name);
+      sets.delete(name);
+    }
   }
-  const entries = [...sets].map(
-    ([key, cell]) => [key, map(cell.value, cell.prev)] as const,
-  );
+  // Rebuilds the final key order, which HE-04B needs, with no __proto__ setter.
+  const order = Object.create(null);
+  for (const key of Reflect.ownKeys(target)) if (!gone.has(key)) order[key] = 0;
+  for (const key of sets.keys()) order[key] = 0;
+  const entries = Reflect.ownKeys(order)
+    .filter(key => sets.has(key))
+    .map(key => {
+      const { value, prev } = sets.get(key) as Cell;
+      return [key, map(value, prev)] as const;
+    });
   for (const key of gone) delete target[key];
   for (const [key, value] of entries) store(target, key, value);
   return target;
@@ -286,24 +307,21 @@ export function applyOps(
   checkOptions(options, { eager: "boolean" });
   if (!options.eager)
     return (Array.isArray(target) ? foldArray : foldObject)(target, ops, map);
+  const array = Array.isArray(target);
   for (const op of ops) {
+    checkFit(op, array);
     if (op.op === "set")
       store(target, op.key, map(op.value, own(target, op.key)));
     else if (op.op === "delete") delete target[op.key];
-    else if (op.op === "move") {
-      if (!Array.isArray(target))
-        throw new TypeError("applyOps move needs an array target");
-      relocate(target, op.order);
-    } else if (op.op === "splice") {
-      if (!Array.isArray(target))
-        throw new TypeError("applyOps splice needs an array target");
-      const { start, removed, added } = op,
+    else if (op.op === "move") relocate(target, op.order);
+    else {
+      const { start, removed, added } = op as Extract<Op, { op: "splice" }>,
         count = removed.length;
       const items = added.map((value, index) =>
         map(value, index < count ? target[start + index] : undefined),
       );
       replace(target, start, count, items);
-    } else throw new TypeError("applyOps got an unknown operation");
+    }
   }
   return target;
 }

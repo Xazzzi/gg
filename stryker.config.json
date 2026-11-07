@@ -4,7 +4,7 @@
   "reporters": ["clear-text", "progress", "json"],
   "testRunner": "command",
   "commandRunner": {
-    "command": "node --expose-gc --test --test-timeout=250 tests/index.test.ts"
+    "command": "node --expose-gc --test-timeout=250 --test-reporter=./tests/bail-reporter.ts tests/index.test.ts"
   },
   "coverageAnalysis": "all",
   "tsconfigFile": "tsconfig.stryker-none.json"

@@ -23,11 +23,12 @@
     "pretest": "node generate-tests-index.ts",
     "test": "node --expose-gc --test --test-timeout=250 --test-reporter=dot tests/index.test.ts",
     "test:human": "node --expose-gc --test --test-timeout=250 --experimental-test-coverage tests/index.test.ts",
+    "examples": "node update-spec-examples.ts",
     "test:branches": "node find-uncovered-branches.ts",
     "test:perf": "node tests/perf.ts",
     "test:mutations": "npm run pretest && stryker run; node generate-surviving-mutants.ts",
     "test:redundant": "npm run pretest && node find-redundant-tests.ts",
-    "checks": "npm run type && npm run lint && npm run test"
+    "checks": "npm run type && npm run lint && npm run test && node update-spec-examples.ts --check"
   },
   "keywords": [
     "generator",

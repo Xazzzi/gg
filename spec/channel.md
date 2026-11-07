@@ -1,16 +1,17 @@
 # Channel
 
 This document is self-contained.
-An implementation built from it alone MUST be complete and valid.
+An implementation made from this document alone MUST be complete and valid.
 The key words MUST, MUST NOT, SHOULD and MAY are normative.
-Rule IDs are stable, and tests reference them in their names.
+Rule IDs are stable.
+The name of a test contains the ID of its rule.
 
 ## Purpose
 
 `Channel` is an async stream with multiple producers and multiple consumers.
 Producers push values with `send` or `asend`.
 Consumers pull values through the async iterator protocol, usually with `for await`.
-Options choose whether the channel acts as a broadcast, a latest-value holder or a work queue.
+Options set the channel to act as a broadcast, a store of the latest value or a work queue.
 
 ## Environment
 
@@ -53,119 +54,129 @@ export class StopError extends Error {
 }
 ```
 
-The return type includes `undefined` because `close()` and disposal pass no value.
-Nothing else is public.
+The return type includes `undefined` because `close()` and `Symbol.dispose` give no value.
+No other name is public.
 
 ## Model
 
-These terms define behaviour.
-The implementation MAY use any internal structure with the same observable behaviour.
+These terms define the behaviour.
+The implementation MAY use any internal structure that gives the same observable behaviour.
 
 - **Log**: all values sent, in `send` call order, numbered from 1.
 - **Newest**: the log's last value.
-- **Producer**: code calling `send` or `asend`.
+- **Producer**: code that calls `send` or `asend`.
 - **Consumer**: one iterator returned by `ch[Symbol.asyncIterator]()`.
 - **Attach**: a consumer's first `next()` call.
-  Creating the iterator has no effect.
-- **Active consumer**: a consumer that has attached and has not ended.
-  An attached consumer dropped without `return()` stays active, because the channel cannot observe that.
+  A `ch[Symbol.asyncIterator]()` call has no effect.
+- **Active consumer**: a consumer that attached and did not end.
+  An attached consumer stays active if code abandons it, because the channel cannot see this.
 - **Read**: a consumer takes a value from the log.
-  A read happens in a microtask, never during the `send` call.
+  A read occurs in a microtask, and never during the `send` call.
 - **Blocked**: a consumer has a pending `next()` and no value to read.
-- **Busy**: a consumer has received a value and has not called `next()` again.
+- **Busy**: a consumer got a value and did not call `next()` again.
 - **Position**: the number of the last value a consumer read.
-- **Head**: one shared log number, used by `"unread"` modes.
-- **Terminal**: the channel has been closed or thrown.
-- **Stop error**: the `StopError` given to producers and `signal` once the channel is terminal.
+- **Head**: one shared log number that `"unread"` modes use.
+- **Terminal**: the state of a channel after its first `close` or `throw` call.
+- **Stop error**: the `StopError` that producers and `signal` get when the channel is terminal.
+- **Retain**: prevent garbage collection of a value.
 
 ## Construction
 
-- CH-001: Defaults MUST be `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"`.
+- CH-001: The defaults MUST be `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"`.
 - CH-002: The constructor MUST throw a `TypeError` if `thenReceive` is `"unread"` and `firstReceive` is not `"unread"`.
-- CH-003: The constructor MUST throw a `TypeError` for an option value not listed in the Public API.
+- CH-003: The constructor MUST throw a `TypeError` for an option value that the Public API does not list.
 
-CH-002 exists because `thenReceive: "unread"` guarantees each value reaches one consumer.
-That guarantee depends on every consumer taking values from the shared head.
-`firstReceive: "first"` and `"latest"` could read a value another consumer already took.
-`firstReceive: "next"` could skip values no consumer has taken.
+CH-002 exists because `thenReceive: "unread"` guarantees that one consumer gets each value.
+This guarantee needs all consumers to take values from the shared head.
+`firstReceive: "first"` and `"latest"` can read a value that another consumer took.
+`firstReceive: "next"` can skip values that no consumer took.
 
 ## Sending
 
-- CH-010: `send` MUST append to the log and return `undefined` synchronously.
+- CH-010: `send` MUST add the value to the log.
+  It MUST return `undefined` synchronously.
 - CH-011: `send` MUST NOT run consumer code synchronously.
-- CH-012: Any value except a thenable MUST be accepted, including `undefined` and `null`.
-- CH-013: `send` MUST throw a `TypeError` for a thenable, and `asend` MUST reject with one.
+- CH-012: The channel MUST accept any value except a thenable, including `undefined` and `null`.
+- CH-013: `send` MUST throw a `TypeError` for a thenable.
+  `asend` MUST reject with a `TypeError` for a thenable.
   A thenable is an object or function with a callable `then` property.
-  The value is not appended to the log.
-  An error from reading `then` MUST propagate the same way.
+  The log does not get the value.
+  If the read of `then` throws an error, `send` MUST throw that error and `asend` MUST reject with it.
 - CH-014: `send` on a terminal channel MUST throw the stop error.
-  This takes precedence over CH-013.
-  The check MUST run again after reading `then`, because a `then` getter can close the channel.
-  An error from reading `then` takes precedence over that second check.
-- CH-015: `asend` MUST append to the log as `send` does.
-- CH-016: `asend` on a terminal channel MUST reject with the stop error, checking as CH-014 does.
-- CH-017: `asend` MUST resolve with `undefined` when any consumer reads its value or a later value.
-- CH-018: `asend` MUST resolve at the read, without waiting for the consumer to finish handling the value.
-- CH-019: `asend` MUST stay pending while no read reaches its value.
-  With no consumers, it stays pending until the channel is terminal.
-- CH-01A: A pending `asend` MUST reject with the stop error when the channel turns terminal.
-- CH-01B: A pending `asend` MUST NOT depend on garbage collection in any way.
-- CH-01C: An `asend` rejection with the stop error MUST NOT become an `unhandledRejection`.
-  A producer awaiting the `asend` still receives it.
-  A rejection by CH-013 stays unhandled if ignored, because it is a programming error.
-- CH-01D: A rejection by CH-01A does not mean the value was dropped.
-  Under `"drain"`, a consumer can still read it, so a producer that retries MUST tolerate duplicates.
+  This rule has priority over CH-013.
+  `send` MUST do this check again after it reads `then`, because a `then` getter can close the channel.
+  An error from the read of `then` has priority over the second check.
+- CH-015: `asend` MUST add the value to the log as `send` does.
+- CH-016: `asend` on a terminal channel MUST reject with the stop error.
+  `asend` does the checks of CH-014.
+- CH-017: `asend` MUST resolve with `undefined` when a consumer reads its value or a later value.
+- CH-018: `asend` MUST resolve at the read.
+  It MUST NOT wait for the consumer to finish its work on the value.
+- CH-019: `asend` MUST stay pending while no consumer has read its value or a later value.
+  If there are no consumers, it stays pending until the channel is terminal.
+- CH-01A: A pending `asend` MUST reject with the stop error when the channel becomes terminal.
+- CH-01B: A pending `asend` MUST NOT depend on garbage collection.
+- CH-01C: A rejection of `asend` with the stop error MUST NOT cause an `unhandledRejection`.
+  A producer that awaits the `asend` still gets the rejection.
+  A CH-013 rejection stays unhandled if the producer ignores it, because it is a programming error.
+- CH-01D: A CH-01A rejection does not mean that the channel discarded the value.
+  Under `"drain"`, a consumer can still read the value.
+  So a producer that retries MUST tolerate duplicates.
 
 ## First receive
 
-`firstReceive` selects the first value a consumer reads.
+`firstReceive` sets the first value that a consumer reads.
 
 - CH-020: `"first"` MUST start at value 1.
-- CH-021: `"unread"` MUST start at the head, evaluated in the read's microtask.
-- CH-022: `"latest"` MUST start at the newest value at attach, or the next value sent if the log is empty.
+- CH-021: `"unread"` MUST start at the head.
+  The read's microtask evaluates the head.
+- CH-022: `"latest"` MUST start at the newest value at attach.
+  If the log is empty, it MUST start at the next value sent.
 - CH-023: `"next"` MUST start at the first value sent after attach.
-- CH-024: A consumer MUST block when its starting value has not been sent yet.
+- CH-024: A consumer MUST block while its starting value is not in the log.
 
 ## Then receive
 
-`thenReceive` selects each value after the first.
+`thenReceive` sets each value after the first.
 
 - CH-030: `"every"` MUST read position + 1.
-- CH-031: `"latest"` MUST read the newest value if it is later than the position.
-  This is evaluated when that `next()` call starts running, after any earlier `next()` call of this consumer has settled.
-- CH-032: Otherwise `"latest"` MUST block, and read the first value sent after that.
-- CH-033: `"latest"` MUST NOT deliver the same value twice to one consumer.
+- CH-031: `"latest"` MUST read the newest value if that value is after the position.
+  The consumer does this check when the `next()` call starts to run, after all earlier `next()` calls of this consumer settle.
+- CH-032: If there is no such value, `"latest"` MUST block.
+  It MUST then read the first value that a producer sends after the block starts.
+- CH-033: `"latest"` MUST NOT give the same value to one consumer two times.
 - CH-034: `"unread"` MUST read the head.
-- CH-035: Under `"unread"`, two consumers MUST NOT receive the same value.
-- CH-036: The order in which blocked `"unread"` consumers receive values is unspecified.
+- CH-035: Under `"unread"`, two consumers MUST NOT get the same value.
+- CH-036: This spec does not define the order in which blocked `"unread"` consumers get values.
 - CH-037: Consumers MUST keep independent positions.
 
 ## Head
 
 - CH-040: The head MUST start at 1.
-- CH-041: Reading the head under `thenReceive: "every"` or `"unread"` MUST advance it by one.
-- CH-042: Reading the head under `thenReceive: "latest"` MUST move it to the next value to be sent.
-- CH-043: Reading any other value MUST NOT move the head.
+- CH-041: A read of the head under `thenReceive: "every"` or `"unread"` MUST increase it by one.
+- CH-042: A read of the head under `thenReceive: "latest"` MUST move it to the next value to send.
+- CH-043: A read of any other value MUST NOT move the head.
 - CH-044: `firstReceive: "first"`, `"latest"` and `"next"` MUST NOT move the head.
 
 ## Valid modes
 
-| firstReceive | `every`              | `latest`             | `unread`          |
-| ------------ | -------------------- | -------------------- | ----------------- |
-| `first`      | Replay all, then all | Value 1, then newest | Invalid by CH-002 |
-| `unread`     | Head, then all       | Head, then newest    | Work queue        |
-| `latest`     | Newest, then all     | Newest, then newest  | Invalid by CH-002 |
-| `next`       | Future values only   | Next, then newest    | Invalid by CH-002 |
+| firstReceive | `every`              | `latest`             | `unread`         |
+| ------------ | -------------------- | -------------------- | ---------------- |
+| `first`      | Replay all, then all | Value 1, then newest | Invalid (CH-002) |
+| `unread`     | Head, then all       | Head, then newest    | Work queue       |
+| `latest`     | Newest, then all     | Newest, then newest  | Invalid (CH-002) |
+| `next`       | Future values only   | Next, then newest    | Invalid (CH-002) |
 
 The table has 9 valid modes.
-`stopStyle` applies to each one, which gives 18 valid configurations.
+`stopStyle` applies to each mode.
+So there are 18 valid configurations.
 
 ## Memory
 
-- CH-050: A value no current or future consumer can read MUST be collectable.
-- CH-051: The channel MUST NOT bound its backlog, because `asend` provides backpressure.
+- CH-050: If no current or future consumer can read a value, the garbage collector MUST be able to collect it.
+- CH-051: The channel MUST NOT limit its backlog, because `asend` gives backpressure.
 
-CH-050 retains these values, and no others:
+Under CH-050, the channel retains only these values:
 
 | firstReceive | Retained for future consumers                                                                           |
 | ------------ | ------------------------------------------------------------------------------------------------------- |
@@ -174,55 +185,68 @@ CH-050 retains these values, and no others:
 | `latest`     | The newest value                                                                                        |
 | `next`       | Nothing                                                                                                 |
 
-Under `unread`, the newest value is retained only while the head value is unread.
+Under `unread`, the channel retains the newest value only while the head value is unread.
 A consumer under `every` also retains every value after its position.
 A consumer under `latest` retains only its next value.
 
 ## Termination
 
 - CH-060: The first `close` or `throw` call MUST make the channel terminal.
-- CH-061: Later `close` and `throw` calls MUST have no effect, including on the return value.
+- CH-061: Later `close` and `throw` calls MUST have no effect.
+  This includes the return value.
 - CH-062: `signal` MUST abort synchronously, with the stop error as its reason.
 - CH-063: `ch[Symbol.dispose]()` MUST behave as `close()`.
-- CH-064: Under `"drain"`, a consumer MUST keep reading by its modes until nothing is left to read.
-- CH-065: Under `"stop"`, a read MUST NOT happen once the channel is terminal.
-  The check runs in the read's microtask, so `send(1); close();` in one synchronous run always drops `1`.
-  A value read before terminal is still delivered.
-- CH-066: Ending after `close(value)` MUST produce `{ done: true, value }`.
-- CH-067: Ending after `throw(error)` MUST reject the `next()` call with `error`, unchanged.
-- CH-068: CH-066 and CH-067 apply to blocked, busy and late-attaching consumers alike.
-- CH-069: Under `"drain"`, a consumer attaching after terminal MUST read by its modes, then end.
-- CH-06A: Under `"stop"`, a consumer attaching after terminal MUST end on its first `next()`.
-- CH-06B: After ending, every further `next()` MUST produce `{ done: true, value: undefined }`.
-- CH-06C: `close` MUST throw a `TypeError` for a thenable, and the channel stays open.
-  An async generator would otherwise adopt it, which breaks CH-066.
-  An error from reading `then` MUST propagate, and the channel stays open.
-  CH-061 takes precedence.
+- CH-064: Under `"drain"`, a consumer MUST keep reading by its modes until it has no value to read.
+- CH-065: Under `"stop"`, a read MUST NOT occur when the channel is terminal.
+  The check occurs in the read's microtask.
+  So `send(1); close();` in one synchronous run always discards `1`.
+  A consumer still gets a value that it read before the channel became terminal.
+- CH-066: After `close(value)`, the end of a consumer MUST produce `{ done: true, value }`.
+- CH-067: After `throw(error)`, the end of a consumer MUST reject the `next()` call with the unchanged `error`.
+- CH-068: CH-066 and CH-067 apply to blocked consumers, busy consumers and consumers that attach late.
+- CH-069: Under `"drain"`, a consumer that attaches after the channel is terminal MUST read by its modes, then end.
+- CH-06A: Under `"stop"`, a consumer that attaches after the channel is terminal MUST end on its first `next()`.
+- CH-06B: After a consumer ends, each later `next()` MUST produce `{ done: true, value: undefined }`.
+- CH-06C: `close` MUST throw a `TypeError` for a thenable.
+  The channel stays open.
+  Without this rule, an async generator adopts the thenable.
+  CH-066 then fails.
+  If the read of `then` throws an error, `close` MUST throw that error.
+  That `close` call does not make the channel terminal.
+  `close` on a terminal channel does not read `then`, so CH-061 applies.
+  If a `then` getter closes the channel and does not throw, CH-061 applies.
+  If that getter throws, `close` MUST throw that error, because the channel was open at the start of the call.
 
 ## Consumer lifetime
 
 The consumer is an async generator.
-These rules follow from generator semantics.
+These rules come from generator semantics.
 
-- CH-070: `return()` MUST detach only that consumer and MUST NOT close the channel.
-- CH-071: `throw(error)` MUST end only that consumer, which rejects with `error`.
-- CH-072: Detaching MUST NOT acknowledge any value.
-- CH-073: With a `next()` pending, `return()` and `throw()` wait until that `next()` settles.
-  The pending `next()` still reads a value, so a work queue loses that value.
-  Callers MUST NOT abandon a pending `next()` if that loss matters.
+- CH-070: `return()` MUST detach only that consumer.
+  It MUST NOT close the channel.
+- CH-071: `throw(error)` MUST end only that consumer.
+  That consumer rejects with `error`.
+- CH-072: `return()` and `throw()` on a consumer MUST NOT resolve an `asend`.
+- CH-073: If a `next()` is pending, `return()` and `throw()` wait until that `next()` settles.
+  The pending `next()` still reads a value.
+  So under `"unread"`, no other consumer gets that value.
+  If this is a problem, a caller MUST NOT abandon a pending `next()`.
 - CH-074: `break` in `for await` MUST behave as `return()`.
-  No `next()` is pending at that point, so CH-073 does not apply.
+  No `next()` is pending at that point.
+  So CH-073 does not apply.
 
 ## Stop error
 
 - CH-080: The stop error MUST be a `StopError`, which extends `Error`, with the message `"Channel closed"`.
-- CH-081: Its `reason` property MUST be `undefined` after `close`, and the thrown value after `throw`.
+- CH-081: Its `reason` property MUST be `undefined` after `close`.
+  It MUST be the thrown value after `throw`.
 - CH-082: A channel MUST use one stop error instance for all producers and `signal.reason`.
-- CH-083: Consumers MUST NOT receive the stop error, as CH-066 and CH-067 define how they end.
-- CH-084: `instanceof StopError` MUST hold across separate copies of the library.
+- CH-083: Consumers MUST NOT get the stop error.
+  CH-066 and CH-067 define how consumers end.
+- CH-084: `instanceof StopError` MUST return true across separate copies of the library.
   `StopError` implements `Symbol.hasInstance` over a `Symbol.for("gg.StopError")` brand on its instances.
 
-Producers detect a stopped channel with `instanceof`:
+Producers detect a terminal channel with `instanceof`:
 
 ```ts
 try {
@@ -235,35 +259,35 @@ try {
 
 ## Internal API
 
-This API is shared between library modules and MUST NOT be exported from the package.
+Library modules share this API.
+The package MUST NOT export it.
 
-- CH-090: `attached(channel)` MUST return a promise that resolves once the channel has an active consumer.
-- CH-091: It MUST resolve immediately if an active consumer exists when it is called.
-- CH-092: It MUST reject with the stop error if the channel is terminal, or turns terminal first.
-  This takes precedence over CH-091.
+- CH-090: `attached(channel)` MUST return a promise that resolves when the channel has an active consumer.
+- CH-091: It MUST resolve immediately if an active consumer exists at the call.
+- CH-092: It MUST reject with the stop error if the channel is terminal, or becomes terminal first.
+  This rule has priority over CH-091.
 - CH-093: It MUST NOT add anything to the log.
 - CH-094: The channel MUST keep a count of active consumers.
-  A consumer MUST leave the count when it ends for any reason.
+  A consumer MUST leave the count when it ends, for any reason.
 - CH-095: This API works only within one copy of the library.
 
 ## Examples
 
-Default modes, with a consumer that attaches late:
+`stopStyle: "drain"` lets a consumer read all values before it ends:
 
 ```ts
-const ch = new Channel<number>();
+const ch = new Channel<number, string>();
 ch.send(1);
 ch.send(2);
 ch.send(3);
 const it = ch[Symbol.asyncIterator]();
-await it.next(); // { value: 1, done: false }, the head by CH-021
-await it.next(); // { value: 2, done: false }, position + 1 by CH-030
+await it.next(); // => { value: 1, done: false } (CH-021)
+await it.next(); // => { value: 2, done: false } (CH-030)
 ch.close("end");
-await it.next(); // { value: "end", done: true }, nothing left to read
+await it.next(); // => { value: 3, done: false } (CH-064)
+await it.next(); // => { value: 'end', done: true } (CH-066)
+await it.next(); // => { value: undefined, done: true } (CH-06B)
 ```
-
-`Channel<number>` rejects `close("end")` at compile time.
-This example needs `Channel<number, string>`.
 
 Work queue:
 
@@ -273,11 +297,11 @@ const a = ch[Symbol.asyncIterator]();
 const b = ch[Symbol.asyncIterator]();
 ch.send(1);
 ch.send(2);
-await a.next(); // Value 1
-await b.next(); // Value 2, and never value 1
+await a.next(); // => { value: 1, done: false } (CH-035)
+await b.next(); // => { value: 2, done: false } (CH-035)
 ```
 
-Stop discards values a consumer has not received:
+`stopStyle: "stop"` discards values that a consumer did not get:
 
 ```ts
 const ch = new Channel<number>({ stopStyle: "stop" });
@@ -285,7 +309,7 @@ const it = ch[Symbol.asyncIterator]();
 const pending = it.next(); // Blocked
 ch.send(1);
 ch.close();
-await pending; // { value: undefined, done: true }
+await pending; // => { value: undefined, done: true } (CH-065)
 ```
 
 Producers and consumers see different errors after `throw`:
@@ -294,6 +318,7 @@ Producers and consumers see different errors after `throw`:
 const ch = new Channel<number>();
 const failure = new Error("upstream");
 ch.throw(failure);
-ch.send(1); // Throws a StopError with reason === failure
-await ch[Symbol.asyncIterator]().next(); // Rejects with failure
+ch.send(1); // => throws StopError: Channel closed (CH-014)
+ch.signal.reason.reason === failure; // => true (CH-081)
+await ch[Symbol.asyncIterator]().next(); // => throws Error: upstream (CH-067)
 ```

@@ -2122,6 +2122,15 @@ test("SE-097 a no-op mutator produces no flush", async () => {
   assert.equal(log.length, count);
 });
 
+test("SE-091 SE-098 a BigInt throws as on an Array", () => {
+  const list = select([1, 2]) as any;
+  assert.throws(() => (list.length = 1n), TypeError);
+  assert.throws(() => list.splice(1n), TypeError);
+  assert.throws(() => list.fill(0, 1n), TypeError);
+  assert.throws(() => list.copyWithin(1n, 0), TypeError);
+  assert.deepEqual([...list], [1, 2]);
+});
+
 test("SE-098 length writes follow Array", async () => {
   const log = opLog();
   const s: any = select([1, 2, 3], { ...open, ...log });
@@ -2980,4 +2989,87 @@ test("SE-081 a written key has a plain data descriptor", async () => {
     configurable: true,
   });
   s[CHAN].close();
+});
+
+test("SE-135 a consumer that stops its next calls blocks the flush at step 4", async () => {
+  let reports = 0;
+  const s = select(
+    { a: 1 },
+    {
+      autoClose: false,
+      onChanges: () => {
+        reports++;
+      },
+    },
+  );
+  await iter(s).next();
+  s.a = 2;
+  await setImmediate();
+  assert.equal(reports, 2);
+  s.a = 3;
+  await setImmediate();
+  assert.equal(reports, 2);
+  s[CHAN].close();
+});
+
+test("SE-136 a value pulled for a removed slot never gets to another consumer", async () => {
+  const queue = new Channel<number>({ thenReceive: "unread" });
+  const s: any = select(
+    { a: queue },
+    {
+      autoStart: true,
+      autoClose: false,
+      backPressure: false,
+      nonYielding: true,
+    },
+  );
+  await setImmediate();
+  s.a = 0;
+  queue.send(1);
+  await setImmediate();
+  queue.close();
+  assert.equal((await iter(queue).next()).done, true);
+  s[CHAN].close();
+});
+
+test("SE-136 next on a removed iterator gets the value after the one in progress", async () => {
+  const gate = Promise.withResolvers<void>();
+  const source = (async function* () {
+    await gate.promise;
+    yield 1;
+    yield 2;
+  })();
+  const s: any = select(
+    { a: source },
+    {
+      autoStart: true,
+      autoClose: false,
+      backPressure: false,
+      nonYielding: true,
+    },
+  );
+  await setImmediate();
+  s.a = 0;
+  const next = source.next();
+  gate.resolve();
+  assert.equal((await next).value, 2);
+  s[CHAN].close();
+});
+
+test("SE-137 an always-ready async source starves the event loop", async () => {
+  let ticked = false;
+  setImmediate().then(() => {
+    ticked = true;
+  });
+  const source = (async function* () {
+    for (let i = 0; i < 100; i++) yield i;
+  })();
+  const s = select(
+    { source },
+    { autoStart: true, backPressure: false, nonYielding: true },
+  );
+  await new Promise(resolve =>
+    s[CHAN].signal.addEventListener("abort", resolve),
+  );
+  assert.equal(ticked, false);
 });

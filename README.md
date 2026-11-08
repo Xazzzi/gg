@@ -1,9 +1,9 @@
 # @xazzzi/gg [![CI](https://github.com/Xazzzi/gg/actions/workflows/ci.yml/badge.svg)](https://github.com/Xazzzi/gg/actions/workflows/ci.yml)
 
-Tiny zero-dependency concurrent primitives for JavaScript and TypeScript.
+Zero-dependency concurrent primitives for JavaScript and TypeScript.
 `Channel` moves values, `feed` fills channels from sources, and `select` combines sources into one state.
 
-10kB gzipped, tree-shakeable.
+12kB gzipped, tree-shakeable.
 Features 100% coverage, including Stryker mutation tests.
 Requires Node 22 or later. ESM only.
 
@@ -41,8 +41,9 @@ Options select the mode:
 | `latest`     | Newest, then all     | Newest, then newest  | Invalid    |
 | `next`       | Future values only   | Next, then newest    | Invalid    |
 
-Defaults are `firstReceive: "unread"`, `thenReceive: "every"` and `stopStyle: "drain"`.
+Defaults are `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"` and `ackStyle: "any"`.
 `stopStyle: "stop"` discards values not yet read when the channel ends.
+`ackStyle: "all"` makes `asend` wait for every consumer, so a slow consumer holds at most one unread value for each producer that awaits.
 
 ## feed
 
@@ -81,7 +82,7 @@ Without `unwrap`, each source appears as a `Val` with `status`, `value`, `reason
 `sort` and `reverse` move slots without restarting sources, and `sort` compares sources.
 `sortOutputs` moves slots the same way, and compares outputs once.
 
-`break` detaches one consumer, and leaves the sources running.
+`break` detaches one consumer, and leaves the sources open.
 Bind the state with `using`, or call `close` in `finally`, to stop them.
 
 ```ts
@@ -93,6 +94,7 @@ for await (const { users } of state) if (users?.length) break;
 
 - `abortable(promise, signal)` waits for a promise until a signal aborts.
 - `catching(source, onError)` wraps a source so a failure ends it quietly.
+- `derive(source, map)` maps each value of an async iterable, so a dynamic prop or child follows a computed value.
 - `spread` turns `Val` fields into `kLoading`, `kError` and `kDone`, for `mapSnapshot: spread`.
 - `isVal(value)` tests for a `Val`, across copies of the library.
 - `applyOps(target, ops, map?, { eager })` replays operations onto a mirror, and `map` derives each entry.
@@ -110,6 +112,7 @@ The instance yields its node, then changes the nodes it owns.
 It yields again only to replace its node, or to wake its host with the same node.
 A promise or an async iterable is a child, so a channel of strings is live text.
 Props set attributes, and `value`, `checked`, `selected`, `indeterminate` and `muted` set properties.
+A promise or an async iterable prop is live, and sets its attribute or property with each value.
 SVG tags get the SVG namespace, and an `xmlns` prop sets any namespace.
 `mount` returns a function that stops the components and empties the parent.
 An element runs its dynamic children only once `mount` or a host places it, so a detached element costs nothing.

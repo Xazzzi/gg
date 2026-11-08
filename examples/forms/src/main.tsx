@@ -1,4 +1,12 @@
-import { consume, mount, type Props, Provide, use, watch } from "@xazzzi/gg";
+import {
+  consume,
+  derive,
+  mount,
+  type Props,
+  Provide,
+  use,
+  watch,
+} from "@xazzzi/gg";
 import {
   COUNTRIES,
   createForm,
@@ -18,6 +26,7 @@ type Keys<T> = {
 // Each control takes the form from its provider, sets its first value through a live property,
 // writes the form on input, then watches its field, except while focused, so typing "3." survives.
 // watch wakes a control only when its own field changes, so a slider drag runs one control.
+// A control with no focus rule binds its live property to watch, as a dynamic prop.
 
 async function* TextField({
   field,
@@ -72,12 +81,11 @@ async function* Toggle({ field }: { field: Keys<boolean> }) {
   const box = (
     <input
       type="checkbox"
-      checked={form[field]}
+      checked={watch(form, field)}
       onchange={() => (form[field] = box.checked)}
     />
   ) as HTMLInputElement;
   yield box;
-  for await (const value of watch(form, field)) box.checked = value;
 }
 
 async function* Radio({
@@ -93,13 +101,11 @@ async function* Radio({
       type="radio"
       name={field}
       value={value}
-      checked={form[field] === value}
+      checked={derive(watch(form, field), chosen => chosen === value)}
       onchange={() => (form[field] = value)}
     />
   ) as HTMLInputElement;
   yield radio;
-  for await (const chosen of watch(form, field))
-    radio.checked = chosen === value;
 }
 
 async function* Choice({
@@ -140,14 +146,17 @@ async function* MultiChoice({
       }
     >
       {options.map(option => (
-        <option selected={form[field].includes(option)}>{option}</option>
+        <option
+          selected={derive(watch(form, field), chosen =>
+            chosen.includes(option),
+          )}
+        >
+          {option}
+        </option>
       ))}
     </select>
   ) as HTMLSelectElement;
   yield select;
-  for await (const chosen of watch(form, field))
-    for (const option of select.options)
-      option.selected = chosen.includes(option.value);
 }
 
 async function* Member({
@@ -161,7 +170,7 @@ async function* Member({
   const box = (
     <input
       type="checkbox"
-      checked={form[field].includes(value)}
+      checked={derive(watch(form, field), chosen => chosen.includes(value))}
       onchange={() =>
         (form[field] = box.checked
           ? [...form[field], value]
@@ -170,8 +179,6 @@ async function* Member({
     />
   ) as HTMLInputElement;
   yield box;
-  for await (const chosen of watch(form, field))
-    box.checked = chosen.includes(value);
 }
 
 async function* AllMembers({
@@ -187,29 +194,22 @@ async function* AllMembers({
   const box = (
     <input
       type="checkbox"
-      checked={form[field].length === options.length}
-      indeterminate={some(form[field])}
+      checked={derive(
+        watch(form, field),
+        chosen => chosen.length === options.length,
+      )}
+      indeterminate={derive(watch(form, field), some)}
       onchange={() => (form[field] = box.checked ? [...options] : [])}
     />
   ) as HTMLInputElement;
   yield box;
-  for await (const chosen of watch(form, field)) {
-    box.checked = chosen.length === options.length;
-    box.indeterminate = some(chosen);
-  }
 }
 
-async function* Live({ format }: { format: (values: Values) => string }) {
-  const form = yield* use(FormContext);
-  // Yields its node first, so the host's next pull opens the read, and devtools sees this instance
-  const text = new Text(format({ ...form }));
-  yield text;
-  for await (const values of form) text.data = format(values);
-}
-
+// The outputs read the snapshots of the form, which also starts it for the watch of each control.
+const form = createForm();
 mount(
   document.querySelector("main") as Element,
-  <Provide context={FormContext} value={createForm()}>
+  <Provide context={FormContext} value={form}>
     <div class="page">
       <div class="form">
         <label class="row">
@@ -227,9 +227,7 @@ mount(
         <label class="row">
           <span>Volume</span>
           <NumberField field="volume" type="range" min="0" max="100" />
-          <output>
-            <Live format={values => `${values.volume}`} />
-          </output>
+          <output>{derive(form, values => values.volume)}</output>
         </label>
         <label class="row">
           <span>Color</span>
@@ -293,7 +291,7 @@ mount(
         </div>
       </div>
       <pre class="state">
-        <Live format={values => JSON.stringify(values, null, 2)} />
+        {derive(form, values => JSON.stringify(values, null, 2))}
       </pre>
     </div>
   </Provide>,

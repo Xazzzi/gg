@@ -272,6 +272,11 @@ A flush runs these steps in order.
   `select` does not call `mapSnapshot`.
 - SE-046: A flush MUST do no more steps if the channel is terminal.
   It MUST check before each step, and before each iterator in steps 1, 5 and 6.
+- SE-047: Steps 1, 5 and 6 MUST pull iterators in slot order.
+  A replaced object key keeps its place in slot order, and a new key comes last.
+- SE-048: A flush SHOULD cost time for the slots that changed and the raw iterators, and not for the other slots.
+  Publish builds a snapshot of all slots, so `nonYielding` and readers of operations get this cost.
+- SE-049: After the flush that reports its removal, `select` MUST NOT retain the source of a slot that left the shape.
 
 ## Snapshots
 

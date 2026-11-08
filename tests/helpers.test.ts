@@ -6,7 +6,9 @@ import { inspect } from "node:util";
 import {
   abortable,
   applyOps,
+  Channel,
   catching,
+  derive,
   isVal,
   type Op,
   select,
@@ -1196,4 +1198,69 @@ test("HE-04H a value traces back through sets, and reuses an entry with the same
   );
   assert.deepEqual(target, ["b!", "a2!", "c!"]);
   assert.deepEqual(seen, [["a2", "a!"]]);
+});
+
+test("HE-050 derive checks its source and map", () => {
+  for (const source of [null, 1, [1], { next() {} }])
+    assert.throws(() => derive(source as any, String), {
+      name: "TypeError",
+      message: "derive source is not an async iterable",
+    });
+  assert.throws(() => derive(new Channel(), 1 as any), {
+    name: "TypeError",
+    message: "derive map must be a function",
+  });
+});
+
+test("HE-051 HE-052 derive maps each value in order, awaits a thenable result, and opens the source at the first next", async () => {
+  let opened = 0;
+  const source = {
+    [Symbol.asyncIterator]: async function* () {
+      opened++;
+      yield 1;
+      yield 2;
+    },
+  };
+  const it = derive(source, n => (n === 1 ? Promise.resolve("a") : "b"));
+  await setImmediate();
+  assert.equal(opened, 0);
+  assert.deepEqual(await it.next(), val("a"));
+  assert.deepEqual(await it.next(), val("b"));
+  assert.deepEqual(await it.next(), end());
+  assert.equal(opened, 1);
+});
+
+test("HE-052 derive rejects with the error of the source or of map", async () => {
+  const error = new Error("x");
+  const failing = {
+    [Symbol.asyncIterator]: async function* () {
+      yield 1;
+      throw error;
+    },
+  };
+  const it = derive(failing, n => n);
+  await it.next();
+  await assert.rejects(it.next(), error);
+  const ch = new Channel<number>();
+  ch.send(1);
+  await assert.rejects(
+    derive(ch, () => {
+      throw error;
+    }).next(),
+    error,
+  );
+});
+
+test("HE-053 return calls return on the iterator of the source", async () => {
+  let returned = 0;
+  const source = {
+    [Symbol.asyncIterator]: () => ({
+      next: async () => ({ value: 1, done: false }),
+      return: async () => (returned++, { value: undefined, done: true }),
+    }),
+  };
+  const it = derive(source, n => n);
+  await it.next();
+  assert.deepEqual(await it.return(), end());
+  assert.equal(returned, 1);
 });

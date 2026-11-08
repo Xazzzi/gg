@@ -222,6 +222,15 @@ test("SE-156 an array slice finishes after it reads the removal of its last slot
   assert.equal((await k.next()).value?.length, 2);
 });
 
+test("SE-156 SE-14C an array slice with no slot left leaves the log", async () => {
+  const s = await started(select(["a"] as unknown[], open));
+  const r = changes(s, [0]);
+  s.shift();
+  await setImmediate();
+  await r.next();
+  assert.ok(await collected(value => (s.push(value), s.pop())));
+});
+
 test("SE-157 a slice takes each operation once, while a lagging reader keeps the log", async () => {
   const s = await started(select(["a", "b"], open));
   changes(s); // Never reads, so the log keeps all operations

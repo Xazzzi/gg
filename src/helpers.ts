@@ -1,8 +1,11 @@
+import { type Emit, register } from "./devtools.ts";
 import type { Source } from "./feed.ts";
 import type { Op, Val } from "./select.ts";
 import {
   checkOptions,
-  detect,
+  detectStream,
+  open,
+  PROMISE,
   quiet,
   quietReturn,
   relocate,
@@ -45,7 +48,7 @@ export function catching<T>(
   source: Source<T>,
   onError: (error: unknown) => void | PromiseLike<void>,
 ): Caught<T> {
-  const detected = detect(source);
+  const detected = detectStream(source);
   if (!detected)
     throw new TypeError("catching source is not a promise or iterator");
   if (typeof onError !== "function")
@@ -61,7 +64,7 @@ export function catching<T>(
     if (finished) return end();
     let answered: any, done: any;
     try {
-      if (!iterator) [iterator, next] = detected.open();
+      if (!iterator) [iterator, next] = open(source, detected);
       const result = await next.call(iterator);
       if (Object(result) !== result)
         throw new TypeError("Iterator result is not an object");
@@ -101,7 +104,8 @@ export function catching<T>(
       if (finished) return end(value);
       finished = true;
       for (const request of pending.splice(0)) request.resolve(end());
-      const inner = iterator ?? (detected.stream ? (source as any) : undefined);
+      const inner =
+        iterator ?? (detected.kind !== PROMISE ? (source as any) : undefined);
       return typeof inner?.return === "function"
         ? inner.return(value)
         : end(value);
@@ -110,6 +114,39 @@ export function catching<T>(
       return this;
     },
   };
+}
+
+/** Maps each value of an async iterable, so a dynamic prop or child follows a derived value. */
+export function derive<T, R>(
+  source: AsyncIterable<T>,
+  map: (value: T) => R,
+): AsyncGenerator<Awaited<R>, void, void> {
+  if (typeof (source as any)?.[Symbol.asyncIterator] !== "function")
+    throw new TypeError("derive source is not an async iterable");
+  if (typeof map !== "function")
+    throw new TypeError("derive map must be a function");
+  const box: { emit?: Emit } = {},
+    generator = mapped(source, map, box);
+  box.emit = register("derive", generator, { source, map }); // Here, so the hook finds the caller at its fixed depth (DV-003)
+  return generator;
+}
+
+/** Yields map(value) for each value of source, and opens source at the first next() (HE-051). */
+async function* mapped<T, R>(
+  source: AsyncIterable<T>,
+  map: (value: T) => R,
+  box: { emit?: Emit },
+) {
+  box.emit?.("start");
+  try {
+    for await (const value of source) {
+      const output = await map(value);
+      box.emit?.("value", output); // DV-061
+      yield output;
+    }
+  } finally {
+    box.emit?.("end");
+  }
 }
 
 /** Tells if a value is a `Val` that select made. */
@@ -160,16 +197,15 @@ const errorOf = (val: Val<unknown>) =>
 /** Gives the frozen `{ value, loading, error, done }` of a `Val`. */
 const fieldsOf = (val: Val<unknown>) => {
   let entry = fields.get(val);
-  if (!entry)
-    fields.set(
-      val,
-      (entry = Object.freeze({
-        value: val.value,
-        loading: val.status === "pending",
-        error: errorOf(val),
-        done: val.done,
-      })),
-    );
+  if (!entry) {
+    entry = Object.freeze({
+      value: val.value,
+      loading: val.status === "pending",
+      error: errorOf(val),
+      done: val.done,
+    });
+    fields.set(val, entry);
+  }
   return entry;
 };
 

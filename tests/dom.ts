@@ -69,6 +69,9 @@ export class FakeElement extends FakeNode {
   setAttribute(name: string, value: string) {
     this.attributes.set(name, value);
   }
+  removeAttribute(name: string) {
+    this.attributes.delete(name);
+  }
   addEventListener(type: string, listener: unknown) {
     this.listeners.push([type, listener]);
   }

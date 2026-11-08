@@ -183,6 +183,7 @@ test("SE-007 options of the wrong type throw, and undefined selects the default"
 test("SE-003 invalid options reach the channel unchanged", () => {
   assert.throws(() => select({}, { firstReceive: null as any }), TypeError);
   assert.throws(() => select({}, { stopStyle: "x" as any }), TypeError);
+  assert.throws(() => select({}, { ackStyle: "x" as any }), TypeError);
 });
 
 test("SE-003 options pass to the channel", async () => {
@@ -538,7 +539,11 @@ test("SE-025 an error from reading done or value fails with no return", async ()
 
 test("SE-02A a throwing then getter on a value counts as a rejected value", async () => {
   const failure = new Error("x");
-  for (const wrap of [(r: unknown) => r, (r: unknown) => Promise.resolve(r)]) {
+  const wraps = [(r: unknown) => r, (r: unknown) => Promise.resolve(r)];
+  for (const [wrap, done] of wraps.flatMap(w => [
+    [w, false],
+    [w, true],
+  ]) as [(r: unknown) => unknown, boolean][]) {
     let returned = 0;
     const value = {
       get then() {
@@ -548,7 +553,7 @@ test("SE-02A a throwing then getter on a value counts as a rejected value", asyn
     let last: any;
     for await (const snap of select({
       raw: {
-        next: () => wrap({ value, done: false }),
+        next: () => wrap({ value, done }),
         return() {
           returned++;
         },
@@ -556,7 +561,7 @@ test("SE-02A a throwing then getter on a value counts as a rejected value", asyn
     }) as any)
       last = snap.raw;
     assert.deepEqual(last, bad(failure));
-    assert.equal(returned, 1);
+    assert.equal(returned, done ? 0 : 1); // A finished iterator gets no return()
   }
 });
 
@@ -1224,6 +1229,42 @@ test("SE-062 SE-063 SE-064 SE-065 yielded promises flow, and plain values stop",
   s[CHAN].close();
 });
 
+test("SE-064 a final result with a yielded promise gets no advance", async () => {
+  let pulls = 0;
+  const raw = {
+    next: () => (pulls++, { value: Promise.resolve(1), done: true }),
+  };
+  const s = select({ raw }, open);
+  await setImmediate();
+  assert.deepEqual((await iter(s).next()).value.raw, ok(1));
+  assert.equal(pulls, 1);
+  s[CHAN].close();
+});
+
+test("SE-064 a flush advances sync iterators in step 5, before it pulls async iterators in step 6", async () => {
+  const gate = Promise.withResolvers<number>(),
+    log: string[] = [];
+  let a = 0,
+    b = 0;
+  const async = {
+    next: () => (
+      log.push("a"),
+      Promise.resolve(
+        a++ ? { value: 2, done: true } : { value: gate.promise, done: false },
+      )
+    ),
+  };
+  const sync = {
+    next: () => (log.push("b"), { value: b++ ? 2 : gate.promise, done: false }),
+  };
+  const s = select({ async, sync }, open);
+  await setImmediate();
+  gate.resolve(1);
+  await setImmediate();
+  assert.deepEqual(log, ["a", "b", "b", "a"]);
+  s[CHAN].close();
+});
+
 test("SE-066 a rejected yielded promise fails the iterator", async () => {
   let returned = 0;
   const failure = new Error("x");
@@ -1275,6 +1316,17 @@ test("SE-072 SE-073 sync iterators keep it open only with a pending yield", asyn
   gate.resolve(1);
   await setImmediate();
   assert.ok(s[CHAN].signal.aborted);
+  const last = Promise.withResolvers<number>();
+  const t = select(
+    { raw: returning([{ value: last.promise, done: true }]) },
+    { autoStart: true, backPressure: false },
+  );
+  await setImmediate();
+  assert.ok(!t[CHAN].signal.aborted); // The final yielded promise keeps it open too
+  last.resolve(1);
+  await setImmediate();
+  assert.deepEqual((await iter(t).next()).value.raw, ok(1));
+  assert.ok(t[CHAN].signal.aborted);
 });
 
 test("SE-074 a shape with no sources closes after its first flush", async () => {
@@ -1458,6 +1510,9 @@ test("SE-08C structural traps throw, and set does not depend on them", () => {
   assert.throws(() => Object.defineProperty(s, "b", { value: 1 }), TypeError);
   assert.throws(() => Object.preventExtensions(s), TypeError);
   assert.throws(() => Object.setPrototypeOf(s, null), TypeError);
+  // Reflect returns false for a falsish trap result, so only a throwing trap throws here
+  assert.throws(() => Reflect.preventExtensions(s), /not supported/);
+  assert.throws(() => Reflect.setPrototypeOf(s, null), /not supported/);
   assert.throws(() => Object.freeze(s), TypeError);
   s.a = 2;
   assert.equal(s.a, 2);
@@ -2526,9 +2581,15 @@ test("SE-120 SE-121 terminal returns unfinished iterators, ignoring errors", asy
       log.push("finished");
     },
   };
+  const final = {
+    next: () => ({ value: new Promise(() => {}), done: true }),
+    return() {
+      log.push("final");
+    },
+  };
   const noReturn = { next: () => ({ value: 1, done: false }) };
   const s = select(
-    { a: source("a"), raw, finished, noReturn },
+    { a: source("a"), raw, finished, final, noReturn },
     { autoStart: true, backPressure: false, autoClose: false },
   );
   await setImmediate();
@@ -3072,4 +3133,126 @@ test("SE-137 an always-ready async source starves the event loop", async () => {
     s[CHAN].signal.addEventListener("abort", resolve),
   );
   assert.equal(ticked, false);
+});
+
+// Gives a raw iterator that logs each pull, and yields a promise that never settles.
+const stuck = (log: string[], name: string) => ({
+  next: () => (log.push(name), { value: new Promise(() => {}), done: false }),
+});
+
+test("SE-047 step 1 advances raw iterators in slot order", async () => {
+  const log: string[] = [],
+    s = select([stuck(log, "a")], open);
+  await setImmediate();
+  s.unshift(stuck(log, "d"));
+  s.unshift(stuck(log, "b"), stuck(log, "c"));
+  await setImmediate();
+  assert.deepEqual(log, ["a", "b", "c", "d"]);
+  const o: any = select({ x: stuck(log, "x"), y: stuck(log, "y") }, open);
+  await setImmediate();
+  o.x = stuck(log, "x2");
+  o.z = stuck(log, "z");
+  o.y = stuck(log, "y2");
+  await setImmediate();
+  assert.deepEqual(log.slice(4), ["x", "y", "x2", "y2", "z"]);
+  s[CHAN].close();
+  o[CHAN].close();
+});
+
+test("SE-047 step 5 advances sync iterators in slot order", async () => {
+  const log: string[] = [],
+    gates = [Promise.withResolvers<number>(), Promise.withResolvers<number>()];
+  const raw = (name: string, gate: Promise<number>) => {
+    let pulled = false;
+    return {
+      next: () => {
+        log.push(name);
+        const value = pulled ? new Promise(() => {}) : gate;
+        pulled = true;
+        return { value, done: false };
+      },
+    };
+  };
+  const s = select(
+    [raw("a", gates[0].promise), raw("b", gates[1].promise)],
+    open,
+  );
+  await setImmediate();
+  s.reverse();
+  await setImmediate();
+  gates[0].resolve(1);
+  gates[1].resolve(2);
+  await setImmediate();
+  assert.deepEqual(log, ["a", "b", "b", "a"]);
+  s[CHAN].close();
+});
+
+test("SE-047 step 6 pulls async iterators in slot order", async () => {
+  const log: string[] = [],
+    gates = {
+      a: Promise.withResolvers<any>(),
+      b: Promise.withResolvers<any>(),
+    };
+  const source = (name: "a" | "b") => ({
+    [Symbol.asyncIterator]: () => ({
+      next: () => (log.push(name), gates[name].promise),
+    }),
+  });
+  const s = select({ a: source("a"), b: source("b") }, open);
+  await setImmediate();
+  const { a, b } = gates;
+  gates.a = Promise.withResolvers();
+  gates.b = Promise.withResolvers();
+  b.resolve({ value: 2, done: false });
+  a.resolve({ value: 1, done: false });
+  await setImmediate();
+  assert.deepEqual(log, ["a", "b", "a", "b"]);
+  s[CHAN].close();
+});
+
+// Resolves whether the value that put hands over gets collected.
+const collected = async (put: (value: object) => unknown) => {
+  const registry = new FinalizationRegistry<() => void>(done => done());
+  let done = false;
+  (() => {
+    const value = {};
+    registry.register(value, () => (done = true));
+    put(value);
+  })();
+  for (let i = 0; i < 20 && !done; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  return done;
+};
+
+test("SE-049 a removed source is not retained", async () => {
+  for (const options of [open, { ...open, autoClose: true }]) {
+    const s: any = select({ keep: new Promise(() => {}) }, options);
+    await setImmediate();
+    const sources = [
+      (value: any) => Object.assign(value, stuck([], "")),
+      (value: any) =>
+        Object.assign(value, {
+          [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+        }),
+      (value: any) => Object.assign(value, { then() {} }),
+    ];
+    for (const make of sources)
+      assert.ok(await collected(value => ((s.a = make(value)), (s.a = 0))));
+    s[CHAN].close();
+  }
+});
+
+test("SE-070 a removed source does not keep the channel open", async () => {
+  const s: any = select(
+    { a: new Promise(() => {}), b: stuck([], "") },
+    { autoStart: true, backPressure: false },
+  );
+  await setImmediate();
+  assert.ok(!s[CHAN].signal.aborted);
+  delete s.a;
+  delete s.b;
+  await setImmediate();
+  assert.ok(s[CHAN].signal.aborted);
 });

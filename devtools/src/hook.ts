@@ -5,7 +5,7 @@
 {
   const HOOK = Symbol.for("gg.devtools");
   const VAL = Symbol.for("gg.Val");
-  const PROTOCOL = 10; // Keep equal to the panel's
+  const PROTOCOL = 11; // Keep equal to the panel's
   const LOG_LIMIT = 500;
   const BATCH_MS = 100;
   const SLOT_LIMIT = 500; // A large shape would make each batch heavy
@@ -210,6 +210,10 @@
       const t = s.ref.deref();
       if (s.kind === "feed" && t && t === target)
         return { label: "feed", link: s.id };
+      // A derive reads its source, or the channel of a select that it reads.
+      const from = s.kind === "derive" ? entries.get(s.source ?? 0) : undefined;
+      if (from && (from.id === e.id || from.channel === e.id))
+        return { label: "derive", link: s.id };
       const slots: any[] =
         (s.kind === "select" && t && inspectors.get(t)?.()) || [];
       for (const slot of slots)
@@ -346,9 +350,24 @@
     if (kind === "channel") {
       byTarget.set(target, e);
       if (owner) owner.items = (owner.items ?? 0) + 1;
-      e.options = `${detail.firstReceive} / ${detail.thenReceive} / ${detail.stopStyle}`;
+      e.options = `${detail.firstReceive} / ${detail.thenReceive} / ${detail.stopStyle}${detail.ackStyle === "all" ? " / ack all" : ""}`;
       e.sent = e.read = 0;
       return channelEmit(e);
+    }
+    if (kind === "derive") {
+      // A slot that holds the generator links here, as a dynamic prop or child does.
+      byTarget.set(target, e);
+      e.state = "waiting";
+      e.sent = 0;
+      e.source = byTarget.get(detail.source)?.id;
+      e.sourceText = preview(detail.source);
+      e.options = detail.map.name ? `map ${detail.map.name}` : "";
+      return (event: string, value?: unknown) => {
+        if (event === "start") e.state = "running";
+        else if (event === "end") e.state = "ended";
+        else (e.sent as number)++;
+        record(e, event, event === "value" ? preview(value) : "");
+      };
     }
     const channel = byTarget.get(detail.channel);
     e.channel = channel?.id;
@@ -972,6 +991,7 @@
     return flash(node);
   };
   hook.flashDom = (id: number) => flash(walkedNodes.get(id)?.deref());
+  hook.flashNode = (id: number) => flash(hook.nodeOf(id));
   // Sends the row of a node with the tree that holds it, as for a pick or a node that the Elements panel selects.
   hook.choose = (node: Node | null | undefined) => {
     picked = wantElements ? hook.domIdOf(node) : hook.ownerOf(node);

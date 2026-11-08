@@ -195,6 +195,11 @@ nav h3 {
   gap: 8px;
   align-items: center;
 }
+#detail h2:not(:first-child) {
+  margin-top: 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
 #detail .actions {
   display: flex;
   gap: 6px;

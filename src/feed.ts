@@ -1,6 +1,15 @@
 import { attached, type Channel, isChannel } from "./channel.ts";
 import { register } from "./devtools.ts";
-import { checkOptions, detect, noop, quiet, quietReturn } from "./source.ts";
+import {
+  checkOptions,
+  type Detected,
+  detectStream,
+  noop,
+  open,
+  PROMISE,
+  quiet,
+  quietReturn,
+} from "./source.ts";
 
 export type Source<T> =
   | PromiseLike<T>
@@ -29,7 +38,7 @@ const runs = new WeakMap<object, { active: number }>();
 /** Pulls the source into the channel until either ends, and calls `return()` on the iterator when the channel ends first. */
 async function run(
   source: any,
-  { stream, open }: NonNullable<ReturnType<typeof detect>>,
+  detected: Detected,
   channel: Channel<any, any>,
   autoStart: boolean,
   backPressure: boolean,
@@ -38,7 +47,7 @@ async function run(
   const { signal } = channel;
   if (!autoStart) await attached(channel).catch(noop);
   if (signal.aborted) {
-    if (stream) await quietReturn(source);
+    if (detected.kind !== PROMISE) await quietReturn(source);
     return;
   }
   let iterator: any,
@@ -60,7 +69,7 @@ async function run(
   };
   signal.addEventListener("abort", onAbort);
   try {
-    [iterator, next] = open();
+    [iterator, next] = open(source, detected);
     for (;;) {
       if (signal.aborted) return await quietReturn(iterator);
       answered = false;
@@ -68,7 +77,10 @@ async function run(
         cancel = resolve;
         pull().then(resolve, reject);
       });
-      if (value === ABORTED) return void (done || quietReturn(iterator));
+      if (value === ABORTED) {
+        if (!done) void quietReturn(iterator); // FE-047 does not wait for return()
+        return;
+      }
       if (done && value === undefined) return;
       if (backPressure) await channel.asend(value);
       else channel.send(value);
@@ -88,7 +100,7 @@ export function feed<T, TReturn>(
   channel: Channel<T, TReturn>,
   options: FeedOptions = {},
 ): Promise<void> {
-  const detected = detect(source);
+  const detected = detectStream(source);
   if (!detected)
     throw new TypeError("feed source is not a promise or iterator");
   if (!isChannel(channel)) throw new TypeError("feed target is not a Channel");

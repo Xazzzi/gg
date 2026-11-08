@@ -1,6 +1,13 @@
 // Ambient types, so that the classic content script needs no import.
 declare namespace GG {
-  type Kind = "channel" | "select" | "feed" | "component" | "mount" | "each";
+  type Kind =
+    | "channel"
+    | "select"
+    | "feed"
+    | "derive"
+    | "component"
+    | "mount"
+    | "each";
   type Item = {
     seq: number;
     time: number;
@@ -30,9 +37,9 @@ declare namespace GG {
     channel?: number; // The channel of a select, a feed, or the select of a host
     owner?: number; // The select that owns a channel, or the host that owns an object
     select?: number; // The select that drives the children of a host
-    source?: number; // A feed source, or the state of each, that is tracked
+    source?: number; // A feed source, the source of a derive, or the state of each, that is tracked
     sourceText?: string;
-    sent?: number;
+    sent?: number; // Values that a channel got, or that a derive gave
     read?: number;
     consumers?: number;
     result?: string;

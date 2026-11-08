@@ -61,13 +61,121 @@ test("CH-003 unlisted option values throw", () => {
     { firstReceive: null },
     { thenReceive: 1 },
     { stopStyle: "" },
+    { ackStyle: "x" },
   ] as any[])
     assert.throws(() => new Channel(options), TypeError);
   new Channel({
     firstReceive: undefined,
     thenReceive: undefined,
     stopStyle: undefined,
+    ackStyle: undefined,
   });
+});
+
+test("CH-004 ackStyle all does not apply to a work queue", () => {
+  assert.throws(
+    () =>
+      new Channel({
+        firstReceive: "unread",
+        thenReceive: "unread",
+        ackStyle: "all",
+      }),
+    {
+      name: "TypeError",
+      message: 'ackStyle "all" does not apply to thenReceive "unread"',
+    },
+  );
+  new Channel({ thenReceive: "latest", ackStyle: "all" });
+});
+
+const settled = (promise: Promise<unknown>) =>
+  !inspect(promise).includes("pending");
+
+test("CH-001 CH-017 CH-01E an ack waits for the slowest consumer under all only", async () => {
+  for (const ackStyle of ["any", "all"] as const) {
+    const ch = new Channel<number>({ firstReceive: "first", ackStyle }),
+      fast = iter(ch),
+      slow = iter(ch);
+    const first = fast.next();
+    slow.next();
+    const p = ch.asend(1);
+    await first;
+    await setImmediate();
+    assert.equal(settled(p), true);
+    const q = ch.asend(2);
+    await fast.next();
+    await setImmediate();
+    assert.equal(settled(q), ackStyle === "any");
+    await slow.next();
+    await setImmediate();
+    assert.equal(settled(q), true);
+  }
+});
+
+test("CH-01E the end of the slowest consumer resolves an ack, and the last end does not", async () => {
+  const ch = new Channel<number>({ firstReceive: "first", ackStyle: "all" }),
+    fast = iter(ch),
+    slow = iter(ch);
+  fast.next();
+  slow.next();
+  ch.asend(1);
+  await setImmediate();
+  const p = ch.asend(2);
+  await fast.next();
+  await setImmediate();
+  assert.equal(settled(p), false);
+  await slow.return(undefined);
+  assert.equal(settled(p), true);
+  const q = ch.asend(3);
+  await fast.return(undefined);
+  await setImmediate();
+  assert.equal(settled(q), false);
+  ch.close();
+  await assert.rejects(q, StopError);
+});
+
+test("CH-01E a consumer with no read starts at the head under unread, and at value 1 under first", async () => {
+  const unread = new Channel<number>({ ackStyle: "all" }),
+    a = iter(unread),
+    b = iter(unread);
+  const read = a.next();
+  b.next();
+  const p = unread.asend(1);
+  await read;
+  await setImmediate();
+  assert.equal(settled(p), true);
+  const first = new Channel<number>({ firstReceive: "first", ackStyle: "all" }),
+    c = iter(first);
+  first.asend(1);
+  await c.next();
+  const late = iter(first),
+    pending = late.next(),
+    q = first.asend(2);
+  await c.next();
+  await setImmediate();
+  assert.equal(settled(q), false);
+  await pending;
+  await late.next();
+  await setImmediate();
+  assert.equal(settled(q), true);
+});
+
+test("CH-01E a consumer that has not read yet holds the ack of a value that it reads later", async () => {
+  const ch = new Channel<number>({ firstReceive: "first", ackStyle: "all" }),
+    fast = iter(ch);
+  ch.asend(1);
+  await fast.next();
+  const read = fast.next();
+  await setImmediate();
+  const p = ch.asend(2),
+    slow = iter(ch);
+  slow.next(); // It joins before fast reads 2, and reads 1 after
+  await read;
+  await setImmediate();
+  assert.equal(settled(p), false);
+  await slow.next();
+  await setImmediate();
+  assert.equal(settled(p), true);
 });
 
 test("CH-010 CH-012 send returns undefined and accepts null and undefined", async () => {

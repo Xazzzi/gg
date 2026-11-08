@@ -1,9 +1,9 @@
-import { Channel, select } from "@xazzzi/gg";
+import { Channel, derive, select, watch } from "@xazzzi/gg";
 import { type Child, each, Fragment, mount } from "@xazzzi/gg/jsx-runtime";
 import { type Origin, originAt } from "./names.ts";
 
 const HOOK = 'globalThis[Symbol.for("gg.devtools")]';
-const PROTOCOL = 10; // Keep equal to the hook's
+const PROTOCOL = 11; // Keep equal to the hook's
 const TREE_LIMIT = 2000; // The tree shows this many rows
 const LOG_LIMIT = 500;
 const GROUP = 10; // More objects from one site collapse to one row
@@ -34,6 +34,7 @@ const state = select(
     filter: "",
     selected: 0,
     paused: false,
+    picking: false,
     tab: "data" as Tab,
     status: "Waiting for the page, reload it if it loaded before the extension",
   },
@@ -45,6 +46,7 @@ type View = {
   filter: string;
   selected: number;
   paused: boolean;
+  picking: boolean;
   tab: Tab;
   status: string;
 };
@@ -94,6 +96,8 @@ const nameOf = (e?: GG.Entry): string | undefined => {
   if (e.kind === "each")
     return `each ${nameOf(entries.get(e.source ?? 0)) ?? (e.source ? `#${e.source}` : "")}`.trim();
   const name = origins.get(e.frame)?.name;
+  if (e.kind === "derive")
+    return name ?? `derive ${nameOf(entries.get(e.source ?? 0)) ?? ""}`.trim();
   if (name || e.kind !== "feed") return name;
   const to = nameOf(entries.get(e.channel ?? 0));
   return to && `${nameOf(entries.get(e.source ?? 0)) ?? ""} → ${to}`.trim();
@@ -108,8 +112,17 @@ const pick = (id: number) => {
   state.selected = id;
   slots = undefined;
   details.clear();
-  send({ type: "inspect", id });
+  inspectSelected();
 };
+// A host node inspects the select that drives its children, which brings its mount too.
+const hostOf = (id: number) => (id < 0 ? (labels.get(id)?.[1] ?? 0) : 0);
+const targetOf = (id: number) => {
+  const host = hostOf(id);
+  return host ? (entries.get(host)?.select ?? host) : id;
+};
+let inspected = 0;
+const inspectSelected = () =>
+  send({ type: "inspect", id: (inspected = targetOf(state.selected)) });
 // A row or a link that live counts redraw can change between press and release, so a primary press acts.
 const press = (act: () => void) => (event: PointerEvent) => {
   if (event.button === 0) act();
@@ -187,7 +200,9 @@ const counts = (e: GG.Entry) =>
     ? `${e.sent}↑ ${e.read}↓ ${e.consumers}c`
     : e.kind === "select"
       ? `${e.reports} reports`
-      : "";
+      : e.kind === "derive"
+        ? `${e.sent} values`
+        : "";
 
 // Writes only the positions whose key changed, so `each` sends values only to rows that change.
 const sync = <T extends { key: string }>(rows: T[], items: T[]) => {
@@ -214,19 +229,9 @@ async function* part(feed: AsyncIterable<unknown>, draw: () => Child) {
     if (node.textContent !== text) yield ((text = node.textContent), node);
   }
 }
-// A row that draws itself again on each value from its list.
-async function* Drawn<T>({
-  row,
-  draw,
-}: {
-  row: AsyncIterable<T>;
-  draw: (row: T) => Child;
-}) {
-  for await (const value of row) yield draw(value);
-}
 
 // A table that `each` fills, and that shows a note while it has no rows.
-// It closes its rows when its feed closes, so the row components end too.
+// It closes its rows when its feed closes, so the rows end too.
 async function* Table<T>(props: {
   feed: Channel<View>;
   head: string[];
@@ -252,9 +257,7 @@ async function* Table<T>(props: {
           </tr>
         </thead>
         <tbody>
-          {each(rows, row => (
-            <Drawn row={row as AsyncIterable<T>} draw={draw} />
-          ))}
+          {each(rows, row => derive(row as AsyncIterable<T>, draw))}
         </tbody>
       </table>
     </div>
@@ -610,6 +613,19 @@ const feedBody = (id: number, entry: () => GG.Entry, feed: Channel<View>) => [
   <Log feed={feed} items={() => logOf(id)} columns={[]} />,
 ];
 
+const deriveBody = (id: number, entry: () => GG.Entry, feed: Channel<View>) => [
+  part(feed, () => {
+    const e = entry();
+    return props([
+      ["source", e.source ? link(e.source) : e.sourceText],
+      ["map", e.options || "anonymous"],
+      ["values", `${e.sent}`],
+    ]);
+  }),
+  <h4>Events</h4>,
+  <Log feed={feed} items={() => logOf(id)} columns={[]} />,
+];
+
 // The parts of one object read the store on each value from `feed`.
 // They keep the last summary, because a batch can remove the object first.
 const Shown = ({ id, feed }: { id: number; feed: Channel<View> }) => {
@@ -623,7 +639,9 @@ const Shown = ({ id, feed }: { id: number; feed: Channel<View> }) => {
         ? selectBody
         : e.kind === "feed"
           ? feedBody
-          : hostBody;
+          : e.kind === "derive"
+            ? deriveBody
+            : hostBody;
   return [
     <h2>
       {e.kind} <span class="id">#{id}</span>
@@ -685,9 +703,10 @@ const inspectButton = (node: string) => (
     Inspect
   </button>
 );
-// A DOM node row of the elements tab, with its host entry.
-const nodeDetail = (id: number) => {
-  const [label, host] = labels.get(id) ?? ["", 0];
+// A DOM node row of the elements tab, with its mount and the select that drives it.
+const nodeDetail = (id: number, feed: Channel<View>) => {
+  const [label, host] = labels.get(id) ?? ["", 0],
+    drive = entries.get(host)?.select ?? 0;
   return [
     <h2>
       node <span class="name">{label}</span>
@@ -702,7 +721,8 @@ const nodeDetail = (id: number) => {
       </button>
       {inspectButton(`${HOOK}?.domOf?.(${id})`)}
     </div>,
-    host ? props([["host", link(host)]]) : null,
+    entries.has(host) ? <Shown id={host} feed={feed} /> : null,
+    entries.has(drive) ? <Shown id={drive} feed={feed} /> : null,
   ];
 };
 
@@ -711,7 +731,9 @@ async function* Detail() {
     feed: Channel<View> | undefined;
   for await (const view of state) {
     const e = entries.get(view.selected),
-      next = `${view.selected} ${e?.kind}`;
+      host = hostOf(view.selected),
+      drive = entries.get(host)?.select ?? 0,
+      next = `${view.selected} ${e?.kind} ${entries.has(host)} ${entries.has(drive)}`;
     if (next !== key) {
       feed?.close();
       key = next;
@@ -721,7 +743,7 @@ async function* Detail() {
           {e ? (
             <Shown id={e.id} feed={feed} />
           ) : view.selected < 0 && labels.has(view.selected) ? (
-            nodeDetail(view.selected)
+            nodeDetail(view.selected, feed)
           ) : (
             <div class="empty">Select an object</div>
           )}
@@ -813,6 +835,7 @@ const lines = ({ filter, selected }: View) => {
     ["Selects", "select"],
     ["Channels", "channel"],
     ["Feeds", "feed"],
+    ["Derives", "derive"],
   ];
   for (const [title, ...kinds] of groups) {
     const sites = new Map<string, GG.Entry[]>();
@@ -989,6 +1012,18 @@ const treeLines = ({ filter, selected }: View) => {
         ),
       ];
 };
+// Alt over a tree row, or a row that the pointer enters with Alt held, shows its node in the page.
+let hovered: (() => void) | undefined;
+const hover = (show: () => void) => ({
+  onpointerenter: (event: PointerEvent) => {
+    hovered = show;
+    if (event.altKey) show();
+  },
+  onpointerleave: () => (hovered = undefined),
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Alt" && !event.repeat) hovered?.();
+});
 // A DOM node row, which links to the host entry of an element with dynamic children.
 const nodeRow = (
   id: number,
@@ -1012,7 +1047,8 @@ const nodeRow = (
         style={`padding-left: ${depth * 14 + 4}px`}
         onclick={() => pick(id)}
         ondblclick={() => evaluate(`${HOOK}?.flashDom?.(${id})`)}
-        title="Double-click to show in the page"
+        {...hover(() => evaluate(`${HOOK}?.flashDom?.(${id})`))}
+        title="Double-click or hover with Alt to show in the page"
       >
         <span class="twisty" onclick={toggle}>
           {count ? (open ? "▾" : "▸") : ""}
@@ -1050,7 +1086,12 @@ const treeRow = (
           e.kind === "component" &&
           evaluate(`inspect(${HOOK}?.type?.(${e.id}))`)
         }
-        title={e.kind === "component" ? "Double-click to open the source" : ""}
+        {...hover(() => evaluate(`${HOOK}?.flashNode?.(${e.id})`))}
+        title={
+          e.kind === "component"
+            ? "Double-click to open the source, hover with Alt to show in the page"
+            : "Hover with Alt to show in the page"
+        }
       >
         <span class="twisty" onclick={toggle}>
           {count ? (open ? "▾" : "▸") : ""}
@@ -1071,13 +1112,7 @@ async function* List() {
     autoClose: false,
     nonYielding: true,
   });
-  yield (
-    <nav id="list">
-      {each(rows, line => (
-        <Drawn row={line} draw={(l: Line) => l.draw()} />
-      ))}
-    </nav>
-  );
+  yield <nav id="list">{each(rows, line => derive(line, l => l.draw()))}</nav>;
   for await (const view of state)
     if (view.tab === "data") {
       const out = lines(view);
@@ -1130,10 +1165,6 @@ document.addEventListener("keydown", event => {
   event.preventDefault();
 });
 
-async function* status() {
-  for await (const view of state) yield view.status;
-}
-
 const Header = () => {
   const filter = (
     <input
@@ -1149,12 +1180,11 @@ const Header = () => {
       onclick={() => {
         state.paused = !state.paused;
         send({ type: "pause", value: state.paused });
-        pause.textContent = state.paused ? "Resume" : "Pause";
       }}
     >
-      Pause
+      {derive(watch(state, "paused"), paused => (paused ? "Resume" : "Pause"))}
     </button>
-  ) as HTMLButtonElement;
+  );
   const clear = () => {
     for (const d of details.values()) d.log = [];
     changed();
@@ -1166,8 +1196,6 @@ const Header = () => {
     labels = new Map();
     sizes = new Map();
     sendTree(tab);
-    for (const button of tabs)
-      button.classList.toggle("active", button.dataset.tab === tab);
   });
   const tabs = (
     [
@@ -1175,34 +1203,34 @@ const Header = () => {
       ["components", "Components"],
       ["elements", "Elements"],
     ] as const
-  ).map(
-    ([tab, title]) =>
-      (
-        <button
-          type="button"
-          data-tab={tab}
-          class={`tab${state.tab === tab ? " active" : ""}`}
-          onclick={() => show(tab)}
-        >
-          {title}
-        </button>
-      ) as HTMLButtonElement,
-  );
+  ).map(([tab, title]) => (
+    <button
+      type="button"
+      class={derive(
+        watch(state, "tab"),
+        on => `tab${on === tab ? " active" : ""}`,
+      )}
+      onclick={() => show(tab)}
+    >
+      {title}
+    </button>
+  ));
   // The page picker selects in a tree tab, so a pick from the data tab opens the components tab.
   const picker = (
     <button
       type="button"
       id="pick"
+      class={derive(watch(state, "picking"), on => on && "active")}
       title="Select an element in the page"
       onclick={() => {
-        const on = !picker.classList.contains("active");
+        const on = !state.picking;
         if (on && state.tab === "data") show("components");
         send({ type: "pick", value: on });
       }}
     >
       Pick
     </button>
-  ) as HTMLButtonElement;
+  );
   return (
     <header>
       <span class="tabs">{tabs}</span>
@@ -1212,7 +1240,7 @@ const Header = () => {
       <button type="button" onclick={clear}>
         Clear logs
       </button>
-      <span id="status">{status()}</span>
+      <span id="status">{watch(state, "status")}</span>
     </header>
   );
 };
@@ -1241,8 +1269,6 @@ const apply = (batch: GG.Poll) => {
     entries.clear();
     details.clear();
     sites = new Map();
-    // An inspect sent before the page connected is lost
-    if (state.selected) send({ type: "inspect", id: state.selected });
   }
   session = batch.session;
   for (const [id, frame, label] of batch.sites) sites.set(id, [frame, label]);
@@ -1263,8 +1289,11 @@ const apply = (batch: GG.Poll) => {
   }
   for (const id of batch.removed) entries.delete(id), details.delete(id);
   if (batch.slots || batch.full) slots = batch.slots;
+  // An inspect sent before the page connected is lost, and a host node learns its select from a batch
+  if (batch.full ? state.selected : targetOf(state.selected) !== inspected)
+    inspectSelected();
   state.status = `${batch.count} objects`;
-  document.getElementById("pick")?.classList.toggle("active", batch.picking);
+  state.picking = batch.picking;
   if (batch.picked && known(batch.picked)) reveal(batch.picked);
   changed();
 };
@@ -1287,7 +1316,7 @@ const connect = () => {
     setTimeout(connect, 500);
   });
   send({ tabId: chrome.devtools.inspectedWindow.tabId });
-  send({ type: "inspect", id: state.selected });
+  inspectSelected();
   if (state.paused) send({ type: "pause", value: true });
   sendTree(state.tab);
 };

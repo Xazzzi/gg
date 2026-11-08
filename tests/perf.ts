@@ -25,3 +25,39 @@ await within("select large array", 3000, () => {
   s.shift();
   s[Symbol.dispose]();
 });
+
+await within("SE-048 single writes in a large array", 1000, async () => {
+  const s = select(new Array(size).fill(0), {
+    autoStart: true,
+    autoClose: false,
+    nonYielding: true,
+    onChanges: () => {},
+  });
+  await new Promise(resolve => setTimeout(resolve));
+  for (let i = 1; i <= 1000; i++) {
+    s[0] = i;
+    await new Promise<void>(resolve => queueMicrotask(resolve));
+  }
+  s[Symbol.dispose]();
+});
+
+await within("SE-048 settles in a large array", 1000, async () => {
+  const gates = Array.from({ length: size / 4 }, () =>
+    Promise.withResolvers<number>(),
+  );
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const s = select(
+    gates.map(gate => gate.promise),
+    {
+      autoStart: true,
+      nonYielding: true,
+      onChanges: ops => {
+        if (ops.length === gates.length) resolve();
+      },
+    },
+  );
+  await new Promise(done => setTimeout(done));
+  for (const [i, gate] of gates.entries()) gate.resolve(i);
+  await promise;
+  s[Symbol.dispose]();
+});

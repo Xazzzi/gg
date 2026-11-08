@@ -1,4 +1,5 @@
 export type {
+  AckStyle,
   ChannelOptions,
   FirstReceive,
   StopStyle,
@@ -8,7 +9,14 @@ export { Channel, StopError } from "./channel.ts";
 export type { FeedOptions, Source } from "./feed.ts";
 export { feed } from "./feed.ts";
 export type { Caught, Spread } from "./helpers.ts";
-export { abortable, applyOps, catching, isVal, spread } from "./helpers.ts";
+export {
+  abortable,
+  applyOps,
+  catching,
+  derive,
+  isVal,
+  spread,
+} from "./helpers.ts";
 export type {
   Child,
   Context,

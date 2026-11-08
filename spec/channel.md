@@ -25,6 +25,7 @@ It MUST NOT use timers.
 export type FirstReceive = "first" | "unread" | "latest" | "next";
 export type ThenReceive = "every" | "latest" | "unread";
 export type StopStyle = "drain" | "stop";
+export type AckStyle = "any" | "all";
 
 type Sendable<T> = T extends PromiseLike<any> ? never : T;
 
@@ -32,6 +33,7 @@ export type ChannelOptions = {
   firstReceive?: FirstReceive;
   thenReceive?: ThenReceive;
   stopStyle?: StopStyle;
+  ackStyle?: AckStyle;
 };
 
 export class Channel<T, TReturn = undefined>
@@ -82,9 +84,11 @@ The implementation MAY use any internal structure that gives the same observable
 
 ## Construction
 
-- CH-001: The defaults MUST be `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"`.
+- CH-001: The defaults MUST be `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"`, `ackStyle: "any"`.
 - CH-002: The constructor MUST throw a `TypeError` if `thenReceive` is `"unread"` and `firstReceive` is not `"unread"`.
 - CH-003: The constructor MUST throw a `TypeError` for an option value that the Public API does not list.
+- CH-004: The constructor MUST throw a `TypeError` if `ackStyle` is `"all"` and `thenReceive` is `"unread"`.
+  A work queue gives each value to one consumer, so no value reaches all consumers.
 
 CH-002 exists because `thenReceive: "unread"` guarantees that one consumer gets each value.
 This guarantee needs all consumers to take values from the shared head.
@@ -109,7 +113,7 @@ This guarantee needs all consumers to take values from the shared head.
 - CH-015: `asend` MUST add the value to the log as `send` does.
 - CH-016: `asend` on a terminal channel MUST reject with the stop error.
   `asend` does the checks of CH-014.
-- CH-017: `asend` MUST resolve with `undefined` when a consumer reads its value or a later value.
+- CH-017: Under `ackStyle: "any"`, `asend` MUST resolve with `undefined` when a consumer reads its value or a later value.
 - CH-018: `asend` MUST resolve at the read.
   It MUST NOT wait for the consumer to finish its work on the value.
 - CH-019: `asend` MUST stay pending while no consumer has read its value or a later value.
@@ -122,6 +126,11 @@ This guarantee needs all consumers to take values from the shared head.
 - CH-01D: A CH-01A rejection does not mean that the channel discarded the value.
   Under `"drain"`, a consumer can still read the value.
   So a producer that retries MUST tolerate duplicates.
+- CH-01E: Under `ackStyle: "all"`, `asend` MUST resolve with `undefined` when each active consumer read its value or a later value, or starts after its value.
+  A consumer under `firstReceive: "unread"` that did not read yet starts at the head.
+  A consumer that ends no longer counts, so its end can resolve an `asend`.
+  With no active consumer, CH-019 applies.
+  So `asend` paces a producer to the slowest consumer, and a slow consumer under `"every"` retains at most one unread value for each producer that awaits.
 
 ## First receive
 
@@ -168,13 +177,14 @@ This guarantee needs all consumers to take values from the shared head.
 | `next`       | Future values only   | Next, then newest    | Invalid (CH-002) |
 
 The table has 9 valid modes.
-`stopStyle` applies to each mode.
-So there are 18 valid configurations.
+`stopStyle` applies to each mode, and `ackStyle: "all"` to each mode except the work queue (CH-004).
+So there are 34 valid configurations.
 
 ## Memory
 
 - CH-050: If no current or future consumer can read a value, the garbage collector MUST be able to collect it.
 - CH-051: The channel MUST NOT limit its backlog, because `asend` gives backpressure.
+  `ackStyle: "all"` gives backpressure for each consumer (CH-01E).
 
 Under CH-050, the channel retains only these values:
 
@@ -226,7 +236,8 @@ These rules come from generator semantics.
   It MUST NOT close the channel.
 - CH-071: `throw(error)` MUST end only that consumer.
   That consumer rejects with `error`.
-- CH-072: `return()` and `throw()` on a consumer MUST NOT resolve an `asend`.
+- CH-072: Under `ackStyle: "any"`, `return()` and `throw()` on a consumer MUST NOT resolve an `asend`.
+  Under `"all"`, CH-01E applies.
 - CH-073: If a `next()` is pending, `return()` and `throw()` wait until that `next()` settles.
   The pending `next()` still reads a value.
   So under `"unread"`, no other consumer gets that value.

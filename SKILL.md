@@ -15,6 +15,7 @@ When this file and the spec do not agree, the spec is correct.
 
 - A `Channel` is a log of values with many producers and many consumers.
   `send` never blocks, and `asend` resolves when a consumer reads the value (CH-017).
+  With `ackStyle: "all"`, `asend` waits for every consumer, so a slow consumer under `"every"` holds at most one unread value for each producer that awaits (CH-01E).
 - A `select` is a mutable proxy over an object or array shape.
   Each key is a slot with a source: a plain value, a promise or an async iterable.
   A change publishes a snapshot of the whole shape to the channel of the select.
@@ -79,6 +80,10 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
   A channel of strings is live text.
 - `on*` props with a function become listeners, and the event type is the lower case rest of the key.
 - Other props set attributes, except `value`, `checked`, `selected`, `indeterminate` and `muted`, which set properties (JX-002).
+- A promise or an async iterable prop is live, so `class={channel}` changes the attribute with each value, and `null`, `undefined` or `false` removes it (JX-064).
+  An `on*` prop cannot be dynamic (JX-060).
+- `derive(source, map)` maps each value of a `select`, a `Channel`, a `watch` or an `Item`, so a dynamic prop or child follows a computed value (HE-051).
+  ``class={derive(view, ({ filter }) => `list-${filter}`)}`` needs no loop in the component.
 - SVG tags get the SVG namespace (JX-001).
   `a`, `script`, `style` and `title` inside an SVG element need `xmlns="http://www.w3.org/2000/svg"`.
 - Cast elements to their DOM type: `<input /> as HTMLInputElement`.

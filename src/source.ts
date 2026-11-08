@@ -16,6 +16,35 @@ export const thenOf = (value: any) =>
 export const isThenable = (value: any): value is PromiseLike<unknown> =>
   callable(thenOf(value));
 
+// The kinds of source that detect finds.
+export const PLAIN = 0,
+  PROMISE = 1,
+  ASYNC = 2,
+  RAW = 3,
+  ITERABLE = 4;
+export type Detected = { kind: number; method?: any };
+
+/**
+ * Finds the kind of a source, and keeps the method that it read, so a later use never reads it again (SE-016).
+ * Only iterables reads `Symbol.iterator`, because select keeps an iterable such as an array as a plain value. */
+export const detect = (source: any, iterables = false): Detected => {
+  const then = thenOf(source);
+  if (callable(then)) return { kind: PROMISE, method: then };
+  const asyncIterator = source?.[Symbol.asyncIterator];
+  if (callable(asyncIterator)) return { kind: ASYNC, method: asyncIterator };
+  const iterator = iterables ? source?.[Symbol.iterator] : undefined;
+  if (callable(iterator)) return { kind: ITERABLE, method: iterator };
+  const next = source?.next;
+  return callable(next) ? { kind: RAW, method: next } : { kind: PLAIN };
+};
+
+/** Finds how feed and catching read a source, which is not a string and not a plain value. */
+export const detectStream = (source: unknown) => {
+  if (typeof source === "string") return undefined;
+  const detected = detect(source, true);
+  return detected.kind === PLAIN ? undefined : detected;
+};
+
 /** Wraps a thenable as an iterator of one value, so it needs no pull path of its own. */
 const once = (source: any, then: any) => {
   let pulled = false;
@@ -35,30 +64,13 @@ const once = (source: any, then: any) => {
   };
 };
 
-/** Pairs an iterator with its `next` method, read one time. */
-const record = (iterator: any): [any, any] => [iterator, iterator.next];
-
-/**
- * Finds how to read a source as a promise, an async iterable, an iterable or an iterator.
- * Runs once per call, and keeps what it read, so a later use never detects again. */
-export function detect(
-  source: any,
-): { stream: boolean; open: () => [any, any] } | undefined {
-  if (typeof source === "string") return undefined;
-  const then = thenOf(source);
-  if (callable(then))
-    return { stream: false, open: () => record(once(source, then)) };
-  const asyncIterator = source?.[Symbol.asyncIterator];
-  if (callable(asyncIterator))
-    return { stream: true, open: () => record(asyncIterator.call(source)) };
-  const iterator = source?.[Symbol.iterator];
-  if (callable(iterator))
-    return { stream: true, open: () => record(iterator.call(source)) };
-  const next = source?.next;
-  return callable(next)
-    ? { stream: true, open: () => [source, next] }
-    : undefined;
-}
+/** Opens a detected source as an iterator and its `next` method, read one time. */
+export const open = (source: any, { kind, method }: Detected): [any, any] => {
+  if (kind === RAW) return [source, method];
+  const iterator =
+    kind === PROMISE ? once(source, method) : method.call(source);
+  return [iterator, iterator.next];
+};
 
 /**
  * Splices items into a list in place, and gives the removed items.

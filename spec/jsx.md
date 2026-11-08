@@ -83,6 +83,7 @@ The runtime uses the global `document` when it creates nodes.
 
 - **Dynamic child**: a value with a callable `then`, or with a callable `Symbol.asyncIterator`.
 - **Static child**: any other child.
+- **Dynamic prop**: a prop other than `children` with a dynamic value.
 - **Host**: an element whose children the runtime owns.
 - **Entry**: one part of a host, with the nodes that the part has now.
   A host keeps its entries in order.
@@ -102,6 +103,7 @@ The runtime uses the global `document` when it creates nodes.
   JSX creates children before their parent, so the namespace of a parent cannot apply to its children.
   So `a`, `script`, `style` and `title`, which are also HTML tags, need `xmlns` inside an SVG element.
 - JX-002: For each own enumerable key of `props` other than `children`, `jsx` MUST apply the value in key order.
+  A dynamic value makes a dynamic prop (JX-060).
   A function value at a key that starts with `on` MUST become a listener, with `addEventListener`.
   The event type is the rest of the key in lower case.
   `null`, `undefined` and `false` MUST set nothing.
@@ -142,7 +144,8 @@ The runtime converts a child to nodes by these rules, in order.
 - JX-022: `mount` MUST drive the dynamic children with one `select`, with `autoStart`, `nonYielding` and `autoClose`.
   So the children start in a microtask (SE-031), and the host does no more work when they all finish (SE-070).
   `mount` does no `select` call if there is no dynamic child.
-- JX-023: The runtime MUST place after each report of that `select`.
+- JX-023: The runtime MUST place after each report of that `select` that changes the nodes of an entry.
+  So an output that keeps the nodes costs no place.
 - JX-024: A pending state MUST keep the nodes of the entry.
 - JX-025: An output that is the `Object.is` same as the previous output MUST keep the nodes.
   So a component yields its node again to wake a host with no change to the DOM.
@@ -158,7 +161,7 @@ The runtime converts a child to nodes by these rules, in order.
   It MUST remove a node that leaves the host, and MUST NOT move the nodes after it.
   A node that two entries give MUST land at its last place.
 - JX-02A: `mount` MUST return an unmount function.
-  Its first call MUST stop the drive of each host in `parent` and its descendants at the time of the call, and then remove all children of `parent`.
+  Its first call MUST stop the drive of each host in `parent` and its descendants at the time of the call, and the dynamic props of the descendants, and then remove all children of `parent`.
   Its later calls MUST do nothing.
   To stop a drive, the runtime closes its `select`, so each unfinished child gets `return()` (SE-120).
 - JX-02B: An element that `jsx` creates with a dynamic child MUST wait, and MUST NOT create its `select` until the runtime places it.
@@ -167,6 +170,23 @@ The runtime converts a child to nodes by these rules, in order.
   An element MUST start one time.
   `mount` into a waiting element MUST end its wait, so its earlier children never start.
   So an element starts only when its ancestors are in place, and an element that is never placed costs no `select`.
+
+## Dynamic props
+
+A dynamic prop changes with its source, so a component needs no code to update an attribute or a live property.
+
+- JX-060: A dynamic prop at a key that starts with `on` MUST throw a `TypeError`, because an event attribute runs its value as code.
+- JX-061: An element with a dynamic prop MUST wait as JX-02B says, and MUST then drive its dynamic props with one `select`, with `autoStart`, `nonYielding` and `autoClose`.
+  The element MUST start its children before its dynamic props.
+  This `select` is apart from the drive of the children, so `mount` into the element keeps its dynamic props (JX-020).
+- JX-062: A pending state, and an output that is the `Object.is` same as the last applied output, MUST change nothing.
+  A new dynamic prop has `undefined` as its last applied output.
+- JX-063: An output at a live property MUST be assigned to the property of the element as it is.
+- JX-064: Another output MUST set the attribute as JX-002 does, except that `null`, `undefined` and `false` MUST remove the attribute.
+- JX-065: A rejected state, and an error that applying an output throws, MUST call `globalThis.reportError`.
+  The element keeps its attribute or property, and the other dynamic props continue.
+- JX-066: A dynamic prop MUST keep its last output when its source finishes.
+  It stops when the unmount function of a `mount` around the element runs (JX-02A).
 
 ## Each
 
@@ -256,7 +276,7 @@ Provide a `Channel` or a `select` for a value that changes.
 - JX-043: The children of a host belong to the runtime.
   A place removes nodes that other code adds.
   Code can change the attributes and the content of the nodes in an entry.
-- JX-044: `jsx` assigns a live property one time, so it does not apply to options that a dynamic child adds later.
+- JX-044: `jsx` assigns a static live property one time, so it does not apply to options that a dynamic child adds later.
   It assigns the value as it is, so a `value` on a file input throws, as the DOM does.
 - JX-045: Other code that inserts a waiting element, for example with `append`, does not start it (JX-02B).
   Yield the element or make it a child, so that a host places it.

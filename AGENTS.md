@@ -6,7 +6,7 @@ All source needs 100% V8 branch coverage and 100% Stryker mutation coverage.
 
 ## Layout
 
-- `src/`: `channel.ts`, `select.ts` (also `changes`, `watch`, `Val`, `Op`), `feed.ts`, `helpers.ts` (`applyOps` etc.), `jsx.ts` (runtime, `each`, `mount`), `devtools.ts` (hook, `owned`, `register`), `index.ts` (root exports, JSX included).
+- `src/`: `channel.ts`, `select.ts` (`Select` is also the proxy handler, with `Log`, `Reader`, slices and `Watcher`; also `changes`, `watch`, `Val`, `Op`), `feed.ts`, `helpers.ts` (`applyOps` etc.), `source.ts` (`detect`, `open` and other internals of feed, select and catching), `jsx.ts` (runtime, `mount`, and re-exports), `host.ts` (conversion, placement, drives, waits and dynamic props), `each.ts`, `context.ts`, `devtools.ts` (hook, `owned`, `register`), `index.ts` (root exports, JSX included).
 - `spec/<module>.md`: rules with stable IDs (`CH-`, `SE-`, `FE-`, `HE-`, `JX-`, `DV-`). Test names contain the rule IDs they cover.
 - `tests/<module>.test.ts`; `tests/slice.test.ts` covers slice readers and `watch`; `tests/dom.ts` is the fake DOM (`fakeDocument`, `html`); `tests/jsx.test.ts` has `setup`/`mounted`/`plain` helpers for `each`.
 - `devtools/`: Chrome extension; `src/hook.ts` runs in the page, `src/panel.tsx` is the panel (gg JSX), `src/types.d.ts` holds the batch shape. It has no tests.
@@ -29,6 +29,17 @@ Run `npx biome check --write spec` after a spec edit, because Biome formats the 
 Run `npm run build:devtools` after a devtools change, and ask the user to reload the extension.
 Bump `PROTOCOL` in `devtools/src/hook.ts` and `devtools/src/panel.tsx` together when the batch shape changes.
 Call esbuild as `node_modules/.bin/esbuild`, which is a binary, not a script for `node`.
+
+## Names
+
+Source names follow the terms of `spec/scope.md`:
+- `finished`: a source produced `done: true` or failed.
+- `ended`: a consumer, a reader or a run does no more work.
+- `terminal`: a channel after its first `close` or `throw`.
+- `dead`: a slot that left its shape, or whose channel is terminal.
+- `left`: an `Item` whose entry left `each`.
+- `stop`: ends a drive, a reader or a `watch`.
+- `done`: the field of an iterator result.
 
 ## Testing
 

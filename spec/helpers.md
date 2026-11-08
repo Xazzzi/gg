@@ -22,6 +22,11 @@ export function catching<T>(
   onError: (error: unknown) => void | PromiseLike<void>,
 ): Caught<T>;
 
+export function derive<T, R>(
+  source: AsyncIterable<T>,
+  map: (value: T) => R,
+): AsyncGenerator<Awaited<R>, void, void>;
+
 export function isVal(value: unknown): value is Val<unknown>;
 export function spread<S>(snapshot: S): Spread<S>;
 
@@ -117,6 +122,30 @@ A wrapped sync source becomes an async iterator.
 In `select`, it follows the async rules and not SE-060 and SE-073.
 So `select` pulls it freely.
 It also keeps the channel open.
+
+## derive
+
+`derive` maps each value of an async iterable.
+So a dynamic prop or a dynamic child follows a value that code computes from a `select`, a `Channel`, a `watch` or an `Item`.
+
+- HE-050: `derive` MUST throw a `TypeError` synchronously if `source` has no callable `Symbol.asyncIterator`, or if `map` is not a function.
+- HE-051: `derive` MUST return an async generator that yields `map(value)` for each value of `source`, in order.
+  It MUST NOT read `source` before the first `next()`.
+  `yield` awaits a thenable result of `map`.
+- HE-052: The generator MUST finish when `source` finishes.
+  It MUST reject with the unchanged error when `source` or `map` throws.
+- HE-053: `return()` on the generator MUST call `return()` on the iterator of `source`.
+  An async generator queues `return()` behind a pending `next()`, as JX-041 says.
+
+```ts
+const count = new Channel<number>();
+count.send(1);
+count.send(2);
+count.close();
+const labels: string[] = [];
+for await (const label of derive(count, n => `#${n}`)) labels.push(label);
+labels; // => [ '#1', '#2' ]
+```
 
 ## isVal
 

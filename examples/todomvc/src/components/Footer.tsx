@@ -1,42 +1,48 @@
-import type { Send, View } from "../state.ts";
+import { derive } from "@xazzzi/gg";
+import type { Send, Todo, View } from "../state.ts";
 
-export async function* Footer({ view, send }: { view: View; send: Send }) {
-  const count = (<span class="todo-count" />) as HTMLElement;
-  const links = [
-    ["#/", "All"],
-    ["#/active", "Active"],
-    ["#/completed", "Completed"],
-  ].map(([hash, name]) => (<a href={hash}>{name}</a>) as HTMLAnchorElement);
-  const clear = (
-    <button
-      class="clear-completed"
-      type="button"
-      onclick={() => send({ type: "clearCompleted" })}
+const left = (todos: Todo[]) => todos.filter(todo => !todo.completed).length;
+
+// Dynamic props and text children follow the view, so the footer needs no loop of its own.
+export function Footer({ view, send }: { view: View; send: Send }) {
+  const filters = [
+    ["#/", "all", "All"],
+    ["#/active", "active", "Active"],
+    ["#/completed", "completed", "Completed"],
+  ];
+  return (
+    <footer
+      class="footer"
+      hidden={derive(view, ({ todos = [] }) => !todos.length)}
     >
-      Clear completed
-    </button>
-  ) as HTMLButtonElement;
-  const footer = (
-    <footer class="footer" hidden>
-      {count}
+      <span class="todo-count">
+        <strong>{derive(view, ({ todos = [] }) => left(todos))}</strong>
+        {derive(view, ({ todos = [] }) =>
+          left(todos) === 1 ? " item left" : " items left",
+        )}
+      </span>
       <ul class="filters">
-        {links.map(link => (
-          <li>{link}</li>
+        {filters.map(([hash, key, name]) => (
+          <li>
+            <a
+              href={hash}
+              class={derive(view, ({ filter = "all" }) =>
+                filter === key ? "selected" : null,
+              )}
+            >
+              {name}
+            </a>
+          </li>
         ))}
       </ul>
-      {clear}
+      <button
+        class="clear-completed"
+        type="button"
+        hidden={derive(view, ({ todos = [] }) => left(todos) === todos.length)}
+        onclick={() => send({ type: "clearCompleted" })}
+      >
+        Clear completed
+      </button>
     </footer>
-  ) as HTMLElement;
-  yield footer;
-  for await (const { todos: items = [], filter = "all" } of view) {
-    const left = items.filter(todo => !todo.completed).length;
-    footer.hidden = !items.length;
-    count.innerHTML = `<strong>${left}</strong> item${left === 1 ? "" : "s"} left`;
-    clear.hidden = left === items.length;
-    for (const link of links)
-      link.classList.toggle(
-        "selected",
-        (link.hash.replace(/^#\/?/, "") || "all") === filter,
-      );
-  }
+  );
 }

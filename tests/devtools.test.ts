@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { CHAN, Channel, changes, feed, select, watch } from "../src/index.ts";
+import {
+  CHAN,
+  Channel,
+  changes,
+  derive,
+  feed,
+  select,
+  watch,
+} from "../src/index.ts";
 import {
   type Child,
   createContext,
@@ -53,17 +61,20 @@ test("DV-002 registration passes kind, target and detail with defaults", async (
       firstReceive: "unread",
       thenReceive: "every",
       stopStyle: "drain",
+      ackStyle: "any",
       owner: undefined,
     });
     const custom = new Channel<number>({
       firstReceive: "first",
       thenReceive: "latest",
       stopStyle: "stop",
+      ackStyle: "all",
     });
     assert.deepEqual(details.get(custom), {
       firstReceive: "first",
       thenReceive: "latest",
       stopStyle: "stop",
+      ackStyle: "all",
       owner: undefined,
     });
     const source = [1];
@@ -105,10 +116,12 @@ test("DV-003 the hook finds the caller at a fixed stack depth", () => {
     new Channel();
     feed([1], new Channel());
     select({});
+    derive(new Channel(), String);
   } finally {
     delete g[HOOK];
   }
-  assert.equal(frames.length, 5);
+  assert.equal(frames.length, 7);
+  frames.splice(5, 1); // The channel of derive
   assert.match(frames[3], /^channel .*select\.ts/); // The channel that select owns
   frames.splice(3, 1);
   for (const frame of frames) assert.match(frame, /devtools\.test\.ts/);
@@ -333,8 +346,11 @@ test("DV-033 slots describe each slot in order", async () => {
     assert.equal(settled.source, promise);
     assert.equal(settled.state.value, 1);
     assert.equal(iterator.finished, true);
-    assert.deepEqual([first.sync, second.sync], [true, false]);
-    assert.equal(second.busy, true);
+    assert.deepEqual(
+      [first.kind, first.sync, second.kind, second.sync],
+      ["raw", true, "raw", false],
+    );
+    assert.deepEqual([second.busy, second.finished], [true, false]);
     s.reverse();
     assert.deepEqual(
       slots().map(({ key }: any) => key),
@@ -344,6 +360,14 @@ test("DV-033 slots describe each slot in order", async () => {
     const o = select({ x: 1 });
     assert.equal(details.get(o).slots()[0].key, "x");
     s[CHAN].close();
+    const last = select(
+      { raw: { next: () => ({ value: new Promise(() => {}), done: true }) } },
+      { autoStart: true, autoClose: false },
+    );
+    await setImmediate();
+    const [final] = details.get(last).slots();
+    assert.deepEqual([final.busy, final.finished], [true, true]);
+    last[CHAN].close();
   } finally {
     off();
   }
@@ -748,6 +772,38 @@ test("DV-053 a read that resolves with operations emits them", async () => {
     r.return();
     await r.next();
     assert.equal(log.filter(([, event]) => event === "read").length, 1);
+  } finally {
+    off();
+  }
+});
+
+test("DV-002 DV-060 DV-061 DV-062 derive registers its source and map, and emits start, values and end", async () => {
+  const { log, details, off } = install();
+  try {
+    const ch = new Channel<number>(),
+      map = (n: number) => n * 2,
+      it = derive(ch, map);
+    assert.deepEqual(details.get(it), { source: ch, map, owner: undefined });
+    const own = () => log.filter(([kind]) => kind === "derive");
+    assert.deepEqual(own(), [["derive", "register"]]);
+    ch.send(1);
+    await it.next();
+    ch.close();
+    await it.next();
+    await it.next();
+    assert.deepEqual(own(), [
+      ["derive", "register"],
+      ["derive", "start"],
+      ["derive", "value", 2],
+      ["derive", "end"],
+    ]);
+    const early = derive(new Channel<number>(), map);
+    await early.return(undefined);
+    assert.equal(
+      log.filter(([kind, event]) => kind === "derive" && event === "end")
+        .length,
+      1,
+    );
   } finally {
     off();
   }

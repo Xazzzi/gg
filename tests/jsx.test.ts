@@ -263,6 +263,28 @@ test("JX-025 JX-027 a component replaces its node, and a repeat yield changes no
   assert.equal(html(parent), "<div>ab</div>");
 });
 
+test("JX-023 an output that keeps the nodes does not place", async () => {
+  const parent = el(),
+    node = el("n"),
+    values = latest<any>();
+  mount(parent, values);
+  values.send("a");
+  await setImmediate();
+  parent.append(el("own"));
+  values.send("b");
+  await setImmediate();
+  values.send("b");
+  await setImmediate();
+  assert.equal(html(parent), "<div>b<own></own></div>");
+  values.send(node);
+  await setImmediate();
+  assert.equal(html(parent), "<div><n></n></div>");
+  parent.append(el("own"));
+  values.send(node);
+  await setImmediate();
+  assert.equal(html(parent), "<div><n></n><own></own></div>");
+});
+
 test("JX-026 a text output changes the data of the runtime Text node", async () => {
   const parent = el(),
     values = latest<any>(),
@@ -329,6 +351,160 @@ test("JX-020 a mount into a host stops its drive first, after the conversion", a
   count.send(2);
   await setImmediate();
   assert.equal(html(parent), "<div>x</div>");
+});
+
+test("JX-060 a dynamic on prop throws", () => {
+  for (const value of [Promise.resolve(() => {}), latest()])
+    assert.throws(() => h("button", { onclick: value }), {
+      name: "TypeError",
+      message: "onclick does not take a dynamic value",
+    });
+});
+
+test("JX-061 JX-064 a dynamic prop waits for placement, then sets and removes its attribute", async () => {
+  const cls = latest<unknown>(),
+    node = h("p", { title: "t", class: cls });
+  cls.send("a");
+  await setImmediate();
+  assert.equal(html(node), '<p title="t"></p>');
+  mount(el(), node);
+  await setImmediate();
+  assert.equal(html(node), '<p title="t" class="a"></p>');
+  const outputs: [unknown, string][] = [
+    [true, '<p title="t" class=""></p>'],
+    [false, '<p title="t"></p>'],
+    [1, '<p title="t" class="1"></p>'],
+    [null, '<p title="t"></p>'],
+    ["b", '<p title="t" class="b"></p>'],
+    [undefined, '<p title="t"></p>'],
+  ];
+  for (const [value, expected] of outputs) {
+    cls.send(value);
+    await setImmediate();
+    assert.equal(html(node), expected);
+  }
+  cls.close();
+});
+
+test("JX-061 JX-066 the select of dynamic props closes when they finish", async () => {
+  const p = Promise.withResolvers<string>(),
+    node = h("p", { title: p.promise });
+  const [channel] = await selects(async () => {
+    mount(el(), node);
+    await setImmediate();
+  });
+  assert.equal(channel.signal.aborted, false);
+  p.resolve("t");
+  await setImmediate();
+  assert.equal(html(node), '<p title="t"></p>');
+  assert.equal(channel.signal.aborted, true);
+});
+
+test("JX-061 an element starts its children before its dynamic props", async () => {
+  const log: string[] = [],
+    thenable = (name: string) => ({ then: () => log.push(name) });
+  mount(
+    el(),
+    h("select", { value: thenable("prop"), children: thenable("child") }),
+  );
+  await setImmediate();
+  assert.deepEqual(log, ["child", "prop"]);
+});
+
+test("JX-062 a pending state and a repeat output change nothing", async () => {
+  const title = latest<unknown>(),
+    gate = Promise.withResolvers<string>(),
+    node = h("p", { title, lang: gate.promise }),
+    calls: string[] = [];
+  node.setAttribute = (name: string) => calls.push(`set ${name}`);
+  node.removeAttribute = (name: string) => calls.push(`remove ${name}`);
+  mount(el(), node);
+  title.send(undefined);
+  await setImmediate();
+  title.send("a");
+  await setImmediate();
+  title.send("a");
+  await setImmediate();
+  assert.deepEqual(calls, ["set title"]);
+  gate.resolve("en");
+  await setImmediate();
+  assert.deepEqual(calls, ["set title", "set lang"]);
+  title.close();
+});
+
+test("JX-063 an output at a live property is assigned as it is", async () => {
+  const value = latest<unknown>(),
+    checked = latest<unknown>(),
+    node = h("input", { value, checked });
+  mount(el(), node);
+  value.send("x");
+  checked.send(true);
+  await setImmediate();
+  assert.equal(node.value, "x");
+  assert.equal(node.checked, true);
+  value.send(null);
+  checked.send(false);
+  await setImmediate();
+  assert.equal(node.value, null);
+  assert.equal(node.checked, false);
+  assert.equal(html(node), "<input></input>");
+  value.close();
+  checked.close();
+});
+
+test("JX-065 a rejection and a failed output report, and the other props continue", async () => {
+  reported.length = 0;
+  const error = new Error("bad"),
+    title = latest<unknown>(),
+    value = latest<unknown>(),
+    node = h("input", { title, value, lang: Promise.reject(error) });
+  Object.defineProperty(node, "value", {
+    set() {
+      throw error;
+    },
+  });
+  mount(el(), node);
+  title.send("a");
+  await setImmediate();
+  title.send(Symbol("s"));
+  value.send("v");
+  await setImmediate();
+  assert.equal(reported.length, 3);
+  assert.equal(reported[0], error);
+  assert.ok(reported.includes(error));
+  assert.equal(html(node), '<input title="a"></input>');
+  title.send("b");
+  await setImmediate();
+  assert.equal(html(node), '<input title="b"></input>');
+  title.close();
+  value.close();
+});
+
+test("JX-066 a dynamic prop keeps its last output, and stops with the unmount of a mount around it", async () => {
+  const outer = latest<unknown>(),
+    inner = latest<unknown>(),
+    child = h("b", { title: inner }),
+    parent = h("p", { title: outer, children: child }),
+    root = el();
+  const unmount = mount(root, parent);
+  outer.send("o");
+  inner.send("i");
+  await setImmediate();
+  const stop = mount(parent, child);
+  stop();
+  mount(parent, child);
+  outer.send("o2");
+  inner.send("i2");
+  await setImmediate();
+  assert.equal(html(parent), '<p title="o2"><b title="i"></b></p>');
+  unmount();
+  outer.send("o3");
+  await setImmediate();
+  assert.equal(html(parent), '<p title="o2"><b title="i"></b></p>');
+  const done = h("p", { title: Promise.resolve("x") });
+  mount(el(), done);
+  await setImmediate();
+  assert.equal(html(done), '<p title="x"></p>');
 });
 
 test("JX-02A JX-03B unmount stops each host inside the parent, ends each at once, and empties the parent", async () => {
@@ -558,6 +734,30 @@ test("JX-037 each does not yield after a read with only set operations", async (
   s.items.push("c");
   assert.equal((await next).value?.length, 2);
   await s.list.return();
+});
+
+test("JX-028 JX-037 an item that rejects or gives a bad child does not make each yield", async () => {
+  for (const settle of [
+    (p: PromiseWithResolvers<unknown>) => p.reject(new Error("x")),
+    (p: PromiseWithResolvers<unknown>) => p.resolve({}),
+  ]) {
+    const gate = Promise.withResolvers<unknown>(),
+      items = select(["a"], {
+        autoStart: true,
+        autoClose: false,
+        nonYielding: true,
+      }),
+      list = each(items, () => gate.promise as any);
+    await setImmediate();
+    await list.next();
+    const next = list.next(),
+      count = reported.length;
+    settle(gate);
+    await setImmediate();
+    assert.equal(reported.length, count + 1);
+    assert.match(inspect(next), /pending/);
+    await list.return();
+  }
 });
 
 test("JX-037 a busy host gets one output for all reads since its last pull", async () => {
@@ -946,7 +1146,27 @@ test("JX-03C a static child from a new render changes the nodes after a set", as
   await setImmediate();
   await list.next();
   await setImmediate();
+  const next = list.next();
+  items[0] = "b";
+  assert.deepEqual(
+    (await next).value?.map(node => (node as any).data),
+    ["s"],
+  );
+  await list.return();
+});
+
+test("JX-03C a static child of a new render yields at once", async () => {
+  let renders = 0;
+  const { items, list } = gated(["a"], item =>
+    renders++
+      ? "s"
+      : (async () => {
+          for await (const _ of item) break;
+        })(),
+  );
+  await setImmediate();
   await list.next();
+  await setImmediate();
   const next = list.next();
   items[0] = "b";
   assert.deepEqual(

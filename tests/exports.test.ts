@@ -16,6 +16,7 @@ test("Package exports the root exports the public names", () => {
     "changes",
     "consume",
     "createContext",
+    "derive",
     "each",
     "feed",
     "isVal",

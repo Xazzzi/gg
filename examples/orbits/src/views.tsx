@@ -1,39 +1,34 @@
-import { each, type Item } from "@xazzzi/gg";
+import { derive, each, type Item } from "@xazzzi/gg";
 import { type Body, type Sim, STAR, type Stats } from "./sim.ts";
 
 const TRAIL = 60,
   SAMPLES = 240,
   SVG = "http://www.w3.org/2000/svg";
 
-/** Formats each value of a source, so the runtime keeps one live Text node. */
-export async function* live<T>(
-  source: AsyncIterable<T>,
-  format: (value: T) => string,
-) {
-  for await (const value of source) yield format(value);
-}
-
-// A planet owns its nodes, and its loop ends when its body leaves the list or the view unmounts.
-async function* Planet({ body }: { body: Item<Body> }) {
-  const color = `hsl(${body.value.hue} 85% 65%)`;
-  const trail = (
-    <polyline class="trail" stroke={color} />
-  ) as SVGPolylineElement;
-  const dot = (<circle r={body.value.r} fill={color} />) as SVGCircleElement;
-  yield (
-    <g>
-      {trail}
-      {dot}
-    </g>
-  );
+/** Gives the last TRAIL positions of a body as polyline points. */
+async function* trail(body: Item<Body>) {
   const points: string[] = [];
   for await (const { x, y } of body) {
-    dot.setAttribute("cx", x.toFixed(1));
-    dot.setAttribute("cy", y.toFixed(1));
     if (points.push(`${x.toFixed(1)},${y.toFixed(1)}`) > TRAIL) points.shift();
-    trail.setAttribute("points", points.join(" "));
+    yield points.join(" ");
   }
 }
+
+// Each dynamic prop reads the item, so the props end when its body leaves the list or the view unmounts.
+const Planet = ({ body }: { body: Item<Body> }) => {
+  const color = `hsl(${body.value.hue} 85% 65%)`;
+  return (
+    <g>
+      <polyline class="trail" stroke={color} points={trail(body)} />
+      <circle
+        r={body.value.r}
+        fill={color}
+        cx={derive(body, ({ x }) => x.toFixed(1))}
+        cy={derive(body, ({ y }) => y.toFixed(1))}
+      />
+    </g>
+  );
+};
 
 // A plain function component, because its children update themselves.
 // title is an HTML tag too, so it needs xmlns to be an SVG title (JX-001).
@@ -58,7 +53,7 @@ export const Orrery = ({ sim }: { sim: Sim }) => (
       ))}
     </g>
     <text x="-290" y="-280">
-      {live(sim.stats, s => `t ${s.tick}`)}
+      {derive(sim.stats, s => `t ${s.tick}`)}
     </text>
   </svg>
 );

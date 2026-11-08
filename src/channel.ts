@@ -4,6 +4,7 @@ import { isThenable, noop } from "./source.ts";
 export type FirstReceive = "first" | "unread" | "latest" | "next";
 export type ThenReceive = "every" | "latest" | "unread";
 export type StopStyle = "drain" | "stop";
+export type AckStyle = "any" | "all";
 
 type Sendable<T> = T extends PromiseLike<any> ? never : T;
 
@@ -11,6 +12,7 @@ export type ChannelOptions = {
   firstReceive?: FirstReceive;
   thenReceive?: ThenReceive;
   stopStyle?: StopStyle;
+  ackStyle?: AckStyle;
 };
 
 // The tail cell is empty and receives the next value, so n <= the newest number means filled.
@@ -23,6 +25,7 @@ const STOP_BRAND = Symbol.for("gg.StopError");
 const FIRST_RECEIVE = ["first", "unread", "latest", "next"];
 const THEN_RECEIVE = ["every", "latest", "unread"];
 const STOP_STYLE = ["drain", "stop"];
+const ACK_STYLE = ["any", "all"];
 
 /** The error that producers and `signal` get after a channel closes or throws. */
 export class StopError extends Error {
@@ -55,9 +58,10 @@ export class Channel<T, TReturn = undefined>
   #first: FirstReceive;
   #then: ThenReceive;
   #stops: boolean;
+  #readers?: Set<Reader<T>>; // The active consumers, which an ack waits for under "all"
   #control?: AbortController; // Made on the first read of signal
   #stop?: StopError;
-  #ended = false;
+  #terminal = false;
   #tail: Cell<T> = { n: 1 };
   #anchor!: Cell<T>; // The head for "unread", value 1 for "first", and read only once set
   #newest?: Cell<T>;
@@ -74,7 +78,7 @@ export class Channel<T, TReturn = undefined>
 
   static {
     attached = channel =>
-      channel.#ended
+      channel.#terminal
         ? Promise.reject(channel.#stopError())
         : channel.#active
           ? Promise.resolve()
@@ -87,7 +91,7 @@ export class Channel<T, TReturn = undefined>
   get signal(): AbortSignal {
     if (!this.#control) {
       this.#control = new AbortController();
-      if (this.#ended) this.#control.abort(this.#stopError());
+      if (this.#terminal) this.#control.abort(this.#stopError());
     }
     return this.#control.signal;
   }
@@ -97,34 +101,42 @@ export class Channel<T, TReturn = undefined>
     firstReceive = "unread",
     thenReceive = "every",
     stopStyle = "drain",
+    ackStyle = "any",
   }: ChannelOptions = {}) {
     if (
       !FIRST_RECEIVE.includes(firstReceive) ||
       !THEN_RECEIVE.includes(thenReceive) ||
-      !STOP_STYLE.includes(stopStyle)
+      !STOP_STYLE.includes(stopStyle) ||
+      !ACK_STYLE.includes(ackStyle)
     )
       throw new TypeError("Invalid channel option");
     if (thenReceive === "unread" && firstReceive !== "unread")
       throw new TypeError(
         'thenReceive "unread" requires firstReceive "unread"',
       );
+    if (thenReceive === "unread" && ackStyle === "all")
+      throw new TypeError(
+        'ackStyle "all" does not apply to thenReceive "unread"',
+      );
     this.#first = firstReceive;
     this.#then = thenReceive;
     this.#stops = stopStyle === "stop";
+    if (ackStyle === "all") this.#readers = new Set();
     if (firstReceive === "first" || firstReceive === "unread")
       this.#anchor = this.#tail;
     this.#emit = register("channel", this, {
       firstReceive,
       thenReceive,
       stopStyle,
+      ackStyle,
     });
   }
 
   /** Appends a value to the log, and wakes blocked consumers. */
   send(value: Sendable<T>): void {
-    if (this.#ended) throw this.#stopError();
+    if (this.#terminal) throw this.#stopError();
     const thenable = isThenable(value);
-    if (this.#ended) throw this.#stopError(); // A then getter can close the channel
+    if (this.#terminal) throw this.#stopError(); // A then getter can close the channel
     if (thenable) throw new TypeError("Channel does not accept thenables");
     const cell: Cell<T> = this.#tail;
     this.#tail = { n: cell.n + 1 };
@@ -146,7 +158,7 @@ export class Channel<T, TReturn = undefined>
       ack.n = this.#tail.n - 1; // Read after send, because a then getter can send too
       this.#lastAck = this.#lastAck.next = ack;
     } catch (error) {
-      if (!this.#ended || error !== this.#stop) return Promise.reject(error); // CH-013 stays loud when ignored
+      if (!this.#terminal || error !== this.#stop) return Promise.reject(error); // CH-013 stays loud when ignored
       ack.reject(error);
     }
     ack.promise.catch(noop); // CH-01C, and an awaiting producer still sees the rejection
@@ -156,7 +168,7 @@ export class Channel<T, TReturn = undefined>
   /** Ends the channel, so consumers finish with value after the values that stopStyle keeps. */
   close(value?: Sendable<TReturn>): void {
     // The second check is CH-061, because a then getter can close the channel.
-    if (!this.#ended && isThenable(value) && !this.#ended)
+    if (!this.#terminal && isThenable(value) && !this.#terminal)
       throw new TypeError("Channel does not accept thenables");
     this.#end(false, value);
   }
@@ -182,7 +194,7 @@ export class Channel<T, TReturn = undefined>
       for (;;) {
         await null; // A read always happens in a microtask
         while (!this.#readable(reader)) {
-          if (this.#ended) {
+          if (this.#terminal) {
             if (this.#failed) throw this.#result;
             return this.#result as TReturn;
           }
@@ -203,6 +215,7 @@ export class Channel<T, TReturn = undefined>
         if (reader.pos < this.#tail.n - 1) this.#behind--;
       }
       this.#prune();
+      if (this.#readers?.delete(reader)) this.#ack(this.#floor()); // CH-01E
     }
   }
 
@@ -221,6 +234,7 @@ export class Channel<T, TReturn = undefined>
     // Stryker disable next-line ArithmeticOperator: pos only matters after a read, as a reader with no read ends only under "stop", which drops the newest
     const reader: Reader<T> = { at, pos: at ? at.n - 1 : 0 };
     if (at) this.#place(reader);
+    this.#readers?.add(reader);
     this.#emit?.("attach", reader, pulledSource());
     return reader;
   }
@@ -235,7 +249,7 @@ export class Channel<T, TReturn = undefined>
   /** Tells if the reader has a value to take now. */
   #readable(reader: Reader<T>) {
     return (
-      !(this.#stops && this.#ended) &&
+      !(this.#stops && this.#terminal) &&
       (reader.at ?? this.#anchor).n < this.#tail.n
     );
   }
@@ -251,14 +265,29 @@ export class Channel<T, TReturn = undefined>
     if (!reader.placed) this.#place(reader);
     else if (n === this.#tail.n - 1) this.#behind--;
     this.#prune();
+    this.#ack(this.#readers ? this.#floor() : n);
+    this.#emit?.("read", value, n, reader);
+    return value as T;
+  }
+
+  /** Resolves the acks of values up to n. */
+  #ack(n: number) {
     let ack = this.#acked.next;
     while (ack && ack.n <= n) {
       ack.resolve();
       this.#acked = ack;
       ack = ack.next;
     }
-    this.#emit?.("read", value, n, reader);
-    return value as T;
+  }
+
+  /**
+   * Gives the last value that every active consumer read or starts after, or 0 with no consumer (CH-01E).
+   * Only "first" and "unread" leave a consumer unplaced, and it starts at the anchor. */
+  #floor() {
+    let floor = Infinity;
+    for (const { placed, pos } of this.#readers as Set<Reader<T>>)
+      floor = Math.min(floor, placed ? pos : this.#anchor.n - 1);
+    return floor === Infinity ? 0 : floor;
   }
 
   /** Tells if the newest value must stay, for a latest holder or a later "then newest" read (CH-050). */
@@ -289,7 +318,7 @@ export class Channel<T, TReturn = undefined>
 
   /** Makes the channel terminal one time, rejects pending acks, and aborts the signal. */
   #end(failed: boolean, result: unknown) {
-    if (this.#ended) return;
+    if (this.#terminal) return;
     this.#failed = failed;
     this.#result = result;
     for (let ack = this.#acked.next; ack; ack = ack.next)
@@ -304,7 +333,7 @@ export class Channel<T, TReturn = undefined>
       this.#anchor = this.#tail;
     }
     this.#emit?.("end", failed, result);
-    this.#ended = true;
+    this.#terminal = true;
     this.#control?.abort(this.#stopError());
   }
 }

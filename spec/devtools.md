@@ -18,27 +18,28 @@ So this spec defines only the contract with that extension.
 
 ## Registration
 
-- DV-001: The library MUST read the hook when it creates a `Channel`, when `feed` or `select` is called, and for each registration of DV-040 to DV-042, DV-046 and DV-050.
+- DV-001: The library MUST read the hook when it creates a `Channel`, when `feed`, `select` or `derive` is called, and for each registration of DV-040 to DV-042, DV-046 and DV-050.
   If the value is not a function, the library does no devtools work for that object.
 - DV-002: The library MUST call the hook as `hook(kind, target, detail)`.
   The hook returns an emitter or `undefined`.
-- DV-003: The call stack of the hook MUST be the hook, an internal function, the `Channel` constructor, the `feed`, `select`, `jsx` or `each` function or the `[Symbol.asyncIterator]` method of an `Item`, and then the caller.
+- DV-003: The call stack of the hook MUST be the hook, an internal function, the `Channel` constructor, the `feed`, `select`, `derive`, `jsx` or `each` function or the `[Symbol.asyncIterator]` method of an `Item`, and then the caller.
   For `"mount"`, it MUST be the hook, two internal functions, `mount` or `jsx`, and then the caller.
   So the hook can find the caller in `new Error().stack`.
   A `"reader"` registration has no fixed depth, because `watch` opens its reader inside `next()`.
 - DV-004: The library MUST NOT catch errors from the hook or from an emitter.
   The hook MUST NOT throw.
 
-| `kind`        | `target`                         | `detail`                                                                             |
-| ------------- | -------------------------------- | ------------------------------------------------------------------------------------ |
-| `"channel"`   | The channel                      | `{ firstReceive, thenReceive, stopStyle }`, with defaults applied                    |
-| `"feed"`      | The source                       | `{ channel, autoStart, autoClose, backPressure, sendReturn }`, with defaults applied |
-| `"select"`    | The proxy                        | `{ channel, array, unwrap, slots }`                                                  |
-| `"component"` | What the component returned      | `{ type, props }`                                                                    |
-| `"mount"`     | The parent                       | `{}`                                                                                 |
-| `"each"`      | The iterator that `each` returns | `{ state }`                                                                          |
-| `"item"`      | The `Item`                       | `{ channel }`                                                                        |
-| `"reader"`    | The reader that `changes` makes  | `{ state, keys, source }`, with `keys` undefined for a reader of all slots           |
+| `kind`        | `target`                            | `detail`                                                                             |
+| ------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
+| `"channel"`   | The channel                         | `{ firstReceive, thenReceive, stopStyle, ackStyle }`, with defaults applied          |
+| `"feed"`      | The source                          | `{ channel, autoStart, autoClose, backPressure, sendReturn }`, with defaults applied |
+| `"select"`    | The proxy                           | `{ channel, array, unwrap, slots }`                                                  |
+| `"component"` | What the component returned         | `{ type, props }`                                                                    |
+| `"mount"`     | The parent                          | `{}`                                                                                 |
+| `"each"`      | The iterator that `each` returns    | `{ state }`                                                                          |
+| `"item"`      | The `Item`                          | `{ channel }`                                                                        |
+| `"reader"`    | The reader that `changes` makes     | `{ state, keys, source }`, with `keys` undefined for a reader of all slots           |
+| `"derive"`    | The generator that `derive` returns | `{ source, map }`                                                                    |
 
 - DV-005: Each `detail` MUST also have `owner`, which is the owner that creates the object, or `undefined`.
 
@@ -65,6 +66,13 @@ So this spec defines only the contract with that extension.
   An entry is `{ key, kind, sync, source, state, busy, finished }`.
   `kind` is `"plain"`, `"promise"`, `"async"` or `"raw"`.
   `sync` is the SE-014 result for a raw iterator, `false` for an async iterator, and `undefined` otherwise.
+
+## Derive events
+
+- DV-060: The generator of `derive` MUST emit `("start")` when its first `next()` call runs.
+- DV-061: It MUST emit `("value", output)` before it yields each output.
+- DV-062: It MUST emit `("end")` one time, when it finishes, rejects or returns after its start.
+  So a debugger can show a derive that waits, runs or ended, and link the source that it reads.
 
 ## JSX registrations
 

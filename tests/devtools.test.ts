@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { CHAN, Channel, changes, feed, select } from "../src/index.ts";
-import { type Child, each, jsx, mount } from "../src/jsx.ts";
+import { CHAN, Channel, changes, feed, select, watch } from "../src/index.ts";
+import {
+  type Child,
+  createContext,
+  each,
+  jsx,
+  mount,
+  Provide,
+  use,
+} from "../src/jsx.ts";
 import { fakeDocument } from "./dom.ts";
 
 const HOOK = Symbol.for("gg.devtools");
@@ -133,7 +141,7 @@ test("DV-010 DV-011 DV-012 channel events carry values, numbers and readers", as
     assert.equal(typeof reader, "object");
     assert.deepEqual(log, [
       ["channel", "send", "a", 1],
-      ["channel", "attach", reader],
+      ["channel", "attach", reader, undefined],
       ["channel", "read", "a", 1, reader],
       ["channel", "send", "b", 2],
       ["channel", "read", "b", 2, reader],
@@ -445,7 +453,7 @@ test("DV-041 DV-043 mount registers a parent with a dynamic child, and owns its 
   }
 });
 
-test("DV-042 DV-043 each registers its iterator, and owns its select and item channels", async () => {
+test("DV-042 DV-043 each registers its iterator, and owns its select, item channels and reader", async () => {
   const { details, off } = install();
   try {
     const state = select(["a", "b"], open);
@@ -460,6 +468,10 @@ test("DV-042 DV-043 each registers its iterator, and owns its select and item ch
     const owned = [...details].filter(([, d]) => d.owner === it);
     assert.equal(owned.filter(([t]) => t instanceof Channel).length, 3); // Two items, and the channel of the select
     assert.equal(owned.filter(([t]) => (t as any)[CHAN]).length, 1);
+    assert.equal(
+      owned.filter(([, d]) => d.state === state && "keys" in d).length,
+      1,
+    );
     for (const channel of made)
       assert.equal(details.get(channel).owner, undefined);
     state[CHAN].close();
@@ -609,6 +621,133 @@ test("DV-004 DV-005 a hook error inside an owner leaves no owner behind", () => 
   try {
     assert.throws(() => mount(el(), Promise.resolve(1)), /hook/);
     assert.equal(details.get(new Channel()).owner, undefined);
+  } finally {
+    off();
+  }
+});
+
+test("DV-050 changes registers a reader with its state and keys, and watch at its first next()", async () => {
+  const { log, details, off } = install();
+  try {
+    const s = select(["a"], { autoStart: true, nonYielding: true });
+    const all = changes(s),
+      some = changes(s, [0]);
+    assert.deepEqual(details.get(all), {
+      state: s,
+      keys: undefined,
+      source: undefined,
+      owner: undefined,
+    });
+    assert.deepEqual(details.get(some).keys, [0]);
+    const w = watch(s, 0),
+      readers = () => log.filter(([kind]) => kind === "reader").length;
+    assert.equal(readers(), 2);
+    void w.next();
+    assert.equal(readers(), 3);
+  } finally {
+    off();
+  }
+});
+
+test("DV-051 a reader emits end one time, when it finishes or has no slot left", async () => {
+  const { log, off } = install();
+  const ends = () =>
+    log.filter(([kind, event]) => kind === "reader" && event === "end").length;
+  try {
+    const open = { autoStart: true, autoClose: false, nonYielding: true };
+    const s = select(["a", "b"], open);
+    await setImmediate();
+    const a = changes(s),
+      b = changes(s, [0]);
+    assert.equal(ends(), 0);
+    a.return();
+    a[Symbol.dispose]();
+    assert.equal(ends(), 1);
+    s.shift();
+    await setImmediate();
+    assert.equal(ends(), 2);
+    await b.next();
+    await b.next();
+    assert.equal(ends(), 2);
+    changes(s, [5]);
+    assert.equal(ends(), 3);
+    const t = select(["a"], open),
+      before = changes(t, [1]),
+      c = changes(t);
+    await setImmediate();
+    assert.equal(ends(), 4);
+    await before.next();
+    t[CHAN].close();
+    assert.equal(ends(), 4);
+    await c.next();
+    await c.next();
+    assert.equal(ends(), 5);
+  } finally {
+    off();
+  }
+});
+
+test("DV-052 a reader or a consumer that a pulled component opens names it as its source", async () => {
+  const { log, details, off } = install();
+  try {
+    const s = select({ a: 1 }, open),
+      ch = new Channel<number>(),
+      Theme = createContext<string>("theme"),
+      results: object[] = [];
+    async function* Reads() {
+      yield* use(Theme);
+      yield el();
+      void watch(s, "a").next();
+      void ch[Symbol.asyncIterator]().next();
+      yield el();
+    }
+    const parent = el();
+    mount(
+      parent,
+      jsx(Provide, {
+        context: Theme,
+        value: "!",
+        children: jsx("div", { children: jsx(Reads, {}) }),
+      }),
+    );
+    for (const [target, detail] of details)
+      if (detail.type === Reads) results.push(target);
+    await setImmediate();
+    const reader = [...details].find(([, d]) => d.keys?.[0] === "a")?.[1];
+    assert.equal(reader.source, results[0]);
+    const attach = log.find(
+      ([kind, event]) => kind === "channel" && event === "attach",
+    );
+    assert.equal(attach?.[3], results[0]);
+    const throws = {
+      next() {
+        throw new Error("pull");
+      },
+    };
+    select([throws], open); // A pull that throws restores the source
+    await setImmediate();
+    changes(s, ["a"]);
+    assert.equal([...details.values()].at(-1).source, undefined);
+  } finally {
+    off();
+  }
+});
+
+test("DV-053 a read that resolves with operations emits them", async () => {
+  const { log, off } = install();
+  try {
+    const s = select(["a", "b"], open);
+    await setImmediate();
+    const r = changes(s, [1]);
+    s[1] = "c";
+    const { value } = await r.next();
+    const reads = log.filter(
+      ([kind, event]) => kind === "reader" && event === "read",
+    );
+    assert.deepEqual(reads, [["reader", "read", value]]);
+    r.return();
+    await r.next();
+    assert.equal(log.filter(([, event]) => event === "read").length, 1);
   } finally {
     off();
   }

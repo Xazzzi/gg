@@ -70,10 +70,10 @@ The `./jsx-runtime` and `./jsx-dev-runtime` entries MUST export the names of `js
 No other name is public.
 The package MUST set `sideEffects: false`, so that a bundler can remove unused helpers.
 
-| Spec         | Values                                                                                             | Types                                                                                        |
-| ------------ | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `channel.md` | `Channel`, `StopError`                                                                             | `ChannelOptions`, `FirstReceive`, `ThenReceive`, `StopStyle`                                 |
-| `feed.md`    | `feed`                                                                                             | `Source`, `FeedOptions`                                                                      |
-| `select.md`  | `select`, `changes`, `CHAN`                                                                        | `SelectShape`, `SelectOptions`, `Snapshot`, `Unwrapped`, `State`, `Val`, `Op`, `Changes`     |
-| `helpers.md` | `abortable`, `applyOps`, `catching`, `isVal`, `spread`                                             | `Caught`, `Spread`                                                                           |
-| `jsx.md`     | `jsx`, `jsxs`, `jsxDEV`, `Fragment`, `mount`, `each`, `createContext`, `Provide`, `consume`, `use` | `Static`, `Dynamic`, `Child`, `Props`, `Item`, `Context`, `JSX` (also entry `./jsx-runtime`) |
+| Spec         | Values                                                                                             | Types                                                                                             |
+| ------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `channel.md` | `Channel`, `StopError`                                                                             | `ChannelOptions`, `FirstReceive`, `ThenReceive`, `StopStyle`                                      |
+| `feed.md`    | `feed`                                                                                             | `Source`, `FeedOptions`                                                                           |
+| `select.md`  | `select`, `changes`, `watch`, `CHAN`                                                               | `SelectShape`, `SelectOptions`, `Snapshot`, `Unwrapped`, `State`, `Val`, `Op`, `Changes`, `Watch` |
+| `helpers.md` | `abortable`, `applyOps`, `catching`, `isVal`, `spread`                                             | `Caught`, `Spread`                                                                                |
+| `jsx.md`     | `jsx`, `jsxs`, `jsxDEV`, `Fragment`, `mount`, `each`, `createContext`, `Provide`, `consume`, `use` | `Static`, `Dynamic`, `Child`, `Props`, `Item`, `Context`, `JSX` (also entry `./jsx-runtime`)      |

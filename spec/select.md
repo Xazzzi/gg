@@ -61,6 +61,21 @@ export type Changes<O> = Disposable & {
 };
 
 export function changes<O>(state: State<any, any, O>): Changes<O>;
+export function changes<O, const K extends Keys<O>>(
+  state: State<any, any, O>,
+  keys: readonly K[],
+): Changes<Slice<O, K>>;
+
+export type Watch<V> = Disposable & {
+  next(): Promise<IteratorResult<V, undefined>>;
+  return(): Promise<IteratorReturnResult<undefined>>;
+  [Symbol.asyncIterator](): Watch<V>;
+};
+
+export function watch<O, K extends Keys<O>>(
+  state: State<any, any, O>,
+  key: K,
+): Watch<Entry<O, K>>;
 ```
 
 `Snapshot<T>` maps each key of `T`.
@@ -87,6 +102,11 @@ It keeps the input types because the proxy reads and writes sources, not states.
 `State` also carries `O` under a key that exists only as a type.
 The parameter of `changes` reads `CHAN` and that key, so `changes` infers the type of `outputs` from any `State`.
 
+`Keys<O>` is `number` for an array `O`, and `keyof O` otherwise.
+`Slice<O, K>` is `O` for an array `O`, and `O` picked to the keys `K`, each optional, otherwise.
+`Entry<O, K>` is the element type of an array `O`, and `O[K]` otherwise.
+For an `O` that `unknown` extends, such as from an `any` state, they are `PropertyKey`, `any` and `unknown`.
+
 ## Terms
 
 - **Slot**: one key of the shape, with a source and a state.
@@ -111,6 +131,8 @@ The parameter of `changes` reads `CHAN` and that key, so `changes` infers the ty
 - **Reader**: an object that `changes` returns.
 - **Attached**: the state of a reader that did not finish.
 - **Position**: the last operation of the log that a reader read.
+- **Slice reader**: a reader that `changes` returns for `keys`.
+- **Selected slot**: a slot that a slice reader follows.
 - **Reserved key**: `Symbol.asyncIterator`, `Symbol.dispose` or `CHAN`.
 - **Terminal**: the state of a channel after its first `close` or `throw` call.
 
@@ -426,6 +448,60 @@ A proxy read returns sources (SE-080), so a reader carries the `outputs` that it
 - SE-14B: The log MUST NOT retain an operation that each attached reader has read.
 - SE-14C: When no reader stays attached and `onChanges` does not exist, the log MUST drop its operations and build no more (SE-10A).
 
+## Slice readers
+
+`changes(state, keys)` gives a reader of the changes of some slots.
+Its operations describe its own `outputs`, so a replay of its reads follows only those slots.
+A report with no change of a selected slot does not wake the reader.
+An object key names a slot by its key, also after a `delete` and a new assignment.
+An array index names one slot, and the reader follows that slot when array operations move it (SE-092).
+So a slice reader of an array observes rows, not positions.
+
+- SE-150: If `keys` is defined and is not an array, `changes` MUST throw a `TypeError` synchronously.
+  For an object shape, each key MUST be a string, a symbol or a number, and a number names its string key.
+  For an array shape, each key MUST be a non-negative integer.
+  Otherwise `changes` MUST throw a `TypeError` synchronously.
+  Repeated keys name one slot.
+- SE-151: A slice reader MUST act as SE-141 to SE-14A define, with its slice operations in place of the operations of the log.
+  So a read waits for a report with a slice operation, and a read gives the slice operations of all reports after the position.
+- SE-152: `outputs` MUST hold the outputs of the selected slots, as SE-142 defines.
+  For an object shape, it has the selected keys that exist, in slot order.
+  For an array shape, it is a dense array of the selected slots, in index order.
+- SE-153: For an object shape, the slice operations MUST be the `set` and `delete` operations of the selected keys, unchanged.
+- SE-154: For an array shape, the slice operations MUST be the operations of the log on the selected slots, with the indices of `outputs`.
+  A `set` of a selected slot becomes a `set` at its index in `outputs`.
+  A `splice` that removes selected slots becomes one `splice` that removes them and adds nothing.
+  A `move` becomes a `move` of `outputs`, if it changes the order of the selected slots.
+  Other operations give no slice operation.
+- SE-155: An array index MUST name the slot at that index at the call, or at start for a reader that the call makes before start.
+  An index at or past the length names no slot.
+  The description of SE-107 then becomes one `splice` with `start: 0` that adds the selected slots, if any.
+- SE-156: An array slice reader with no selected slot left MUST finish after it reads the operations that removed its last selected slot.
+  A reader that names no slot finishes at the call, or at start.
+- SE-157: A slice reader MUST take its slice operations at each report.
+  So the log retains no operation for it, and the reader retains only its own slice operations (SE-13B).
+
+## Watch
+
+`watch(state, key)` gives the output of one slot, then each change of it.
+It is a slice reader of one key that gives values, not operations.
+
+- SE-160: `watch` MUST check `state` and `key` synchronously, as `changes(state, [key])` does.
+- SE-161: `watch` MUST open a slice reader of `[key]` at its first `next()`, and not before.
+  So an array index names the slot at that index at the first `next()`.
+- SE-162: The first `next()` MUST resolve with the output of the slot in `outputs`, if `outputs` has the slot.
+- SE-163: Each read of the reader MUST give the last output that its operations give the slot.
+  `next()` MUST resolve with that output, if it is not `Object.is` equal to the last output that `watch` gave.
+  Otherwise it MUST wait for the next read.
+  So a busy consumer skips the outputs between its calls.
+- SE-164: When a read ends with the slot gone, by a `delete` or by the removal of an array slot, `watch` MUST finish its reader and finish.
+  When the reader finishes, `watch` MUST finish, and it MUST reject when the reader rejects (SE-14A).
+  A finished `watch` resolves each `next()` with `{ done: true, value: undefined }`.
+- SE-165: `return()` and `[Symbol.dispose]()` MUST finish `watch` and its reader, and settle pending `next()` calls with `{ done: true, value: undefined }`.
+  `return()` MUST resolve with `{ done: true, value: undefined }`.
+  `[Symbol.asyncIterator]()` MUST return the `watch` object.
+- SE-166: The `next()` calls of `watch` MUST settle in call order.
+
 ## Errors
 
 - SE-110: If `onChanges` or `mapSnapshot` throws, `select` MUST call `channel.throw` with that error.
@@ -542,6 +618,45 @@ await setImmediate(); // => { op: 'splice', start: 0, removed: [ 'a' ], added: [
 s.push("c");
 s.reverse();
 await setImmediate(); // => { op: 'splice', start: 1, removed: [], added: [ 'c' ] } { op: 'move', order: [ 1, 0 ] }
+```
+
+Read the changes of one row, which the reader follows when the array moves it:
+
+```ts
+import { setImmediate } from "node:timers/promises";
+const s = select(["a", "b", "c"], {
+  nonYielding: true,
+  autoClose: false,
+  autoStart: true,
+});
+await setImmediate(); // Start has run
+const reader = changes(s, [1]);
+reader.outputs; // => [ 'b' ]
+s.unshift("z");
+s[2] = "B";
+(await reader.next()).value; // => [ { op: 'set', key: 0, value: 'B', prev: 'b' } ]
+reader.return();
+```
+
+Watch one field, where an equal value wakes nothing:
+
+```ts
+import { setImmediate } from "node:timers/promises";
+const form = select(
+  { name: "ann", age: 30 },
+  {
+    nonYielding: true,
+    autoClose: false,
+    autoStart: true,
+  },
+);
+await setImmediate(); // Start has run
+const age = watch(form, "age");
+await age.next(); // => { done: false, value: 30 }
+form.name = "bob";
+form.age = 31;
+await age.next(); // => { done: false, value: 31 }
+await age.return(); // => { done: true, value: undefined }
 ```
 
 Read batched changes, where one read covers two reports:

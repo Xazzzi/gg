@@ -8,6 +8,7 @@ declare namespace GG {
     text: string;
     n?: number;
     reader?: number;
+    from?: number; // In a component's read log, the select or channel that the read came from
   };
   type Reader = {
     id: number;
@@ -15,6 +16,8 @@ declare namespace GG {
     label?: string; // The consumer, as a function name, a site, or a select slot key
     frame?: string; // The stack line of the consumer
     link?: number; // The select or feed that consumes
+    keys?: string; // The keys of a slice reader, as its call named them
+    component?: number; // The component instance that a host pulled when the reader opened (DV-052)
     gone?: boolean; // Detached
   };
   type Entry = {
@@ -46,6 +49,8 @@ declare namespace GG {
     stack: string[];
     readers: Reader[];
     log: Item[];
+    reads?: [number, string?][]; // A component's: what live readers in its function read, with the keys of slices only
+    shared?: number; // A component's: the live instances of its function, which share its reads by name
   };
   type Slot = {
     key: string;
@@ -72,6 +77,7 @@ declare namespace GG {
     full: boolean; // Replaces all entries, after a connect
     tree?: [number, number, number][]; // Id, parent id or 0, and order among siblings
     elements?: [number, string, number][]; // With an elements tree: a node id, its label, and its host entry or 0
+    sizes?: [number, number][]; // With an elements tree: an each id and its items, which the walk can cut
   };
 }
 

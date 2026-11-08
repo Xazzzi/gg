@@ -13,7 +13,7 @@ const library = pathToFileURL(resolve("src/index.ts")).href;
 
 const HARNESS = `
 import { inspect } from "node:util";
-import { abortable, applyOps, Channel, catching, changes, feed, isVal, select, spread, StopError } from "${library}";
+import { abortable, applyOps, Channel, catching, changes, feed, isVal, select, spread, StopError, watch } from "${library}";
 const show = v => inspect(v, { breakLength: Infinity, depth: null });
 const results = {}, logs = [];
 console.log = (...args) => logs.push(args.map(a => (typeof a === "string" ? a : show(a))).join(" "));

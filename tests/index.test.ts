@@ -8,3 +8,4 @@ import "./helpers.test.ts";
 import "./jsx.test.ts";
 import "./messages.test.ts";
 import "./select.test.ts";
+import "./slice.test.ts";

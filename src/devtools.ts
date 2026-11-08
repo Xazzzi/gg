@@ -3,7 +3,20 @@ export const HOOK = Symbol.for("gg.devtools");
 
 export type Emit = (event: string, ...args: unknown[]) => void;
 
-let owner: object | undefined;
+let owner: object | undefined, pulled: unknown;
+
+/** Runs pull, so readers and consumers that it opens name `source` (DV-052). */
+export const pulling = <R>(source: unknown, pull: () => R): R => {
+  const outer = pulled;
+  pulled = source;
+  try {
+    return pull();
+  } finally {
+    pulled = outer;
+  }
+};
+/** Gives the slot source that a select pulls now, or undefined. */
+export const pulledSource = () => pulled;
 
 /** Runs make, so registrations inside name `by` as their owner (DV-005). */
 export const owned = <R>(by: object, make: () => R): R => {

@@ -1,4 +1,4 @@
-import { consume, mount, type Props, Provide, use } from "@xazzzi/gg";
+import { consume, mount, type Props, Provide, use, watch } from "@xazzzi/gg";
 import {
   COUNTRIES,
   createForm,
@@ -16,7 +16,8 @@ type Keys<T> = {
 }[keyof Values];
 
 // Each control takes the form from its provider, sets its first value through a live property,
-// writes the form on input, then follows it, except while focused, so typing "3." survives.
+// writes the form on input, then watches its field, except while focused, so typing "3." survives.
+// watch wakes a control only when its own field changes, so a slider drag runs one control.
 
 async function* TextField({
   field,
@@ -31,8 +32,8 @@ async function* TextField({
     />
   ) as HTMLInputElement;
   yield input;
-  for await (const values of form)
-    if (input !== document.activeElement) input.value = values[field];
+  for await (const value of watch(form, field))
+    if (input !== document.activeElement) input.value = value;
 }
 
 async function* TextArea({ field, ...attrs }: { field: Keys<string> } & Props) {
@@ -45,8 +46,8 @@ async function* TextArea({ field, ...attrs }: { field: Keys<string> } & Props) {
     />
   ) as HTMLTextAreaElement;
   yield area;
-  for await (const values of form)
-    if (area !== document.activeElement) area.value = values[field];
+  for await (const value of watch(form, field))
+    if (area !== document.activeElement) area.value = value;
 }
 
 async function* NumberField({
@@ -62,8 +63,8 @@ async function* NumberField({
     />
   ) as HTMLInputElement;
   yield input;
-  for await (const values of form)
-    if (input !== document.activeElement) input.valueAsNumber = values[field];
+  for await (const value of watch(form, field))
+    if (input !== document.activeElement) input.valueAsNumber = value;
 }
 
 async function* Toggle({ field }: { field: Keys<boolean> }) {
@@ -76,7 +77,7 @@ async function* Toggle({ field }: { field: Keys<boolean> }) {
     />
   ) as HTMLInputElement;
   yield box;
-  for await (const values of form) box.checked = values[field];
+  for await (const value of watch(form, field)) box.checked = value;
 }
 
 async function* Radio({
@@ -97,7 +98,8 @@ async function* Radio({
     />
   ) as HTMLInputElement;
   yield radio;
-  for await (const values of form) radio.checked = values[field] === value;
+  for await (const chosen of watch(form, field))
+    radio.checked = chosen === value;
 }
 
 async function* Choice({
@@ -117,8 +119,8 @@ async function* Choice({
     </select>
   ) as HTMLSelectElement;
   yield select;
-  for await (const values of form)
-    if (select !== document.activeElement) select.value = values[field];
+  for await (const value of watch(form, field))
+    if (select !== document.activeElement) select.value = value;
 }
 
 async function* MultiChoice({
@@ -143,9 +145,9 @@ async function* MultiChoice({
     </select>
   ) as HTMLSelectElement;
   yield select;
-  for await (const values of form)
+  for await (const chosen of watch(form, field))
     for (const option of select.options)
-      option.selected = values[field].includes(option.value);
+      option.selected = chosen.includes(option.value);
 }
 
 async function* Member({
@@ -168,7 +170,8 @@ async function* Member({
     />
   ) as HTMLInputElement;
   yield box;
-  for await (const values of form) box.checked = values[field].includes(value);
+  for await (const chosen of watch(form, field))
+    box.checked = chosen.includes(value);
 }
 
 async function* AllMembers({
@@ -190,15 +193,18 @@ async function* AllMembers({
     />
   ) as HTMLInputElement;
   yield box;
-  for await (const values of form) {
-    box.checked = values[field].length === options.length;
-    box.indeterminate = some(values[field]);
+  for await (const chosen of watch(form, field)) {
+    box.checked = chosen.length === options.length;
+    box.indeterminate = some(chosen);
   }
 }
 
 async function* Live({ format }: { format: (values: Values) => string }) {
   const form = yield* use(FormContext);
-  for await (const values of form) yield format(values);
+  // Yields its node first, so the host's next pull opens the read, and devtools sees this instance
+  const text = new Text(format({ ...form }));
+  yield text;
+  for await (const values of form) text.data = format(values);
 }
 
 mount(

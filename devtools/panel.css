@@ -195,6 +195,14 @@ nav h3 {
   gap: 8px;
   align-items: center;
 }
+#detail .actions {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+.muted {
+  color: var(--muted);
+}
 #detail h4 {
   margin: 14px 0 4px;
   color: var(--muted);
@@ -265,6 +273,10 @@ summary {
 .empty {
   color: var(--muted);
   padding: 12px;
+}
+.empty.more {
+  cursor: pointer;
+  padding: 2px 12px;
 }
 .name {
   font-weight: 600;

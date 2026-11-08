@@ -44,7 +44,7 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 
 - A select of plain values with default `autoClose` closes after its first flush (SE-074).
   After that, writes change the proxy with no tracking and no error (SE-08A).
-- A `changes` reader and `each` do not start a select.
+- A `changes` reader, `watch` and `each` do not start a select.
   Use `autoStart: true`, or give the select a `for await` consumer.
 - With `autoStart` and default `backPressure`, a select with no snapshot consumer stops after its first publish.
   Its later changes do not reach `changes` readers or `onChanges`.
@@ -116,6 +116,11 @@ async function* Title({ title }: { title: Channel<string> }) {
 - A move moves nodes and does not render again.
   So does a `splice` that keeps items, such as a filter, because `applyOps` matches items by value (HE-04H).
 - A busy list applies all changes since its last read in one pass.
+- Use `each` for an array, not a `watch` or a slice reader for each row.
+  `each` reads the array once and gives each `Item` only the changes of its row, while a reader per row wakes on each report.
+- In a row, read other state with `watch(state, key)`, so a change of another key does not wake the row.
+  Do not give every row a `watch` of one shared key, such as a selected id, because one change then wakes all rows.
+  Write the change into the rows that it affects, as `examples/bench` does with `selected`.
 
 ## Limits of the runtime
 
@@ -142,6 +147,14 @@ An item that leaves and comes back in one call keeps its entry, with no `map` ca
 using reader = changes(items);
 const mirror = [...reader.outputs];
 for await (const ops of reader) applyOps(mirror, ops);
+```
+
+`changes(state, keys)` reads only the slots that `keys` names, and a report without them does not wake it.
+An array index names a slot, which the reader follows when the array moves it.
+`watch(state, key)` gives the output of one slot, then each new one, so a control of one field skips the others.
+
+```ts
+for await (const volume of watch(form, "volume")) input.valueAsNumber = volume;
 ```
 
 ## Helpers

@@ -3,11 +3,12 @@ import { type Child, each, Fragment, mount } from "@xazzzi/gg/jsx-runtime";
 import { type Origin, originAt } from "./names.ts";
 
 const HOOK = 'globalThis[Symbol.for("gg.devtools")]';
-const PROTOCOL = 7; // Keep equal to the hook's
+const PROTOCOL = 10; // Keep equal to the hook's
 const TREE_LIMIT = 2000; // The tree shows this many rows
 const LOG_LIMIT = 500;
 const GROUP = 10; // More objects from one site collapse to one row
 const GROUP_LIMIT = 200; // An open group shows this many rows
+const READ_LIMIT = 20; // A component detail links this many reads
 
 // Batches fill the store, and a write to `state` tells the components to read it again.
 const entries = new Map<number, GG.Entry>();
@@ -19,7 +20,8 @@ const expanded = new Set<string>();
 const toggled = new Set<number>();
 let tree: [number, number, number][] = [];
 // The label and host entry of each DOM node row in the elements tree, which has negative ids.
-let labels = new Map<number, [string, number]>();
+let labels = new Map<number, [string, number]>(),
+  sizes = new Map<number, number>(); // The items of each each, in the elements tab
 let scripts = new Map<string, Promise<string | undefined>>();
 // The frame and label of each site that the page sent in this connection.
 let sites = new Map<number, [string, string]>();
@@ -99,16 +101,23 @@ const nameOf = (e?: GG.Entry): string | undefined => {
 const named = (name?: string) =>
   name ? [" ", <span class="name">{name}</span>] : null;
 
+// The site group that the keyboard is on, which has no object to select.
+let cursor: string | undefined;
 const pick = (id: number) => {
+  cursor = undefined;
   state.selected = id;
   slots = undefined;
   details.clear();
   send({ type: "inspect", id });
 };
+// A row or a link that live counts redraw can change between press and release, so a primary press acts.
+const press = (act: () => void) => (event: PointerEvent) => {
+  if (event.button === 0) act();
+};
 const link = (id?: number) => {
   const e = id ? entries.get(id) : undefined;
   return e ? (
-    <a onclick={() => pick(e.id)}>
+    <a onpointerdown={press(() => pick(e.id))}>
       {e.kind} #{e.id}
       {named(nameOf(e))}
     </a>
@@ -159,7 +168,7 @@ const frame = (line: string, text?: string) => {
       : text
         ? site
         : line.replace(/[^\s(]+:\d+:\d+(?=\)?$)/, site);
-  return <a onclick={open}>{shown}</a>;
+  return <a onpointerdown={press(open)}>{shown}</a>;
 };
 const pill = (state: string) => <span class={`pill ${state}`}>{state}</span>;
 
@@ -267,11 +276,16 @@ async function* Table<T>(props: {
 }
 // A consumer is a function, a site, or a slot of a select or a feed.
 const consumer = (r?: GG.Reader) =>
-  !r
+  (!r
     ? ""
     : r.link
       ? `${r.label} ${nameOf(entries.get(r.link)) ?? `#${r.link}`}`
-      : (r.label ?? "");
+      : (r.label ?? "")) +
+  (r?.component ? ` #${r.component}` : "") +
+  (r?.keys ? ` [${r.keys}]` : "");
+// The keys of a slice reader, after its consumer
+const keysOf = (keys?: string) =>
+  keys ? <span class="muted"> [{keys}]</span> : null;
 
 // Replaces the options of a filter when they change, and keeps its choice when it still exists.
 const fill = (select: HTMLSelectElement, options: [string, string][]) => {
@@ -292,7 +306,7 @@ const fill = (select: HTMLSelectElement, options: [string, string][]) => {
 const Log = (props: {
   feed: Channel<View>;
   items: () => GG.Item[];
-  columns: ("n" | "reader")[];
+  columns: ("n" | "reader" | "from")[];
   readers?: () => GG.Reader[];
 }) => {
   const type = (
@@ -345,9 +359,11 @@ const Log = (props: {
           <td>{item.type}</td>
           {props.columns.map(column => (
             <td>
-              {column === "reader" && item.reader
-                ? `${item.reader} ${consumer(known().get(item.reader))}`
-                : (item[column] ?? "")}
+              {column === "from"
+                ? link(item.from)
+                : column === "reader" && item.reader
+                  ? `${item.reader} ${consumer(known().get(item.reader))}`
+                  : (item[column] ?? "")}
             </td>
           ))}
           <td class="text">{item.text}</td>
@@ -368,6 +384,50 @@ const props = (pairs: [string, Child | undefined][]) => (
 const commas = (items: Child[]) =>
   items.flatMap((item, i) => (i ? [", ", item] : [item]));
 
+// The consumers of a channel, with how far each is behind its sends.
+const consumers = (
+  feed: Channel<View>,
+  id: () => number,
+  channel: () => GG.Entry | undefined,
+) => [
+  <h4>Consumers</h4>,
+  <Table
+    feed={feed}
+    head={["reader", "consumer", "last read", "behind"]}
+    write={(rows: (GG.Reader & { key: string; behind: number })[]) => {
+      const sent = channel()?.sent ?? 0;
+      sync(
+        rows,
+        (details.get(id())?.readers ?? [])
+          .filter(r => !r.gone)
+          .map(r => ({
+            ...r,
+            behind: sent - r.pos,
+            key: `${r.id} ${r.pos} ${sent} ${consumer(r)}`,
+          })),
+      );
+    }}
+    draw={r => (
+      <tr>
+        <td>{r.id}</td>
+        <td class="text">
+          {r.component
+            ? link(r.component)
+            : r.link
+              ? [`${r.label} `, link(r.link)]
+              : r.frame
+                ? frame(r.frame, r.label)
+                : (r.label ?? "–")}
+          {keysOf(r.keys)}
+        </td>
+        <td>{r.pos || "–"}</td>
+        <td>{r.behind}</td>
+      </tr>
+    )}
+    empty={() => "No active consumer"}
+  />,
+];
+
 const channelBody = (
   id: number,
   entry: () => GG.Entry,
@@ -387,39 +447,7 @@ const channelBody = (
       ["feeds", feeds.length ? commas(feeds.map(f => link(f.id))) : undefined],
     ]);
   }),
-  <h4>Consumers</h4>,
-  <Table
-    feed={feed}
-    head={["reader", "consumer", "last read", "behind"]}
-    write={(rows: (GG.Reader & { key: string; behind: number })[]) => {
-      const sent = entry().sent ?? 0;
-      sync(
-        rows,
-        (details.get(id)?.readers ?? [])
-          .filter(r => !r.gone)
-          .map(r => ({
-            ...r,
-            behind: sent - r.pos,
-            key: `${r.id} ${r.pos} ${sent} ${consumer(r)}`,
-          })),
-      );
-    }}
-    draw={r => (
-      <tr>
-        <td>{r.id}</td>
-        <td class="text">
-          {r.link
-            ? [`${r.label} `, link(r.link)]
-            : r.frame
-              ? frame(r.frame, r.label)
-              : (r.label ?? "–")}
-        </td>
-        <td>{r.pos || "–"}</td>
-        <td>{r.behind}</td>
-      </tr>
-    )}
-    empty={() => "No active consumer"}
-  />,
+  ...consumers(feed, () => id, entry),
   <h4>Messages</h4>,
   <Log
     feed={feed}
@@ -481,16 +509,12 @@ const selectBody = (id: number, entry: () => GG.Entry, feed: Channel<View>) => {
     />,
     <h4>Operations</h4>,
     <Log feed={feed} items={() => logOf(id)} columns={[]} />,
-    <h4>Snapshots</h4>,
+    ...consumers(feed, () => channel()?.id ?? 0, channel),
+    // Snapshots are the sends of the channel, so the event filter shows them alone
+    <h4>Channel messages</h4>,
     <Log
       feed={feed}
-      items={() => logOf(channel()?.id).filter(item => item.type === "send")}
-      columns={["n"]}
-    />,
-    <h4>Channel events</h4>,
-    <Log
-      feed={feed}
-      items={() => logOf(channel()?.id).filter(item => item.type !== "send")}
+      items={() => logOf(channel()?.id)}
       columns={["n", "reader"]}
       readers={() => details.get(channel()?.id ?? 0)?.readers ?? []}
     />,
@@ -536,8 +560,41 @@ const hostBody = (id: number, entry: () => GG.Entry, feed: Channel<View>) => [
         ]
       : null;
   }),
-  <h4>Events</h4>,
-  <Log feed={feed} items={() => logOf(id)} columns={[]} />,
+  // A component's reads come by its function, so instances of one function share them.
+  part(feed, () => {
+    const d = details.get(id);
+    return entry().kind === "component" && d?.reads
+      ? [
+          <h4>Reads</h4>,
+          d.reads.length ? (
+            <div>
+              {commas(
+                d.reads
+                  .slice(0, READ_LIMIT)
+                  .map(([id, keys]) => [link(id), keysOf(keys)]),
+              )}
+              {d.reads.length > READ_LIMIT
+                ? `, … ${d.reads.length - READ_LIMIT} more`
+                : null}
+            </div>
+          ) : (
+            <div class="muted">No live read</div>
+          ),
+          (d.shared ?? 0) > 1 ? (
+            <div class="muted">
+              Shared by {d.shared} live {entry().sourceText} components
+            </div>
+          ) : null,
+        ]
+      : null;
+  }),
+  // A detail rebuilds when the kind changes, so the kind decides the parts once
+  ...(entry().kind === "component"
+    ? [
+        <h4>Read log</h4>,
+        <Log feed={feed} items={() => logOf(id)} columns={["from", "n"]} />,
+      ]
+    : []),
 ];
 
 const feedBody = (id: number, entry: () => GG.Entry, feed: Channel<View>) => [
@@ -572,11 +629,14 @@ const Shown = ({ id, feed }: { id: number; feed: Channel<View> }) => {
       {e.kind} <span class="id">#{id}</span>
       {part(feed, () => named(nameOf(entry())))}{" "}
       {part(feed, () => pill(stateOf(entry())))}
+    </h2>,
+    <div class="actions">
       <button
         type="button"
+        title="Log to the console, and keep as $gg"
         onclick={() => evaluate(`${HOOK}?.reveal?.(${id})`)}
       >
-        Log to console
+        Log
       </button>
       {e.kind === "component" ? (
         <>
@@ -588,12 +648,12 @@ const Shown = ({ id, feed }: { id: number; feed: Channel<View> }) => {
               evaluate(`${HOOK}?.showNode?.(${id})`);
             }}
           >
-            Show element
+            Show
           </button>
           {inspectButton(`${HOOK}?.nodeOf?.(${id})`)}
         </>
       ) : null}
-    </h2>,
+    </div>,
     <div class="source">{frame(e.frame, e.label)}</div>,
     <details>
       <summary>Stack</summary>
@@ -622,7 +682,7 @@ const inspectButton = (node: string) => (
       )
     }
   >
-    Inspect in Elements panel
+    Inspect
   </button>
 );
 // A DOM node row of the elements tab, with its host entry.
@@ -630,15 +690,18 @@ const nodeDetail = (id: number) => {
   const [label, host] = labels.get(id) ?? ["", 0];
   return [
     <h2>
-      node <span class="name">{label}</span>{" "}
+      node <span class="name">{label}</span>
+    </h2>,
+    <div class="actions">
       <button
         type="button"
+        title="Outline it in the page"
         onclick={() => evaluate(`${HOOK}?.flashDom?.(${id})`)}
       >
-        Show in page
+        Show
       </button>
       {inspectButton(`${HOOK}?.domOf?.(${id})`)}
-    </h2>,
+    </div>,
     host ? props([["host", link(host)]]) : null,
   ];
 };
@@ -669,17 +732,26 @@ async function* Detail() {
   }
 }
 
-type Line = { key: string; draw: () => Child };
+type Line = { key: string; draw: () => Child; nav?: Nav };
+// A row that the keyboard can reach: an object or tree row by id, or a site group by key.
+type Nav = {
+  id: number;
+  depth: number;
+  count: number;
+  open: boolean;
+  group?: string;
+};
 const row = (e: GG.Entry, selected: number, child = false): Line => {
   const name = nameOf(e),
     count = counts(e),
     status = stateOf(e);
   return {
     key: `row ${e.id} ${name} ${e.label} ${count} ${status} ${e.id === selected} ${child}`,
+    nav: { id: e.id, depth: child ? 1 : 0, count: 0, open: false },
     draw: () => (
       <div
         class={`row${child ? " child" : ""}${e.id === selected ? " selected" : ""}`}
-        onclick={() => pick(e.id)}
+        onpointerdown={press(() => pick(e.id))}
       >
         <span class="id">#{e.id}</span>
         {named(name)}
@@ -701,10 +773,15 @@ const site = (key: string, items: GG.Entry[]): Line => {
     if (!expanded.delete(key)) expanded.add(key);
     changed();
   };
+  const focused = cursor === key;
   return {
-    key: `site ${key} ${open} ${items.length} ${name} ${live}`,
+    key: `site ${key} ${open} ${items.length} ${name} ${live} ${focused}`,
+    nav: { id: 0, depth: 0, count: items.length, open, group: key },
     draw: () => (
-      <div class="row group" onclick={toggle}>
+      <div
+        class={`row group${focused ? " selected" : ""}`}
+        onpointerdown={press(toggle)}
+      >
         <span class="id">
           {open ? "▾" : "▸"} ×{items.length}
         </span>
@@ -771,7 +848,8 @@ const textOf = (id: number) =>
   id < 0 ? (labels.get(id)?.[0] ?? "") : (nameOf(entries.get(id)) ?? "");
 
 // Mounts are hidden, so their children hang under the closest component or each.
-const treeLines = ({ filter, selected }: View) => {
+// The tree in display order: children of each row, with mounts left out, so their children hang one level up.
+const structure = () => {
   const parentOf = new Map<number, number>(),
     rankOf = new Map<number, number>(),
     kids = new Map<number, number[]>();
@@ -788,6 +866,49 @@ const treeLines = ({ filter, selected }: View) => {
   }
   for (const list of kids.values())
     list.sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0));
+  // A long list starts closed, and so do the rows in it, as the Elements panel of Chrome does.
+  const closed = (id: number) =>
+    long(id, kids.get(id)?.length ?? 0) ||
+    (kids.get(up(id))?.length ?? 0) > GROUP;
+  return { rankOf, kids, up, closed };
+};
+
+// The first row of the tree window, which follows a new selection that is outside it.
+let windowStart = 0,
+  centered = 0;
+// The first shown child of each crowded list, which follows a selection that leaves its window.
+const starts = new Map<number, number>();
+const page = (by: number, list?: number) => {
+  if (list === undefined) windowStart = Math.max(0, windowStart + by);
+  else starts.set(list, (starts.get(list) ?? 0) + by);
+  changed();
+};
+// The rows that fit the list, so a crowded list takes about one screen.
+const screen = () => {
+  const list = document.getElementById("list"),
+    row = list?.querySelector<HTMLElement>(".row");
+  return Math.max(
+    20,
+    Math.floor((list?.clientHeight || 600) / (row?.offsetHeight || 20)),
+  );
+};
+const gap = (text: string, by: number, depth: number, list?: number): Line => ({
+  key: `gap ${text} ${by} ${depth} ${list}`,
+  draw: () => (
+    <div
+      class="empty more"
+      style={`padding-left: ${depth * 14 + 18}px`}
+      onpointerdown={press(() => page(by, list))}
+    >
+      {text}
+    </div>
+  ),
+});
+
+// The tree shows a window of its open rows, around the selected row.
+// A list with more children than a screen shows a tenth at each end, and the rest around the selected child.
+const treeLines = ({ filter, selected }: View) => {
+  const { rankOf, kids, up, closed } = structure();
   // A filter shows the matches and their ancestors, all open.
   const query = filter.toLowerCase();
   let keep: Set<number> | undefined;
@@ -797,55 +918,71 @@ const treeLines = ({ filter, selected }: View) => {
       if (`#${id} ${textOf(id)}`.toLowerCase().includes(query))
         for (let x = id; x && !keep.has(x); x = up(x)) keep.add(x);
   }
-  // The selected component and its ancestors, so a long list shows the rows around it.
   const path = new Set<number>();
   for (let x = selected; x && !path.has(x); x = up(x)) path.add(x);
+  const budget = screen(),
+    edge = Math.max(1, Math.round(budget / 10)),
+    span = budget - 2 * edge;
   const out: Line[] = [];
-  const gap = (
-    id: number,
-    depth: number,
-    skipped: number,
-    at: number,
-  ): Line => ({
-    key: `gap ${id} ${at} ${skipped} ${depth}`,
-    draw: () => (
-      <div class="empty" style={`padding-left: ${depth * 14 + 18}px`}>
-        … {skipped} more
-      </div>
-    ),
-  });
-  const walk = (id: number, depth: number) => {
-    if (out.length >= TREE_LIMIT || (keep && !keep.has(id))) return;
+  navs = [];
+  const line = (id: number, depth: number, count: number, open: boolean) =>
+    id < 0
+      ? nodeRow(id, depth, count, open, selected)
+      : treeRow(entries.get(id) as GG.Entry, depth, count, open, selected);
+  // Hidden rows still give keyboard stops, so a move past a window moves the window.
+  const walk = (id: number, depth: number, shown: boolean) => {
+    if (keep && !keep.has(id)) return;
     const all = kids.get(id) ?? [],
-      open = !!keep || long(id, all.length) === toggled.has(id);
-    out.push(
-      id < 0
-        ? nodeRow(id, depth, all.length, open, selected)
-        : treeRow(
-            entries.get(id) as GG.Entry,
-            depth,
-            all.length,
-            open,
-            selected,
-          ),
-    );
+      open = !!keep || closed(id) === toggled.has(id);
+    navs.push({ id, depth, count: all.length, open });
+    if (shown) out.push(line(id, depth, all.length, open));
     if (!open) return;
-    const children = keep ? all.filter(child => keep.has(child)) : all;
-    const at = children.findIndex(child => path.has(child)),
-      head = Math.min(children.length, GROUP_LIMIT),
-      from = at < head ? head : Math.max(head, at - 25),
-      to = at < head ? head : Math.min(children.length, at + 25);
-    for (let i = 0; i < head; i++) walk(children[i], depth + 1);
-    if (from > head) out.push(gap(id, depth + 1, from - head, head));
-    for (let i = from; i < to; i++) walk(children[i], depth + 1);
-    if (to < children.length)
-      out.push(gap(id, depth + 1, children.length - to, to));
+    const children = keep ? all.filter(child => keep.has(child)) : all,
+      n = children.length;
+    if (!shown || n <= budget) {
+      for (const child of children) walk(child, depth + 1, shown);
+      return;
+    }
+    const on = children.findIndex(child => path.has(child)),
+      last = n - edge - span;
+    let from = Math.min(Math.max(starts.get(id) ?? edge, edge), last);
+    // A step past an end moves the window one row, and a jump centers it
+    if (on === from - 1) from = on;
+    else if (on === from + span) from = on - span + 1;
+    else if (on >= 0 && (on < from || on > from + span))
+      from = on - Math.floor(span / 2);
+    from = Math.min(Math.max(from, edge), last); // A row at an end shows already
+    starts.set(id, from);
+    let hidden = 0;
+    children.forEach((child, i) => {
+      const visible =
+        i < edge || i >= n - edge || (i >= from && i < from + span);
+      if (!visible) hidden++;
+      else if (hidden) {
+        out.push(
+          gap(`… ${hidden} more`, i <= from ? -span : span, depth + 1, id),
+        );
+        hidden = 0;
+      }
+      walk(child, depth + 1, visible);
+    });
   };
-  for (const id of kids.get(0) ?? []) walk(id, 0);
-  if (out.length >= TREE_LIMIT)
-    out.push(note(`First ${TREE_LIMIT} rows, filter to find more`));
-  return out.length
-    ? out
+  for (const id of kids.get(0) ?? []) walk(id, 0, true);
+  const at = out.findIndex(line => line.nav?.id === selected);
+  if (selected !== centered && at >= 0) {
+    centered = selected;
+    if (at < windowStart || at >= windowStart + TREE_LIMIT)
+      windowStart = at - TREE_LIMIT / 2;
+  }
+  windowStart = Math.max(0, Math.min(windowStart, out.length - TREE_LIMIT));
+  const end = Math.min(out.length, windowStart + TREE_LIMIT),
+    lines = out.slice(windowStart, end);
+  if (windowStart > 0)
+    lines.unshift(gap(`… ${windowStart} rows above`, -TREE_LIMIT / 2, 0));
+  if (end < out.length)
+    lines.push(gap(`… ${out.length - end} rows below`, TREE_LIMIT / 2, 0));
+  return lines.length
+    ? lines
     : [
         note(
           query ? "No match" : labels.size ? "No mounts" : "No components yet",
@@ -868,6 +1005,7 @@ const nodeRow = (
   };
   return {
     key: `node ${id} ${label} ${depth} ${count} ${open} ${host} ${id === selected}`,
+    nav: { id, depth, count, open },
     draw: () => (
       <div
         class={`row tree${id === selected ? " selected" : ""}`}
@@ -901,7 +1039,8 @@ const treeRow = (
     changed();
   };
   return {
-    key: `tree ${e.id} ${name} ${depth} ${count} ${open} ${status} ${e.id === selected}`,
+    key: `tree ${e.id} ${name} ${depth} ${count} ${sizes.get(e.id)} ${open} ${status} ${e.id === selected}`,
+    nav: { id: e.id, depth, count, open },
     draw: () => (
       <div
         class={`row tree${e.id === selected ? " selected" : ""}`}
@@ -917,7 +1056,9 @@ const treeRow = (
           {count ? (open ? "▾" : "▸") : ""}
         </span>
         <span class={`name ${e.kind}`}>{name}</span>
-        {e.kind === "each" ? <span class="count">×{count}</span> : null}
+        {e.kind === "each" ? (
+          <span class="count">×{sizes.get(e.id) ?? count}</span>
+        ) : null}
         {status === "live" ? null : pill(status)}
       </div>
     ),
@@ -938,8 +1079,56 @@ async function* List() {
     </nav>
   );
   for await (const view of state)
-    sync(rows, view.tab === "data" ? lines(view) : treeLines(view));
+    if (view.tab === "data") {
+      const out = lines(view);
+      navs = out.flatMap(line => (line.nav ? [line.nav] : []));
+      sync(rows, out);
+    } else sync(rows, treeLines(view));
 }
+
+// The rows that the keyboard moves through, also rows that a crowded list hides.
+let navs: Nav[] = [];
+// Arrows move through the list as in a tree: right opens or goes in, left closes or goes to the parent.
+document.addEventListener("keydown", event => {
+  const target = event.target as HTMLElement;
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (target.closest?.("input, select, textarea")) {
+    if (target.id !== "filter" || event.key !== "ArrowDown") return;
+    target.blur(); // Down leaves the filter for the list
+  }
+  const at = navs.findIndex(n =>
+    n.group ? n.group === cursor : n.id === state.selected,
+  );
+  const here = navs[at];
+  const go = (n?: Nav) => {
+    if (!n) return;
+    if (n.group) (cursor = n.group), (state.selected = 0), changed();
+    else pick(n.id);
+    setTimeout(() =>
+      document
+        .querySelector("#list .selected")
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+  };
+  const flip = (n: Nav) => {
+    const set = n.group ? expanded : toggled,
+      key = n.group ?? n.id;
+    if (!(set as Set<unknown>).delete(key)) (set as Set<unknown>).add(key);
+    changed();
+  };
+  const parent = () =>
+    navs.slice(0, at).findLast(n => here && n.depth < here.depth);
+  if (event.key === "ArrowDown") go(at < 0 ? navs[0] : navs[at + 1]);
+  else if (event.key === "ArrowUp") go(at < 0 ? navs[0] : navs[at - 1]);
+  else if (event.key === "Home") go(navs[0]);
+  else if (event.key === "End") go(navs.at(-1));
+  else if (event.key === "ArrowRight" && here?.count)
+    here.open ? go(navs[at + 1]) : flip(here);
+  else if (event.key === "ArrowLeft" && here)
+    here.open && here.count ? flip(here) : go(parent());
+  else return;
+  event.preventDefault();
+});
 
 async function* status() {
   for await (const view of state) yield view.status;
@@ -975,6 +1164,7 @@ const Header = () => {
     state.tab = tab;
     tree = [];
     labels = new Map();
+    sizes = new Map();
     sendTree(tab);
     for (const button of tabs)
       button.classList.toggle("active", button.dataset.tab === tab);
@@ -1045,6 +1235,7 @@ const apply = (batch: GG.Poll) => {
     labels = new Map(
       (batch.elements ?? []).map(([id, label, host]) => [id, [label, host]]),
     );
+    sizes = new Map(batch.sizes ?? []);
   }
   if (batch.full) {
     entries.clear();
@@ -1118,14 +1309,9 @@ mount(
 );
 // Opens the tree down to a component, and selects it.
 const reveal = (id: number) => {
-  const parentOf = new Map<number, number>(),
-    count = new Map<number, number>();
-  for (const [node, parent] of tree) {
-    parentOf.set(node, parent);
-    count.set(parent, (count.get(parent) ?? 0) + 1);
-  }
-  for (let p = parentOf.get(id) ?? 0; p; p = parentOf.get(p) ?? 0)
-    if (long(p, count.get(p) ?? 0)) toggled.add(p);
+  const { up, closed } = structure();
+  for (let p = up(id); p; p = up(p))
+    if (closed(p)) toggled.add(p);
     else toggled.delete(p);
   pick(id);
   // The list renders after the state changes, in a later task.

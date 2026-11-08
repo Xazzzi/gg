@@ -5,12 +5,13 @@
 {
   const HOOK = Symbol.for("gg.devtools");
   const VAL = Symbol.for("gg.Val");
-  const PROTOCOL = 7; // Keep equal to the panel's
+  const PROTOCOL = 10; // Keep equal to the panel's
   const LOG_LIMIT = 500;
   const BATCH_MS = 100;
   const SLOT_LIMIT = 500; // A large shape would make each batch heavy
   const OP_LIMIT = 20; // A report of a large shape would make one huge log item
   const ELEMENT_LIMIT = 5000; // The elements tree walks this many nodes
+  const NEAR_FOCUS = 100; // And this many siblings on each side of a focused node past the limit
   const g = globalThis as any;
 
   type Entry = Omit<GG.Entry, "frame" | "consumers"> & {
@@ -174,21 +175,32 @@
     /at (?:.+? \()?(.+?):\d+:\d+\)?$/.exec(line.trim())?.[1];
 
   // The first frame outside the hook and the library is the consumer.
-  const consumerOf = (): Partial<GG.Reader> => {
+  // All named frames outside the hook name the functions that read, because a bundle shares one URL with the library.
+  const callers = new WeakMap<GG.Reader, string[]>();
+  // Component function names, which name a consumer in a bundle, where every frame has the library URL.
+  const components = new Set<string>();
+  const consumerOf = (reader: GG.Reader) => {
+    const names: string[] = [];
+    let found = false,
+      fallback: Partial<GG.Reader> | undefined;
     for (const raw of (new Error().stack ?? "").split("\n").slice(1)) {
       const line = raw.trim(),
         url = urlOf(line);
-      if (!url || url === own || libs.has(url)) continue;
+      if (!url || url === own) continue;
       const fn = /^at (?:async )?(?:new )?([^\s(]+) \(/
         .exec(line)?.[1]
         ?.split(".")
         .pop();
-      return {
-        label: fn && !fn.startsWith("<") ? fn : site(line),
-        frame: line,
-      };
+      const name = fn && !fn.startsWith("<") ? fn : undefined;
+      if (name) names.push(name);
+      if (name && !fallback && components.has(name))
+        fallback = { label: name, frame: line };
+      if (found || libs.has(url)) continue;
+      Object.assign(reader, { label: name ?? site(line), frame: line });
+      found = true;
     }
-    return {};
+    if (!found && fallback) Object.assign(reader, fallback);
+    callers.set(reader, names);
   };
   // A consumer with no such frame is a select slot or a feed that reads the channel.
   // The scan reads all slots, so it runs only for the readers of an inspected object.
@@ -232,7 +244,8 @@
       record(e, "read", preview(a), { n: b, reader: reader.id });
     } else if (event === "attach") {
       const reader = readerOf(e, a);
-      Object.assign(reader, consumerOf());
+      consumerOf(reader);
+      instance(reader, b);
       if (!reader.label && e.via)
         Object.assign(reader, { label: "component", link: e.via });
       record(e, "attach", "", { reader: reader.id });
@@ -310,6 +323,7 @@
       if (kind === "each") e.source = byTarget.get(detail.state)?.id;
       if (kind !== "component") return undefined; // DV-044
       e.sourceText = detail.type.name || "anonymous";
+      if (detail.type.name) components.add(detail.type.name);
       e.type = new WeakRef(detail.type);
       e.props = Object.entries(detail.props ?? {})
         .filter(([key]) => key !== "children")
@@ -406,6 +420,7 @@
       mounts = new Map<object, Entry>(),
       lists = new Map<object, Entry>(), // The each that yielded a node
       wrapper = new Map<number, Entry>(),
+      sizes = new Map<number, number>(), // The items of each each, which an elements walk can cut
       live = [...entries.values()].filter(
         e =>
           e.kind === "mount" ||
@@ -429,6 +444,7 @@
         ? entries.get(host.select)?.ref.deref()
         : undefined;
       const slots: any[] = (proxy && inspectors.get(proxy)?.()) ?? [];
+      if (host.kind === "each") sizes.set(host.id, slots.length);
       for (const slot of slots) {
         const child = byTarget.get(slot.source);
         if (child?.kind !== "component" && child?.kind !== "each") continue;
@@ -443,7 +459,7 @@
           if (node?.nodeType) shown.set(node, innermost(child));
       }
     }
-    return { live, parent, rank, shown, mounts, lists, wrapper, n };
+    return { live, parent, rank, shown, mounts, lists, wrapper, sizes, n };
   };
 
   // Ids of DOM nodes are negative in the elements tree, so they never meet entry ids.
@@ -453,7 +469,7 @@
   // The DOM under all connected hosts, in DOM order.
   // A run of nodes from one each, then from one component and its wrappers, hangs under rows for them.
   const elements = () => {
-    const { shown, mounts, lists, wrapper } = scan(),
+    const { shown, mounts, lists, wrapper, sizes } = scan(),
       nodes: [number, number, number][] = [],
       labels: [number, string, number][] = [],
       placed = new Set<number>();
@@ -469,7 +485,7 @@
         chain.unshift(w);
       return chain;
     };
-    const visit = (node: any, parent: number) => {
+    const visit = (node: any, parent: number, near: boolean) => {
       let id = nodeIds.get(node);
       if (!id) nodeIds.set(node, (id = -nextNode++));
       walkedNodes.set(id, new WeakRef(node));
@@ -480,40 +496,48 @@
         text ? preview(node.data.trim()) : tagOf(node),
         mounts.get(node)?.id ?? 0,
       ]);
-      if (!text) walk(node, id);
+      if (!text) walk(node, id, near);
     };
     const target = focus?.deref();
-    // Children past the limit show as one "… N more" row, under the each that holds them, if any.
-    const walk = (node: Node, parent: number) => {
+    // Children past the limit show as "… N more" rows, under the each that holds them, if any.
+    // Past the limit, the walk still takes the siblings near the focus, and their whole subtrees.
+    const walk = (node: Node, parent: number, near: boolean) => {
+      const children = [...(node.childNodes as any)].filter(
+        child =>
+          child.nodeType === 1 || (child.nodeType === 3 && child.data.trim()),
+      );
+      const at = target
+        ? children.findIndex(
+            child => child.contains(target) || target.contains(child),
+          )
+        : -1;
       let list: Entry | undefined,
         skipped = 0,
         under = parent;
-      for (const child of node.childNodes as any) {
-        if (
-          child.nodeType !== 1 &&
-          !(child.nodeType === 3 && child.data.trim())
-        )
-          continue;
-        if (
-          walkedNodes.size >= ELEMENT_LIMIT &&
-          !(target && (child.contains(target) || target.contains(child)))
-        ) {
+      const gap = () => {
+        if (!skipped) return;
+        const id = -nextNode++;
+        add(id, under);
+        labels.push([id, `… ${skipped} more`, 0]);
+        skipped = 0;
+      };
+      children.forEach((child, i) => {
+        const close = at >= 0 && i !== at && Math.abs(i - at) <= NEAR_FOCUS;
+        if (walkedNodes.size >= ELEMENT_LIMIT && !near && !close && i !== at) {
           skipped++;
           under = lists.get(child)?.id ?? parent;
-          continue;
+          return;
         }
+        gap();
         const each = lists.get(child);
         if (each && each !== list) add(each.id, parent);
         list = each;
         let up = each ? each.id : parent;
         const by = shown.get(child);
         for (const e of by ? chainOf(by) : []) add(e.id, up), (up = e.id);
-        visit(child, up);
-      }
-      if (!skipped) return;
-      const id = -nextNode++;
-      add(id, under);
-      labels.push([id, `… ${skipped} more`, 0]);
+        visit(child, up, near || close);
+      });
+      gap();
     };
     // A mount of static children registers nothing, so the walk starts at the closest node around all hosts.
     let root: Node | null | undefined;
@@ -522,8 +546,8 @@
         for (root ??= target as Node; root && !root.contains(target as Node); )
           root = root.parentNode;
     if (root && root.nodeType !== 1) root = document.body;
-    if (root) visit(root, 0);
-    return { nodes, labels };
+    if (root) visit(root, 0, false);
+    return { nodes, labels, sizes: [...sizes] };
   };
 
   const tree = () => {
@@ -615,6 +639,54 @@
     for (const reader of readers.values()) if (!reader.gone) consumers++;
     return { ...rest, site: siteOf(stack[0] ?? "", label), consumers };
   };
+  // What the live readers in a component's function read, as the select that owns a channel, or the channel.
+  // An item channel belongs to the component that holds its item, so only that one reads it.
+  // Instances of one function share the other reads, so the detail counts the live ones if it has any.
+  // The read log merges the reads of the component's readers, also of ended ones, with where they came from.
+  const readsOf = (e: Entry, since: number) => {
+    const type = e.type?.deref(),
+      reads = new Map<number, Set<string> | undefined>(), // No set for a reader of all slots
+      log = e.log.filter(item => item.seq > since);
+    let shared = 0,
+      byName = false;
+    for (const c of entries.values()) {
+      if (
+        c.kind === "component" &&
+        c.state === "live" &&
+        c.type?.deref() === type
+      )
+        shared++;
+      for (const r of c.readers.values()) {
+        // A known instance decides, then the holder of an item, then the function name
+        const named =
+          !r.component &&
+          !c.via &&
+          !!type?.name &&
+          !!callers.get(r)?.includes(type.name);
+        const mine = r.component
+          ? r.component === e.id
+          : named || c.via === e.id;
+        if (!mine) continue;
+        const owner = c.owner ? entries.get(c.owner) : undefined,
+          id = owner?.kind === "select" ? owner.id : c.id;
+        for (const item of c.log)
+          if (item.seq > since && item.reader === r.id && item.type === "read")
+            log.push({ ...item, from: id });
+        if (r.gone) continue;
+        byName ||= named;
+        const keys = reads.has(id) ? reads.get(id) : new Set<string>();
+        if (keys && r.keys) keys.add(r.keys);
+        reads.set(id, keys && r.keys ? keys : undefined);
+      }
+    }
+    return {
+      reads: [...reads].map(
+        ([id, keys]) => [id, keys && [...keys].join(", ")] as [number, string?],
+      ),
+      shared: byName ? shared : 0,
+      log: log.sort((a, b) => a.seq - b.seq).slice(-LOG_LIMIT),
+    };
+  };
   const detailOf = (id: number | undefined, since: number) => {
     const e = id ? entries.get(id) : undefined;
     return e
@@ -626,6 +698,7 @@
             reader.label ? reader : Object.assign(reader, linkOf(e)),
           ),
           log: e.log.filter(item => item.seq > since),
+          ...(e.kind === "component" && readsOf(e, since)),
         }
       : [];
   };
@@ -643,8 +716,57 @@
       }
   };
 
-  const hook = (kind: GG.Kind | "item", target: object, detail: any) => {
+  // A reader that opens while a host pulls a component belongs to that instance (DV-052).
+  const instance = (reader: GG.Reader, source: unknown) => {
+    const by = Object(source) === source && byTarget.get(source as object);
+    if (by && by.kind === "component") reader.component = by.id;
+  };
+  // A changes reader is a consumer of the channel of its select, named by the code that opened it (DV-050).
+  const readerHook = (target: object, detail: any) => {
+    const owner = byTarget.get(detail.state),
+      e = owner?.channel ? entries.get(owner.channel) : undefined;
+    if (!e) return undefined;
+    const reader = readerOf(e, target);
+    consumerOf(reader);
+    instance(reader, detail.source);
+    // The reader of an each list opens inside the runtime, so its owner names it (DV-043)
+    const list = detail.owner && byTarget.get(detail.owner);
+    if (list?.kind === "each")
+      Object.assign(reader, { label: "each", link: list.id, frame: undefined });
+    if (detail.keys)
+      reader.keys = clip(
+        detail.keys.map((key: PropertyKey) => String(key)).join(", "),
+        120,
+      );
+    record(e, "attach", "", { reader: reader.id });
+    return (event: string, ops: any[]) => {
+      if (event === "read") {
+        const more = ops.length - OP_LIMIT;
+        const text = ops
+          .slice(0, OP_LIMIT)
+          .map(opText)
+          .concat(more > 0 ? [`… ${more} more`] : [])
+          .join("\n");
+        return record(e, "read", text, { reader: reader.id }); // DV-053
+      }
+      if (event !== "end") return;
+      reader.gone = true; // DV-051
+      record(e, "detach", "", { reader: reader.id });
+    };
+  };
+
+  const hook = (
+    kind: GG.Kind | "item" | "reader",
+    target: object,
+    detail: any,
+  ) => {
     if (kind === "item") return void link(target, detail.channel); // DV-044
+    if (kind === "reader")
+      try {
+        return readerHook(target, detail);
+      } catch {
+        return undefined; // DV-004
+      }
     try {
       const raw = (new Error().stack ?? "").split("\n"),
         depth = kind === "mount" ? 5 : 4;
@@ -690,7 +812,10 @@
         shown.source,
       ],
     );
-    for (const d of details) for (const r of d.readers) pinned.add(r.link);
+    for (const d of details) {
+      for (const r of d.readers) pinned.add(r.link), pinned.add(r.component);
+      for (const [id] of d.reads ?? []) pinned.add(id);
+    }
     for (const [, , id] of shown?.props ?? []) pinned.add(id);
     const changed: GG.Wire[] = [];
     for (const e of entries.values())
@@ -703,17 +828,19 @@
     treeFresh = false;
     // A tree goes out only while the panel shows it, and only when it changes.
     let nodes: [number, number, number][] | undefined,
-      labels: [number, string, number][] | undefined;
+      labels: [number, string, number][] | undefined,
+      sizes: [number, number][] | undefined;
     if (wantTree) {
-      if (wantElements) ({ nodes, labels } = elements());
+      if (wantElements) ({ nodes, labels, sizes } = elements());
       else nodes = tree();
-      const text = JSON.stringify([nodes, labels]);
-      if (text === sentTree && since) nodes = labels = undefined;
+      const text = JSON.stringify([nodes, labels, sizes]);
+      if (text === sentTree && since) nodes = labels = sizes = undefined;
       else sentTree = text;
     }
     return {
       tree: nodes,
       elements: labels,
+      sizes,
       protocol: PROTOCOL,
       session,
       seq,

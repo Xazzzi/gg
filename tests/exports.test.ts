@@ -26,6 +26,7 @@ test("Package exports the root exports the public names", () => {
     "select",
     "spread",
     "use",
+    "watch",
   ]);
 });
 

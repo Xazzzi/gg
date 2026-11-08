@@ -77,6 +77,7 @@ for await (const { title, users } of state) render(title, users);
 Without `unwrap`, each source appears as a `Val` with `status`, `value`, `reason` and `done`.
 `onChanges` receives each change as an ordered operation, so arrays can be replayed without diffing.
 `changes(state)` gives a reader of those operations at any time, and each read takes all of them since the last read.
+`changes(state, keys)` reads only some slots, and `watch(state, key)` gives the values of one slot, so a reader of one field wakes only when that field changes.
 `sort` and `reverse` move slots without restarting sources, and `sort` compares sources.
 `sortOutputs` moves slots the same way, and compares outputs once.
 

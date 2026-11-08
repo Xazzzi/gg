@@ -513,7 +513,7 @@ async function* replay<T>(
       dirty = true;
     }
   };
-  const reader = changes(state);
+  const reader = owned(self, () => changes(state)); // DV-043
   signal.addEventListener("abort", () => woke.resolve());
   try {
     for (const value of reader.outputs) entries.push(map(value));

@@ -39,5 +39,6 @@ export type {
   State,
   Unwrapped,
   Val,
+  Watch,
 } from "./select.ts";
-export { CHAN, changes, select } from "./select.ts";
+export { CHAN, changes, select, watch } from "./select.ts";

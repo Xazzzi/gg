@@ -1,5 +1,5 @@
 import { attached, Channel, type ChannelOptions, failed } from "./channel.ts";
-import { register } from "./devtools.ts";
+import { pulledSource, pulling, register } from "./devtools.ts";
 import {
   checkOptions,
   isThenable,
@@ -97,19 +97,115 @@ export type Changes<O> = Disposable & {
   [Symbol.asyncIterator](): Changes<O>;
 };
 
-/** Maps each select proxy to the function that opens a `changes` reader on it. */
-const openers = new WeakMap<object, () => Changes<unknown>>();
+export type Watch<V> = Disposable & {
+  next(): Promise<IteratorResult<V, undefined>>;
+  return(): Promise<IteratorReturnResult<undefined>>;
+  [Symbol.asyncIterator](): Watch<V>;
+};
+
+// A state of unknown outputs, such as an any, takes any key.
+type Keys<O> = unknown extends O
+  ? PropertyKey
+  : O extends readonly unknown[]
+    ? number
+    : keyof O;
+type Slice<O, K> = unknown extends O
+  ? any
+  : O extends readonly unknown[]
+    ? O
+    : { [P in K & keyof O]?: O[P] };
+type Entry<O, K> = unknown extends O
+  ? unknown
+  : O extends readonly (infer E)[]
+    ? E
+    : O[K & keyof O];
+type Reads<O> = { [CHAN]: Channel<any>; readonly [OUTPUTS]?: O };
+
+/** Checks the keys of a slice reader, and opens a reader, of all slots without keys. */
+type Opener = {
+  check(keys: unknown): void;
+  open(keys?: readonly PropertyKey[]): Changes<unknown>;
+};
+/** Maps each select proxy to its opener of `changes` readers. */
+const openers = new WeakMap<object, Opener>();
 /** Tells if a value is a select proxy. */
 export const isState = (value: unknown) => openers.has(value as object);
 
 /** Opens a reader that gives the outputs now, then the operations of each report since the last read. */
-export function changes<O>(state: {
-  [CHAN]: Channel<any>;
-  readonly [OUTPUTS]?: O;
-}): Changes<O> {
-  const open = openers.get(state);
-  if (!open) throw new TypeError("changes needs a select proxy");
-  return open() as Changes<O>;
+export function changes<O>(state: Reads<O>): Changes<O>;
+/** Opens a reader of some slots, which gives their outputs now, then their operations of each report since the last read. */
+export function changes<O, const K extends Keys<O>>(
+  state: Reads<O>,
+  keys: readonly K[],
+): Changes<Slice<O, K>>;
+export function changes(state: any, keys?: readonly PropertyKey[]) {
+  const opener = openers.get(state);
+  if (!opener) throw new TypeError("changes needs a select proxy");
+  if (keys !== undefined) opener.check(keys);
+  return opener.open(keys);
+}
+
+const finished = { done: true, value: undefined } as const;
+
+/** Gives the output of one slot, then each new output, from a slice reader that opens at the first next(). */
+export function watch<O, K extends Keys<O>>(
+  state: Reads<O>,
+  key: K,
+): Watch<Entry<O, K>>;
+export function watch(state: any, key: PropertyKey): Watch<unknown> {
+  const opener = openers.get(state);
+  if (!opener) throw new TypeError("watch needs a select proxy");
+  opener.check([key]);
+  let reader: Changes<any> | undefined,
+    current: unknown, // The last output that the reads give the slot
+    last: unknown,
+    given = false, // SE-163 compares with the last given output
+    present: boolean, // Set when the reader opens
+    done = false,
+    tail: Promise<unknown> = Promise.resolve();
+  /** Opens the reader at the first next(), so an index names the slot at that call (SE-161). */
+  const begin = () => {
+    reader = opener.open([key]);
+    const { outputs } = reader;
+    const values = Array.isArray(outputs)
+      ? outputs
+      : Reflect.ownKeys(outputs).map(name => outputs[name]);
+    present = values.length > 0;
+    current = values[0];
+  };
+  /** Reads until the slot has a new output, or the reader finishes. */
+  const step = async (): Promise<IteratorResult<unknown, undefined>> => {
+    if (done) return finished;
+    while (!present || (given && Object.is(current, last))) {
+      // A rejection finishes the reader, so later reads end (SE-14A)
+      const result = await (reader as Changes<any>).next();
+      if (result.done || done) return finished; // SE-165 for a read that settled before return(), and a finished reader stays finished
+      for (const op of result.value as any[])
+        if (op.op === "set") (current = op.value), (present = true);
+        else if (op.op === "delete" || op.removed.length) present = false;
+        else (current = op.added[0]), (present = true); // SE-155 describes the slot, and one slot never moves
+      if (!present) return (stop(), finished); // SE-164
+    }
+    given = true;
+    return { done: false, value: (last = current) };
+  };
+  /** Finishes watch and its reader, which settles a waiting read. */
+  const stop = () => {
+    done = true;
+    void reader?.return();
+  };
+  const it: Watch<unknown> = {
+    next() {
+      if (!reader && !done) begin();
+      const result = tail.then(step); // SE-166
+      tail = result.catch(noop);
+      return result;
+    },
+    return: () => (stop(), Promise.resolve(finished)),
+    [Symbol.asyncIterator]: () => it,
+    [Symbol.dispose]: stop,
+  };
+  return it;
 }
 
 const PLAIN = 0,
@@ -249,7 +345,11 @@ export function select(shape: any, options: any = {}): any {
   // Stryker disable next-line ArrayDeclaration: a reader starts after all that the log holds
   let reported: Op[] = [],
     base = 0;
-  const readers = new Set<{ at: number; wake: () => void }>();
+  const readers = new Set<{
+    at: number;
+    wake: () => void;
+    begin?: (length: number) => void; // SE-155 names the slots of an array slice at start
+  }>();
   let started = false,
     dirty: boolean | undefined,
     scheduled = false,
@@ -346,7 +446,10 @@ export function select(shape: any, options: any = {}): any {
   const pull = (slot: Slot) => {
     let result: any;
     try {
-      result = slot.next.call(slot.iterator);
+      // Stryker disable next-line ConditionalExpression: pulling only names the source for an emitter
+      result = emit
+        ? pulling(slot.source, () => slot.next.call(slot.iterator))
+        : slot.next.call(slot.iterator);
       const thenable = isThenable(result);
       slot.sync ??= !thenable;
       if (thenable && slot.sync) {
@@ -439,6 +542,7 @@ export function select(shape: any, options: any = {}): any {
         }));
     else if (all.length)
       log(() => ({ op: "splice", start: 0, removed: [], added: all.map(out) }));
+    for (const reader of readers) reader.begin?.(all.length);
     const rejected =
       unwrap &&
       all.find(slot => slot.kind !== PLAIN && slot.state.status === "rejected");
@@ -773,29 +877,165 @@ export function select(shape: any, options: any = {}): any {
     if (!readers.size && !onChanges && !emit) ops = undefined;
   };
 
-  openers.set(state, () => {
-    const outputs = started ? snapshot() : isArray ? [] : {};
+  /** Throws a `TypeError` for keys that do not name slots of this shape (SE-150). */
+  const check = (keys: unknown) => {
+    if (!Array.isArray(keys))
+      throw new TypeError("changes keys must be an array");
+    for (const key of keys)
+      if (
+        isArray
+          ? !Number.isInteger(key) || key < 0
+          : !["string", "symbol", "number"].includes(typeof key)
+      )
+        throw new TypeError(
+          isArray
+            ? "An array slice takes indexes"
+            : "An object slice takes property keys",
+        );
+  };
+
+  /**
+   * Gives the outputs of a slice reader, and rewrites operations to them (SE-152 to SE-156).
+   * An array slice keeps the ascending indexes of its slots, and follows them through each operation. */
+  const view = (keys: readonly PropertyKey[]) => {
+    if (!isArray) {
+      const names = new Set<PropertyKey>(
+        keys.map(key => (typeof key === "number" ? `${key}` : key)),
+      );
+      return {
+        outputs: started
+          ? Object.fromEntries(
+              [...map]
+                .filter(([key]) => names.has(key))
+                .map(([key, slot]) => [key, out(slot)]),
+            )
+          : {},
+        // An object shape logs only set and delete
+        project: (list: Op[]) =>
+          list.filter(op => names.has((op as { key: PropertyKey }).key)),
+        begin: noop,
+        spent: noop as () => boolean, // An object slice follows keys, so it never runs out
+      };
+    }
+    const wanted = [...new Set(keys as number[])].sort((a, b) => a - b);
+    const name = (length: number) => wanted.filter(index => index < length);
+    let at = started ? name(array.length) : undefined,
+      describe = false;
+    return {
+      outputs: (at ?? []).map(index => out(array[index] as Slot)),
+      begin(length: number) {
+        at = name(length);
+        describe = true; // An empty slice is spent, so it never reads the description
+      },
+      project(list: Op[]) {
+        const result: Op[] = [];
+        for (const op of list) {
+          const picked = at as number[];
+          if (describe) {
+            describe = false;
+            const { added } = op as Extract<Op, { op: "splice" }>;
+            result.push({
+              op: "splice",
+              start: 0,
+              removed: [],
+              added: picked.map(index => added[index]),
+            });
+          } else if (op.op === "set") {
+            const index = picked.indexOf(op.key as number);
+            if (index >= 0) result.push({ ...op, key: index });
+          } else if (op.op === "splice") {
+            const end = op.start + op.removed.length,
+              shift = op.added.length - op.removed.length,
+              removed: unknown[] = [];
+            let first = -1;
+            at = picked.flatMap((index, j) => {
+              if (index < op.start) return [index];
+              if (index >= end) return [index + shift];
+              if (first < 0) first = j;
+              removed.push(op.removed[index - op.start]);
+              return [];
+            });
+            if (removed.length)
+              result.push({ op: "splice", start: first, removed, added: [] });
+          } else {
+            // Stryker disable next-line ArrayDeclaration: a move order is a permutation, so every index gets written
+            const to: number[] = [];
+            (op as Extract<Op, { op: "move" }>).order.forEach((from, index) => {
+              to[from] = index;
+            });
+            const moved = picked
+              .map((index, j) => [to[index] as number, j] as const)
+              .sort((a, b) => a[0] - b[0]);
+            at = moved.map(([index]) => index);
+            const order = moved.map(([, j]) => j);
+            if (order.some((j, index) => j !== index))
+              result.push({ op: "move", order });
+          }
+        }
+        return result;
+      },
+      spent: () => at?.length === 0, // SE-156
+    };
+  };
+
+  /** Opens a reader of the log, or of a slice of it, which takes its operations at each report (SE-157). */
+  const open = (keys?: readonly PropertyKey[]) => {
+    const slice = keys && view(keys);
+    const outputs = slice
+      ? slice.outputs
+      : started
+        ? snapshot()
+        : isArray
+          ? []
+          : {};
     const waiting: PromiseWithResolvers<IteratorResult<Op[], undefined>>[] = [];
-    let closed = false; // By return() or dispose, or by the SE-14A rejection
-    const reader = { at: base + reported.length, wake: () => settle() };
+    const taken: Op[] = []; // Slice operations that no read took yet
+    let closed = false, // By return() or dispose, or by the SE-14A rejection
+      ended = false;
+    /** Tells devtools one time that the reader finished or has no slot left (DV-051). */
+    const end = () => {
+      if (!ended) (ended = true), emitReader?.("end");
+    };
+    /** Moves the reported operations after the position into the slice operations. */
+    const take = (slice: ReturnType<typeof view>) => {
+      for (const op of slice.project(reported.slice(reader.at - base)))
+        taken.push(op);
+      reader.at = base + reported.length;
+      if (slice.spent()) readers.delete(reader), end();
+      trim();
+    };
+    const reader = {
+      at: base + reported.length,
+      wake: () => (slice && take(slice), settle()),
+      begin:
+        slice && ((length: number) => (slice.begin(length), reader.wake())),
+    };
+    /** Gives the operations that a read takes, or undefined if none waits. */
+    const read = () => {
+      if (slice) return taken.length ? taken.splice(0) : undefined;
+      const end = base + reported.length;
+      if (!readers.has(reader) || reader.at >= end) return undefined;
+      const value = reported.slice(reader.at - base);
+      reader.at = end;
+      trim();
+      return value;
+    };
     /** Resolves waiting reads with new operations, or ends them when the reader closes. */
     const settle = () => {
       while (waiting.length) {
-        const end = base + reported.length;
         // biome-ignore lint/style/noNonNullAssertion: the loop runs while a read waits
-        const read = waiting[0]!;
-        if (readers.has(reader) && reader.at < end) {
-          const value = reported.slice(reader.at - base);
-          reader.at = end;
-          trim();
-          read.resolve({ done: false, value });
-        } else if (!signal.aborted && !closed) return;
+        const next = waiting[0]!,
+          value = read();
+        if (value)
+          next.resolve({ done: false, value }), emitReader?.("read", value);
+        else if (!signal.aborted && !closed && !slice?.spent()) return;
         else {
           readers.delete(reader);
           trim();
-          if (!closed && failed(channel)) read.reject(signal.reason.reason);
-          else read.resolve({ done: true, value: undefined });
+          if (!closed && failed(channel)) next.reject(signal.reason.reason);
+          else next.resolve({ done: true, value: undefined });
           closed = true;
+          end();
         }
         waiting.shift();
       }
@@ -803,14 +1043,11 @@ export function select(shape: any, options: any = {}): any {
     /** Stops the reader, and ends its waiting reads. */
     const close = () => {
       closed = true;
+      end();
+      taken.length = 0;
       readers.delete(reader) && trim();
       settle();
     };
-    if (!signal.aborted) {
-      if (ops) reader.at += ops.length;
-      else ops = [];
-      readers.add(reader);
-    }
     const it = {
       outputs,
       next() {
@@ -825,8 +1062,21 @@ export function select(shape: any, options: any = {}): any {
       [Symbol.asyncIterator]: () => it,
       [Symbol.dispose]: close,
     };
+    const emitReader = register("reader", it, {
+      state,
+      keys,
+      source: pulledSource(),
+    });
+    if (slice?.spent())
+      end(); // SE-156 finishes a reader that names no slot
+    else if (!signal.aborted) {
+      if (ops) reader.at += ops.length;
+      else ops = [];
+      readers.add(reader);
+    }
     return it as Changes<unknown>;
-  });
+  };
+  openers.set(state, { check, open });
 
   const emit = register("select", state, {
     channel,

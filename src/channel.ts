@@ -1,4 +1,4 @@
-import { type Emit, register } from "./devtools.ts";
+import { type Emit, pulledSource, register } from "./devtools.ts";
 import { isThenable, noop } from "./source.ts";
 
 export type FirstReceive = "first" | "unread" | "latest" | "next";
@@ -221,7 +221,7 @@ export class Channel<T, TReturn = undefined>
     // Stryker disable next-line ArithmeticOperator: pos only matters after a read, as a reader with no read ends only under "stop", which drops the newest
     const reader: Reader<T> = { at, pos: at ? at.n - 1 : 0 };
     if (at) this.#place(reader);
-    this.#emit?.("attach", reader);
+    this.#emit?.("attach", reader, pulledSource());
     return reader;
   }
 

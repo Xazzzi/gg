@@ -1,9 +1,9 @@
 import { Channel, select } from "@xazzzi/gg";
 import { type Child, each, Fragment, mount } from "@xazzzi/gg/jsx-runtime";
-import { nameAt } from "./names.ts";
+import { type Origin, originAt } from "./names.ts";
 
 const HOOK = 'globalThis[Symbol.for("gg.devtools")]';
-const PROTOCOL = 3; // Keep equal to the hook's
+const PROTOCOL = 7; // Keep equal to the hook's
 const TREE_LIMIT = 2000; // The tree shows this many rows
 const LOG_LIMIT = 500;
 const GROUP = 10; // More objects from one site collapse to one row
@@ -12,13 +12,17 @@ const GROUP_LIMIT = 200; // An open group shows this many rows
 // Batches fill the store, and a write to `state` tells the components to read it again.
 const entries = new Map<number, GG.Entry>();
 const details = new Map<number, GG.Detail>();
-// Objects from one site share a name, so a site resolves one time.
-const names = new Map<string, string | undefined>();
+// A stack line resolves one time, so objects from one site share a name and an original site.
+const origins = new Map<string, Origin | undefined>();
 const expanded = new Set<string>();
 // Tree nodes that differ from their default, which is open except for a long each.
 const toggled = new Set<number>();
 let tree: [number, number, number][] = [];
+// The label and host entry of each DOM node row in the elements tree, which has negative ids.
+let labels = new Map<number, [string, number]>();
 let scripts = new Map<string, Promise<string | undefined>>();
+// The frame and label of each site that the page sent in this connection.
+let sites = new Map<number, [string, string]>();
 let session = "",
   slots: GG.Slot[] | undefined;
 
@@ -28,17 +32,18 @@ const state = select(
     filter: "",
     selected: 0,
     paused: false,
-    tab: "data" as "data" | "components",
+    tab: "data" as Tab,
     status: "Waiting for the page, reload it if it loaded before the extension",
   },
   { autoStart: true, autoClose: false, backPressure: false },
 );
+type Tab = "data" | "components" | "elements";
 type View = {
   version: number;
   filter: string;
   selected: number;
   paused: boolean;
-  tab: "data" | "components";
+  tab: Tab;
   status: string;
 };
 const changed = () => state.version++;
@@ -86,7 +91,7 @@ const nameOf = (e?: GG.Entry): string | undefined => {
   if (e.kind === "mount") return e.sourceText;
   if (e.kind === "each")
     return `each ${nameOf(entries.get(e.source ?? 0)) ?? (e.source ? `#${e.source}` : "")}`.trim();
-  const name = names.get(e.frame);
+  const name = origins.get(e.frame)?.name;
   if (name || e.kind !== "feed") return name;
   const to = nameOf(entries.get(e.channel ?? 0));
   return to && `${nameOf(entries.get(e.source ?? 0)) ?? ""} → ${to}`.trim();
@@ -113,17 +118,48 @@ const link = (id?: number) => {
     "–"
   );
 };
-// Links a stack line to its source, which openResource shows in the Sources panel.
-const frame = (line: string, text = line) => {
+const originOf = (line: string) => {
+  if (!origins.has(line)) {
+    origins.set(line, undefined);
+    const own = scripts;
+    originAt(line, load).then(at => {
+      if (!at || own !== scripts) return;
+      origins.set(line, at);
+      if (at.label)
+        for (const e of entries.values())
+          if (e.frame === line) e.label = at.label;
+      changed();
+    });
+  }
+  return origins.get(line);
+};
+// The promise rejects for a URL that DevTools does not know, such as a script from an old page.
+const openResource = (url: string, row: number, column: number) =>
+  Promise.resolve(
+    chrome.devtools.panels.openResource(url, row - 1, column - 1),
+  );
+// Links a stack line to its source, the original one when a source map leads to it, in the Sources panel.
+const frame = (line: string, text?: string) => {
   const match = /at (?:.+? \()?(.+?):(\d+):(\d+)\)?$/.exec(line);
-  if (!match) return text;
-  const [, url, row, column] = match;
-  // The promise rejects for a URL that DevTools does not know, such as a script from an old page.
+  if (!match) return text ?? line;
+  const [, url, row, column] = match,
+    at = originOf(line),
+    site = at?.label;
   const open = () =>
-    Promise.resolve(
-      chrome.devtools.panels.openResource(url, +row - 1, +column - 1),
+    (site
+      ? openResource(at.url, at.line, at.column).catch(() =>
+          openResource(url, +row, +column),
+        )
+      : openResource(url, +row, +column)
     ).catch(() => {});
-  return <a onclick={open}>{text}</a>;
+  // A label that is a site, or a whole stack line, shows the original site.
+  const shown =
+    !site || (text && !/:\d+:\d+$/.test(text))
+      ? (text ?? line)
+      : text
+        ? site
+        : line.replace(/[^\s(]+:\d+:\d+(?=\)?$)/, site);
+  return <a onclick={open}>{shown}</a>;
 };
 const pill = (state: string) => <span class={`pill ${state}`}>{state}</span>;
 
@@ -464,9 +500,7 @@ const selectBody = (id: number, entry: () => GG.Entry, feed: Channel<View>) => {
 const hostBody = (id: number, entry: () => GG.Entry, feed: Channel<View>) => [
   part(feed, () => {
     const e = entry(),
-      items = [...entries.values()].filter(
-        c => c.owner === id && c.kind === "channel",
-      ).length,
+      items = e.items ?? 0,
       parent = tree.find(([node]) => node === id)?.[1];
     return props([
       [
@@ -545,16 +579,19 @@ const Shown = ({ id, feed }: { id: number; feed: Channel<View> }) => {
         Log to console
       </button>
       {e.kind === "component" ? (
-        <button
-          type="button"
-          onclick={() =>
-            evaluate(
-              `(n => (((n?.nodeType === 1 ? n : n?.parentElement)?.scrollIntoView({ block: "center" })), inspect(n)))(${HOOK}?.nodeOf?.(${id}))`,
-            )
-          }
-        >
-          Show element
-        </button>
+        <>
+          <button
+            type="button"
+            title="Select its node in the Elements tab, and outline it in the page"
+            onclick={() => {
+              showTab("elements");
+              evaluate(`${HOOK}?.showNode?.(${id})`);
+            }}
+          >
+            Show element
+          </button>
+          {inspectButton(`${HOOK}?.nodeOf?.(${id})`)}
+        </>
       ) : null}
     </h2>,
     <div class="source">{frame(e.frame, e.label)}</div>,
@@ -574,6 +611,38 @@ const Shown = ({ id, feed }: { id: number; feed: Channel<View> }) => {
 };
 
 // Yields a new section for each selection, and closes the feed of the old one, so its parts end.
+// Opens a node in the Elements panel of Chrome, which is slow on a large DOM.
+const inspectButton = (node: string) => (
+  <button
+    type="button"
+    title="Open in the Elements panel of Chrome"
+    onclick={() =>
+      evaluate(
+        `(n => (((n?.nodeType === 1 ? n : n?.parentElement)?.scrollIntoView({ block: "center" })), inspect(n)))(${node})`,
+      )
+    }
+  >
+    Inspect in Elements panel
+  </button>
+);
+// A DOM node row of the elements tab, with its host entry.
+const nodeDetail = (id: number) => {
+  const [label, host] = labels.get(id) ?? ["", 0];
+  return [
+    <h2>
+      node <span class="name">{label}</span>{" "}
+      <button
+        type="button"
+        onclick={() => evaluate(`${HOOK}?.flashDom?.(${id})`)}
+      >
+        Show in page
+      </button>
+      {inspectButton(`${HOOK}?.domOf?.(${id})`)}
+    </h2>,
+    host ? props([["host", link(host)]]) : null,
+  ];
+};
+
 async function* Detail() {
   let key = "",
     feed: Channel<View> | undefined;
@@ -588,6 +657,8 @@ async function* Detail() {
         <section id="detail">
           {e ? (
             <Shown id={e.id} feed={feed} />
+          ) : view.selected < 0 && labels.has(view.selected) ? (
+            nodeDetail(view.selected)
           ) : (
             <div class="empty">Select an object</div>
           )}
@@ -692,13 +763,20 @@ const lines = ({ filter, selected }: View) => {
   return out.length ? out : [note("No gg objects yet")];
 };
 
+// A long each, or a DOM node with many children, starts closed.
+const long = (id: number, count: number) =>
+  (id < 0 || entries.get(id)?.kind === "each") && count > GROUP;
+const known = (id: number) => (id < 0 ? labels.has(id) : entries.has(id));
+const textOf = (id: number) =>
+  id < 0 ? (labels.get(id)?.[0] ?? "") : (nameOf(entries.get(id)) ?? "");
+
 // Mounts are hidden, so their children hang under the closest component or each.
 const treeLines = ({ filter, selected }: View) => {
   const parentOf = new Map<number, number>(),
     rankOf = new Map<number, number>(),
     kids = new Map<number, number[]>();
   for (const [id, parent, rank] of tree)
-    if (entries.has(id)) parentOf.set(id, parent), rankOf.set(id, rank);
+    if (known(id)) parentOf.set(id, parent), rankOf.set(id, rank);
   const up = (id: number): number => {
     const p = parentOf.get(id) ?? 0;
     return p && entries.get(p)?.kind === "mount" ? up(p) : p;
@@ -716,9 +794,7 @@ const treeLines = ({ filter, selected }: View) => {
   if (query) {
     keep = new Set();
     for (const id of rankOf.keys())
-      if (
-        `#${id} ${nameOf(entries.get(id)) ?? ""}`.toLowerCase().includes(query)
-      )
+      if (`#${id} ${textOf(id)}`.toLowerCase().includes(query))
         for (let x = id; x && !keep.has(x); x = up(x)) keep.add(x);
   }
   // The selected component and its ancestors, so a long list shows the rows around it.
@@ -740,11 +816,19 @@ const treeLines = ({ filter, selected }: View) => {
   });
   const walk = (id: number, depth: number) => {
     if (out.length >= TREE_LIMIT || (keep && !keep.has(id))) return;
-    const e = entries.get(id) as GG.Entry,
-      all = kids.get(id) ?? [],
-      long = e.kind === "each" && all.length > GROUP,
-      open = !!keep || long === toggled.has(id);
-    out.push(treeRow(e, depth, all.length, open, selected));
+    const all = kids.get(id) ?? [],
+      open = !!keep || long(id, all.length) === toggled.has(id);
+    out.push(
+      id < 0
+        ? nodeRow(id, depth, all.length, open, selected)
+        : treeRow(
+            entries.get(id) as GG.Entry,
+            depth,
+            all.length,
+            open,
+            selected,
+          ),
+    );
     if (!open) return;
     const children = keep ? all.filter(child => keep.has(child)) : all;
     const at = children.findIndex(child => path.has(child)),
@@ -760,7 +844,47 @@ const treeLines = ({ filter, selected }: View) => {
   for (const id of kids.get(0) ?? []) walk(id, 0);
   if (out.length >= TREE_LIMIT)
     out.push(note(`First ${TREE_LIMIT} rows, filter to find more`));
-  return out.length ? out : [note(query ? "No match" : "No components yet")];
+  return out.length
+    ? out
+    : [
+        note(
+          query ? "No match" : labels.size ? "No mounts" : "No components yet",
+        ),
+      ];
+};
+// A DOM node row, which links to the host entry of an element with dynamic children.
+const nodeRow = (
+  id: number,
+  depth: number,
+  count: number,
+  open: boolean,
+  selected: number,
+): Line => {
+  const [label, host] = labels.get(id) as [string, number];
+  const toggle = (event: MouseEvent) => {
+    event.stopPropagation();
+    if (!toggled.delete(id)) toggled.add(id);
+    changed();
+  };
+  return {
+    key: `node ${id} ${label} ${depth} ${count} ${open} ${host} ${id === selected}`,
+    draw: () => (
+      <div
+        class={`row tree${id === selected ? " selected" : ""}`}
+        style={`padding-left: ${depth * 14 + 4}px`}
+        onclick={() => pick(id)}
+        ondblclick={() => evaluate(`${HOOK}?.flashDom?.(${id})`)}
+        title="Double-click to show in the page"
+      >
+        <span class="twisty" onclick={toggle}>
+          {count ? (open ? "▾" : "▸") : ""}
+        </span>
+        <span class={label.startsWith("<") ? "node" : "text"}>{label}</span>
+        {host ? <span class="count">host</span> : null}
+        {count && !open ? <span class="count">×{count}</span> : null}
+      </div>
+    ),
+  };
 };
 const treeRow = (
   e: GG.Entry,
@@ -814,7 +938,7 @@ async function* List() {
     </nav>
   );
   for await (const view of state)
-    sync(rows, view.tab === "components" ? treeLines(view) : lines(view));
+    sync(rows, view.tab === "data" ? lines(view) : treeLines(view));
 }
 
 async function* status() {
@@ -846,32 +970,53 @@ const Header = () => {
     for (const d of details.values()) d.log = [];
     changed();
   };
-  // The page builds the tree only while the components tab shows.
+  // The page builds a tree only while a tree tab shows.
+  const show = (showTab = (tab: Tab) => {
+    state.tab = tab;
+    tree = [];
+    labels = new Map();
+    sendTree(tab);
+    for (const button of tabs)
+      button.classList.toggle("active", button.dataset.tab === tab);
+  });
   const tabs = (
     [
       ["data", "Data"],
       ["components", "Components"],
+      ["elements", "Elements"],
     ] as const
   ).map(
     ([tab, title]) =>
       (
         <button
           type="button"
+          data-tab={tab}
           class={`tab${state.tab === tab ? " active" : ""}`}
-          onclick={(event: MouseEvent) => {
-            state.tab = tab;
-            send({ type: "tree", value: tab === "components" });
-            for (const button of tabs)
-              button.classList.toggle("active", button === event.currentTarget);
-          }}
+          onclick={() => show(tab)}
         >
           {title}
         </button>
       ) as HTMLButtonElement,
   );
+  // The page picker selects in a tree tab, so a pick from the data tab opens the components tab.
+  const picker = (
+    <button
+      type="button"
+      id="pick"
+      title="Select an element in the page"
+      onclick={() => {
+        const on = !picker.classList.contains("active");
+        if (on && state.tab === "data") show("components");
+        send({ type: "pick", value: on });
+      }}
+    >
+      Pick
+    </button>
+  ) as HTMLButtonElement;
   return (
     <header>
       <span class="tabs">{tabs}</span>
+      {picker}
       {filter}
       {pause}
       <button type="button" onclick={clear}>
@@ -892,27 +1037,32 @@ const apply = (batch: GG.Poll) => {
   if (batch.session !== session) {
     tree = [];
     state.selected = 0;
-    names.clear();
+    origins.clear();
     scripts = new Map();
   }
-  if (batch.tree) tree = batch.tree;
+  if (batch.tree) {
+    tree = batch.tree;
+    labels = new Map(
+      (batch.elements ?? []).map(([id, label, host]) => [id, [label, host]]),
+    );
+  }
   if (batch.full) {
     entries.clear();
     details.clear();
+    sites = new Map();
     // An inspect sent before the page connected is lost
     if (state.selected) send({ type: "inspect", id: state.selected });
   }
   session = batch.session;
-  for (const next of batch.entries) {
+  for (const [id, frame, label] of batch.sites) sites.set(id, [frame, label]);
+  for (const { site, ...wire } of batch.entries) {
+    const [frame, label] = sites.get(site) ?? ["", ""];
+    const next: GG.Entry = {
+      ...wire,
+      frame,
+      label: originOf(frame)?.label ?? label,
+    };
     entries.set(next.id, next);
-    if (names.has(next.frame)) continue;
-    names.set(next.frame, undefined);
-    const own = scripts;
-    nameAt(next.frame, load).then(name => {
-      if (!name || own !== scripts) return;
-      names.set(next.frame, name);
-      changed();
-    });
   }
   for (const next of batch.details) {
     const old = details.get(next.id);
@@ -922,7 +1072,9 @@ const apply = (batch: GG.Poll) => {
   }
   for (const id of batch.removed) entries.delete(id), details.delete(id);
   if (batch.slots || batch.full) slots = batch.slots;
-  state.status = `${entries.size} objects`;
+  state.status = `${batch.count} objects`;
+  document.getElementById("pick")?.classList.toggle("active", batch.picking);
+  if (batch.picked && known(batch.picked)) reveal(batch.picked);
   changed();
 };
 
@@ -931,6 +1083,10 @@ const apply = (batch: GG.Poll) => {
 const messages = new Channel<string>();
 let port: chrome.runtime.Port | undefined;
 const send = (command: object) => port?.postMessage(command);
+// Header sets it, so the detail can switch tabs too.
+let showTab: (tab: Tab) => void = () => {};
+const sendTree = (tab: Tab) =>
+  send({ type: "tree", value: tab !== "data", elements: tab === "elements" });
 const connect = () => {
   port = chrome.runtime.connect({ name: "gg-panel" });
   port.onMessage.addListener(text => messages.send(text));
@@ -942,7 +1098,7 @@ const connect = () => {
   send({ tabId: chrome.devtools.inspectedWindow.tabId });
   send({ type: "inspect", id: state.selected });
   if (state.paused) send({ type: "pause", value: true });
-  if (state.tab === "components") send({ type: "tree", value: true });
+  sendTree(state.tab);
 };
 async function receive() {
   for await (const text of messages) apply(JSON.parse(text));
@@ -968,11 +1124,9 @@ const reveal = (id: number) => {
     parentOf.set(node, parent);
     count.set(parent, (count.get(parent) ?? 0) + 1);
   }
-  for (let p = parentOf.get(id) ?? 0; p; p = parentOf.get(p) ?? 0) {
-    const long = entries.get(p)?.kind === "each" && (count.get(p) ?? 0) > GROUP;
-    if (long) toggled.add(p);
+  for (let p = parentOf.get(id) ?? 0; p; p = parentOf.get(p) ?? 0)
+    if (long(p, count.get(p) ?? 0)) toggled.add(p);
     else toggled.delete(p);
-  }
   pick(id);
   // The list renders after the state changes, in a later task.
   setTimeout(
@@ -983,13 +1137,10 @@ const reveal = (id: number) => {
     50,
   );
 };
-// The components tab follows the node that the Elements panel selects, to the component that shows it.
+// The tree tabs follow the node that the Elements panel selects, to the component that shows it or to its row.
 chrome.devtools.panels.elements.onSelectionChanged.addListener(() => {
-  if (state.tab !== "components") return;
-  evaluate<number>(`${HOOK}?.ownerOf?.($0) ?? 0`).then(
-    id => id && entries.has(id) && reveal(id),
-    () => {},
-  );
+  if (state.tab === "data") return;
+  evaluate(`${HOOK}?.choose?.($0)`).catch(() => {});
 });
 
 receive();

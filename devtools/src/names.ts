@@ -1,4 +1,4 @@
-// Names a creation site from the script that the page loaded, through its source map when it has one.
+// Locates and names a creation site from the script that the page loaded, through its source map when it has one.
 type SourceMap = {
   mappings: string;
   sources: string[];
@@ -72,15 +72,35 @@ export const locate = (map: SourceMap, line: number, column: number) => {
   return found;
 };
 
-export const nameAt = async (
+// A same-origin original shows as its path, as the hook shows a generated site.
+const short = (url: string, from: string) => {
+  try {
+    const at = new URL(url);
+    return at.origin === new URL(from).origin ? at.pathname : url;
+  } catch {
+    return url;
+  }
+};
+
+export type Origin = {
+  url: string;
+  line: number;
+  column: number;
+  name?: string;
+  label?: string; // The original site, only when a source map leads to it
+};
+
+// Resolves a stack line to its original position and the binding there.
+export const originAt = async (
   frame: string,
   load: (url: string) => Promise<string | undefined>,
-) => {
+): Promise<Origin | undefined> => {
   const m =
     /at (?:(?:async )?(?:new )?([^\s(]+) \()?(.+?):(\d+):(\d+)\)?$/.exec(frame);
   if (!m) return;
   const fn = m[1]?.split(".").pop()?.replace(/^<.*/, "");
-  let [url, line, column] = [m[2], Number(m[3]), Number(m[4])];
+  let [url, line, column] = [m[2], Number(m[3]), Number(m[4])],
+    place: Omit<Origin, "name"> | undefined;
   let text = await load(url);
   const ref = text && /\/\/[#@] sourceMappingURL=(\S+)\s*$/.exec(text)?.[1];
   if (ref)
@@ -90,13 +110,24 @@ export const nameAt = async (
       const at = locate(map, line, column);
       if (at) {
         const root = map.sourceRoot ? map.sourceRoot.replace(/\/?$/, "/") : "";
+        const source = new URL(map.sources[at.source], new URL(root, mapUrl))
+          .href;
         const original =
-          map.sourcesContent?.[at.source] ??
-          (await load(
-            new URL(map.sources[at.source], new URL(root, mapUrl)).href,
-          ));
+          map.sourcesContent?.[at.source] ?? (await load(source));
+        place = {
+          url: source,
+          line: at.line,
+          column: at.column,
+          label: `${short(source, url)}:${at.line}:${at.column}`,
+        };
         if (original) [text, line, column] = [original, at.line, at.column];
       }
     } catch {}
-  return text && bindingAt(text, line, column, fn);
+  return {
+    url,
+    line,
+    column,
+    ...place,
+    name: text && bindingAt(text, line, column, fn),
+  };
 };

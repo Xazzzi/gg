@@ -35,6 +35,13 @@ export class FakeNode {
     if (this.parentNode) this.parentNode.counts.remove++;
     this.detach();
   }
+  // Calls the listeners of each node from the target up, until one stops propagation.
+  dispatchEvent(event: Event) {
+    for (let at: any = this; at && !event.cancelBubble; at = at.parentNode)
+      for (const [type, listener] of at.listeners ?? [])
+        if (type === event.type) listener(event);
+    return true;
+  }
   replaceChildren(...nodes: FakeNode[]) {
     for (const node of [...this.childNodes]) node.remove();
     this.append(...nodes);
@@ -72,6 +79,7 @@ export const fakeDocument = {
   createElementNS: (namespace: string, tag: string) =>
     new FakeElement(tag, namespace),
   createTextNode: (data: string) => new FakeText(data),
+  createComment: (data: string) => Object.assign(new FakeNode(8), { data }),
   createDocumentFragment: () => new FakeNode(11),
 };
 

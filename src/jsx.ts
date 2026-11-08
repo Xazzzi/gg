@@ -133,9 +133,9 @@ const longest = (seq: number[]) => {
 };
 
 /**
- * Puts the nodes of all entries into parent in order, and removes other children.
+ * Puts the nodes of all entries into parent in order, removes other children, and gives the nodes that were not children.
  * Moves only the nodes outside a longest run that keeps its order, so a swap moves two nodes. */
-const place = (parent: Element, entries: Entry[]) => {
+const place = (parent: Element, entries: Entry[]): Node[] => {
   let want = entries.flatMap(entry => entry.nodes);
   const keep = new Set(want);
   // A node that appears twice lands at its last place.
@@ -151,20 +151,23 @@ const place = (parent: Element, entries: Entry[]) => {
   if (!old.size) {
     parent.replaceChildren();
     for (const node of want) parent.insertBefore(node, null);
-    return;
+    return want;
   }
   for (const node of leave) node.remove();
   const at: number[] = [],
-    seq: number[] = [];
+    seq: number[] = [],
+    added: Node[] = [];
   want.forEach((node, i) => {
     const n = old.get(node);
-    if (n !== undefined) at.push(i), seq.push(n);
+    if (n === undefined) added.push(node);
+    else at.push(i), seq.push(n);
   });
   const fixed = new Uint8Array(want.length);
   for (const i of longest(seq)) fixed[at[i]] = 1;
   let anchor: Node | null = null;
   for (let i = want.length; i--; anchor = want[i])
     if (!fixed[i]) parent.insertBefore(want[i], anchor);
+  return added;
 };
 
 // The node arrays that each yields hold converted nodes, so a host takes them as they are.
@@ -247,6 +250,13 @@ const drive = <E extends Entry>(
 
 // The stop function of the drive of each host.
 const hosts = new WeakMap<Node, () => void>();
+// What starts when a runtime placement first reaches a node: a host (JX-02B), or the wait of use (JX-054).
+const waiting = new WeakMap<Node, () => void>();
+/** Starts the waiting hosts in node and its descendants, in tree order. */
+const wake = (node: Node) => {
+  waiting.get(node)?.();
+  for (const child of node.childNodes) wake(child);
+};
 /** Stops the drives of node and its descendants. */
 const unmount = (node: Node) => {
   hosts.get(node)?.();
@@ -256,7 +266,7 @@ const unmount = (node: Node) => {
 /**
  * Makes parent a host for children, with static runs and dynamic entries in order.
  * mount and jsx both call it, so the hook finds their caller at one depth (DV-003). */
-const attach = (parent: Element, children: Child) => {
+const attach = (parent: Element, children: Child, placed: boolean) => {
   let run: Entry = { nodes: [] };
   const entries = [run],
     dynamic: Entry[] = [];
@@ -270,17 +280,28 @@ const attach = (parent: Element, children: Child) => {
     },
   );
   hosts.get(parent)?.();
-  place(parent, entries);
+  waiting.delete(parent);
+  const added = place(parent, entries);
+  if (placed) added.forEach(wake);
   if (!dynamic.length) return;
   register("mount", parent, {});
-  const host = drive(parent, () => place(parent, entries), true);
-  hosts.set(parent, host.stop);
-  for (const entry of dynamic) host.add(entry);
+  const start = () => {
+    waiting.delete(parent);
+    const host = drive(
+      parent,
+      () => place(parent, entries).forEach(wake),
+      true,
+    );
+    hosts.set(parent, host.stop);
+    for (const entry of dynamic) host.add(entry);
+  };
+  if (placed) start();
+  else waiting.set(parent, start);
 };
 
 /** Mounts children into parent, keeps dynamic children live, and gives a function that unmounts them. */
 export function mount(parent: Element, ...children: Child[]): () => void {
-  attach(parent, children);
+  attach(parent, children, true);
   let done = false;
   return () => {
     if (done) return;
@@ -321,7 +342,7 @@ export function jsx(
     else if (LIVE.has(name)) live.push([name, value]);
     else element.setAttribute(name, value === true ? "" : `${value}`);
   }
-  attach(element, props.children);
+  attach(element, props.children, false);
   // After the children, so a select finds the option that its value names.
   for (const [name, value] of live) (element as any)[name] = value;
   return element;
@@ -388,6 +409,8 @@ class Handle<T> implements Item<T> {
       channel.send(this.#value as never);
       if (this.#left) channel.close();
       this.#channel = channel;
+      // Outside owned, so the hook finds the reader at its fixed depth (DV-003).
+      register("item", this, { channel, owner: this.#owner });
     }
     return this.#channel[Symbol.asyncIterator]();
   }
@@ -522,4 +545,59 @@ async function* replay<T>(
     for (const entry of entries) leave(entry.handle);
     host.stop();
   }
+}
+
+declare const VALUE: unique symbol;
+/** A context key, with the type of the value that its providers give. */
+export type Context<T> = { readonly [VALUE]?: T };
+
+/** Gives key as a context, so contexts compare by identity, as in the community context protocol. */
+export const createContext = <T>(key: unknown) => key as Context<T>;
+
+/** Answers context requests for context from inside its one element child, and gives that element. */
+export function Provide<T>({
+  context,
+  value,
+  children,
+}: {
+  context: Context<T>;
+  value: T;
+  children?: Child;
+}): Element {
+  if ((children as Node | undefined)?.nodeType !== 1)
+    throw new TypeError("Provide needs one element child");
+  (children as Element).addEventListener("context-request", (event: any) => {
+    if (event.context !== context) return;
+    event.stopPropagation();
+    event.callback(value);
+  });
+  return children as Element;
+}
+
+/** Asks the providers above node for context with a context-request event, and gives the first answer. */
+export function consume<T>(node: Node, context: Context<T>): T {
+  let answer: { value: T } | undefined;
+  const event = new Event("context-request", { bubbles: true, composed: true });
+  node.dispatchEvent(
+    Object.assign(event, {
+      context,
+      contextTarget: node,
+      subscribe: false,
+      callback: (value: T) => (answer ??= { value }),
+    }),
+  );
+  if (!answer) throw new TypeError("No provider answered the context request");
+  return answer.value;
+}
+
+/** Yields a placeholder, waits until the runtime places it (JX-02B), and gives the context from there. */
+export async function* use<T>(
+  context: Context<T>,
+): AsyncGenerator<Comment, T, unknown> {
+  const anchor = document.createComment(""),
+    placed = Promise.withResolvers<void>();
+  waiting.set(anchor, placed.resolve);
+  yield anchor;
+  await placed.promise;
+  return consume(anchor, context);
 }

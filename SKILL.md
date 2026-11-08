@@ -91,6 +91,16 @@ async function* Title({ title }: { title: Channel<string> }) {
 }
 ```
 
+## Context
+
+- `const Form = createContext<Form>(Symbol("form"))` makes a key.
+- `<Provide context={Form} value={form}><main>…</main></Provide>` answers for its one element child.
+- In a component, `const form = yield* use(Form)` yields a placeholder, waits until it is placed, and gives the value (JX-054).
+  Build the nodes after it, and the next yield replaces the placeholder.
+- In an event handler, `consume(event.currentTarget, Form)` gives the value at once (JX-053).
+- Provide a `Channel` or a `select` for a value that changes.
+- Pass app state through context instead of module-level constants, so a test mounts a component under its own provider.
+
 ## Lists with each
 
 - `each(state, render)` needs a select proxy with an array shape (JX-030).
@@ -115,6 +125,8 @@ async function* Title({ title }: { title: Channel<string> }) {
 - `mount` returns an unmount function (JX-02A).
   It stops every host inside the parent, which ends `each` lists and their items, and empties the parent.
   A component that waits on an open channel still ends only when that channel closes (JX-041).
+- An element with dynamic children starts only when `mount` or a host places it (JX-02B).
+  An element that you `append` by hand stays idle (JX-045), so yield it or make it a child.
 - An element with dynamic children belongs to the runtime (JX-043).
   Do not add or remove its children by hand.
   You can change attributes and the content of nodes inside an entry.

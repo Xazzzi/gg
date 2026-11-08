@@ -111,6 +111,9 @@ A promise or an async iterable is a child, so a channel of strings is live text.
 Props set attributes, and `value`, `checked`, `selected`, `indeterminate` and `muted` set properties.
 SVG tags get the SVG namespace, and an `xmlns` prop sets any namespace.
 `mount` returns a function that stops the components and empties the parent.
+An element runs its dynamic children only once `mount` or a host places it, so a detached element costs nothing.
+`<Provide context={Key} value={v}>` gives a value to the components inside it, and a component reads it with `const v = yield* use(Key)`.
+It uses the `context-request` event of the web components community protocol, so it works with other libraries that follow it.
 
 ```tsx
 import { type Channel, each, mount, select } from "@xazzzi/gg";

@@ -22,7 +22,6 @@ declare namespace GG {
     kind: Kind;
     label: string;
     frame: string; // The first stack line, for the name lookup
-    created: number;
     state: string;
     options: string;
     channel?: number; // The channel of a select, a feed, or the select of a host
@@ -36,7 +35,10 @@ declare namespace GG {
     result?: string;
     reports?: number;
     props?: [string, string, number?][]; // A component's props, with links to tracked objects
+    items?: number; // The channels that an each or a host owns
   };
+  // An entry as a batch sends it, with its frame and label in the site table.
+  type Wire = Omit<Entry, "frame" | "label"> & { site: number };
   // The log and stack of an inspected object, all of them when full, and new items otherwise.
   type Detail = {
     id: number;
@@ -59,12 +61,17 @@ declare namespace GG {
     protocol: number; // Changes with the batch shape, so a panel can detect an old hook
     session: string;
     seq: number;
-    entries: Entry[];
+    entries: Wire[];
+    sites: [number, string, string][]; // New sites: an index, the frame, and the label
+    count: number; // All tracked objects, also the ones that this batch leaves out
+    picking: boolean; // The page picker is on
+    picked?: number; // The row of the node that the page picker chose, one time
     removed: number[];
     slots?: Slot[];
     details: Detail[];
     full: boolean; // Replaces all entries, after a connect
     tree?: [number, number, number][]; // Id, parent id or 0, and order among siblings
+    elements?: [number, string, number][]; // With an elements tree: a node id, its label, and its host entry or 0
   };
 }
 

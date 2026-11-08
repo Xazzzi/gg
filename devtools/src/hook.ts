@@ -5,11 +5,12 @@
 {
   const HOOK = Symbol.for("gg.devtools");
   const VAL = Symbol.for("gg.Val");
-  const PROTOCOL = 3; // Keep equal to the panel's
+  const PROTOCOL = 7; // Keep equal to the panel's
   const LOG_LIMIT = 500;
   const BATCH_MS = 100;
   const SLOT_LIMIT = 500; // A large shape would make each batch heavy
   const OP_LIMIT = 20; // A report of a large shape would make one huge log item
+  const ELEMENT_LIMIT = 5000; // The elements tree walks this many nodes
   const g = globalThis as any;
 
   type Entry = Omit<GG.Entry, "frame" | "consumers"> & {
@@ -21,6 +22,9 @@
     readerIds: WeakMap<object, GG.Reader>;
     nextReader: number;
     inner?: Entry; // The component whose result a wrapper component returned
+    // Made by the JSX runtime, so only a tree tab or an inspection needs it, and a batch leaves it out otherwise.
+    hidden?: boolean;
+    via?: number; // The component that holds the item of this channel, which names a reader with no own frame
     type?: WeakRef<(...args: never) => unknown>; // A component's function, which the panel can inspect
   };
 
@@ -28,6 +32,8 @@
   const entries = new Map<number, Entry>();
   const byTarget = new WeakMap<object, Entry>();
   const inspectors = new WeakMap<object, () => any[]>();
+  // The component props that hold each object, so an item that registers later can link them to its channel.
+  const holders = new WeakMap<object, [Entry, number][]>();
   const removed: [number, number][] = [];
   let seq = 0,
     nextId = 1,
@@ -37,10 +43,16 @@
     connected = false,
     paused = false,
     wantTree = false,
+    wantElements = false,
+    treeFresh = false,
     sentTree = "",
+    nextNode = 1,
     timer: ReturnType<typeof setTimeout> | undefined;
 
   const gone = new FinalizationRegistry<number>(id => {
+    const e = entries.get(id),
+      owner = e?.kind === "channel" && e.owner && entries.get(e.owner);
+    if (owner) (owner.items as number)--, touch(owner);
     entries.delete(id);
     removed.push([id, ++seq]);
     schedule();
@@ -221,6 +233,8 @@
     } else if (event === "attach") {
       const reader = readerOf(e, a);
       Object.assign(reader, consumerOf());
+      if (!reader.label && e.via)
+        Object.assign(reader, { label: "component", link: e.via });
       record(e, "attach", "", { reader: reader.id });
     } else if (event === "detach") {
       const reader = readerOf(e, a);
@@ -271,7 +285,6 @@
       kind,
       label: site(stack[0]),
       stack,
-      created: Date.now(),
       state: "open",
       options: "",
       version: ++seq,
@@ -286,7 +299,9 @@
     schedule(); // A new object changes the list and the tree, even if it never emits
     const owner = detail.owner && byTarget.get(detail.owner);
     e.owner = owner?.id; // DV-005
+    e.hidden = !!owner?.hidden;
     if (kind === "component" || kind === "mount" || kind === "each") {
+      e.hidden = true;
       const inner = byTarget.get(target);
       if (kind === "component" && inner?.kind === "component") e.inner = inner;
       byTarget.set(target, e);
@@ -298,11 +313,12 @@
       e.type = new WeakRef(detail.type);
       e.props = Object.entries(detail.props ?? {})
         .filter(([key]) => key !== "children")
-        .map(([key, value]) => [
-          key,
-          preview(value),
-          byTarget.get(value as object)?.id,
-        ]);
+        .map(([key, value], i) => {
+          if (Object(value) === value)
+            holders.get(value as object)?.push([e, i]) ??
+              holders.set(value as object, [[e, i]]);
+          return [key, preview(value), byTarget.get(value as object)?.id];
+        });
       // A host ends only a dynamic result (DV-045), so other results are static.
       const t = target as any;
       if (typeof t.then !== "function" && !t[Symbol.asyncIterator])
@@ -315,6 +331,7 @@
     }
     if (kind === "channel") {
       byTarget.set(target, e);
+      if (owner) owner.items = (owner.items ?? 0) + 1;
       e.options = `${detail.firstReceive} / ${detail.thenReceive} / ${detail.stopStyle}`;
       e.sent = e.read = 0;
       return channelEmit(e);
@@ -331,6 +348,7 @@
         .join(", ");
       if (channel) {
         channel.owner = e.id;
+        channel.hidden = e.hidden;
         channel.label = e.label;
         channel.stack = stack;
         touch(channel);
@@ -386,6 +404,8 @@
       rank = new Map<number, number>(),
       shown = new Map<object, Entry>(),
       mounts = new Map<object, Entry>(),
+      lists = new Map<object, Entry>(), // The each that yielded a node
+      wrapper = new Map<number, Entry>(),
       live = [...entries.values()].filter(
         e =>
           e.kind === "mount" ||
@@ -399,7 +419,8 @@
       if (e.kind === "mount" && t) mounts.set(t, e);
       if (e.kind === "component" && t?.nodeType && !shown.has(t))
         shown.set(t, e);
-      if (e.inner && entries.has(e.inner.id)) parent.set(e.inner.id, e.id);
+      if (e.inner && entries.has(e.inner.id))
+        parent.set(e.inner.id, e.id), wrapper.set(e.inner.id, e);
     }
     // A wrapper's nodes belong to the innermost component.
     const innermost = (e: Entry): Entry => (e.inner ? innermost(e.inner) : e);
@@ -415,12 +436,94 @@
         parent.set(child.id, host.id);
         rank.set(child.id, n++);
         // An each yields the nodes of its items, which belong to the item components.
+        if (child.kind === "each")
+          for (const node of slot.state?.value ?? []) lists.set(node, child);
         const value = child.kind === "each" ? [] : slot.state?.value;
         for (const node of Array.isArray(value) ? value : [value])
           if (node?.nodeType) shown.set(node, innermost(child));
       }
     }
-    return { live, parent, rank, shown, mounts, n };
+    return { live, parent, rank, shown, mounts, lists, wrapper, n };
+  };
+
+  // Ids of DOM nodes are negative in the elements tree, so they never meet entry ids.
+  const nodeIds = new WeakMap<Node, number>();
+  let walkedNodes = new Map<number, WeakRef<Node>>(),
+    focus: WeakRef<Node> | undefined; // A node that the walk reaches past its limit, as a picked one
+  // The DOM under all connected hosts, in DOM order.
+  // A run of nodes from one each, then from one component and its wrappers, hangs under rows for them.
+  const elements = () => {
+    const { shown, mounts, lists, wrapper } = scan(),
+      nodes: [number, number, number][] = [],
+      labels: [number, string, number][] = [],
+      placed = new Set<number>();
+    walkedNodes = new Map();
+    const add = (id: number, parent: number) => {
+      if (placed.has(id)) return;
+      placed.add(id);
+      nodes.push([id, parent, nodes.length]);
+    };
+    const chainOf = (e: Entry) => {
+      const chain = [e];
+      for (let w = wrapper.get(e.id); w; w = wrapper.get(w.id))
+        chain.unshift(w);
+      return chain;
+    };
+    const visit = (node: any, parent: number) => {
+      let id = nodeIds.get(node);
+      if (!id) nodeIds.set(node, (id = -nextNode++));
+      walkedNodes.set(id, new WeakRef(node));
+      add(id, parent);
+      const text = node.nodeType === 3;
+      labels.push([
+        id,
+        text ? preview(node.data.trim()) : tagOf(node),
+        mounts.get(node)?.id ?? 0,
+      ]);
+      if (!text) walk(node, id);
+    };
+    const target = focus?.deref();
+    // Children past the limit show as one "… N more" row, under the each that holds them, if any.
+    const walk = (node: Node, parent: number) => {
+      let list: Entry | undefined,
+        skipped = 0,
+        under = parent;
+      for (const child of node.childNodes as any) {
+        if (
+          child.nodeType !== 1 &&
+          !(child.nodeType === 3 && child.data.trim())
+        )
+          continue;
+        if (
+          walkedNodes.size >= ELEMENT_LIMIT &&
+          !(target && (child.contains(target) || target.contains(child)))
+        ) {
+          skipped++;
+          under = lists.get(child)?.id ?? parent;
+          continue;
+        }
+        const each = lists.get(child);
+        if (each && each !== list) add(each.id, parent);
+        list = each;
+        let up = each ? each.id : parent;
+        const by = shown.get(child);
+        for (const e of by ? chainOf(by) : []) add(e.id, up), (up = e.id);
+        visit(child, up);
+      }
+      if (!skipped) return;
+      const id = -nextNode++;
+      add(id, under);
+      labels.push([id, `… ${skipped} more`, 0]);
+    };
+    // A mount of static children registers nothing, so the walk starts at the closest node around all hosts.
+    let root: Node | null | undefined;
+    for (const [target] of mounts)
+      if ((target as Node).isConnected)
+        for (root ??= target as Node; root && !root.contains(target as Node); )
+          root = root.parentNode;
+    if (root && root.nodeType !== 1) root = document.body;
+    if (root) visit(root, 0);
+    return { nodes, labels };
   };
 
   const tree = () => {
@@ -480,7 +583,19 @@
 
   // The list gets summaries, and only the inspected objects send their logs and stacks.
   // So a page with thousands of channels sends small batches.
-  const summary = (e: Entry): GG.Entry => {
+  // Objects from one site share a frame and a label, so a batch sends each site one time per connection.
+  let siteIds = new Map<string, number>(),
+    newSites: [number, string, string][] = [];
+  const siteOf = (frame: string, label: string) => {
+    const key = `${frame}\n${label}`;
+    let id = siteIds.get(key);
+    if (id === undefined) {
+      siteIds.set(key, (id = siteIds.size));
+      newSites.push([id, frame, label]);
+    }
+    return id;
+  };
+  const summary = (e: Entry): GG.Wire => {
     const {
       ref,
       version,
@@ -491,11 +606,14 @@
       stack,
       inner,
       type,
+      hidden,
+      label,
+      via,
       ...rest
     } = e;
     let consumers = 0;
     for (const reader of readers.values()) if (!reader.gone) consumers++;
-    return { ...rest, frame: stack[0] ?? "", consumers };
+    return { ...rest, site: siteOf(stack[0] ?? "", label), consumers };
   };
   const detailOf = (id: number | undefined, since: number) => {
     const e = id ? entries.get(id) : undefined;
@@ -512,7 +630,21 @@
       : [];
   };
 
-  const hook = (kind: GG.Kind, target: object, detail: object) => {
+  // An item that a component reads links the props that hold it to its channel (DV-046).
+  const link = (item: object, channel: object) => {
+    const to = byTarget.get(channel);
+    if (to)
+      for (const [e, i] of holders.get(item) ?? []) {
+        const prop = (e.props as [string, string, number?][])[i];
+        prop[1] = "Item";
+        prop[2] = to.id;
+        to.via ??= e.id;
+        touch(e);
+      }
+  };
+
+  const hook = (kind: GG.Kind | "item", target: object, detail: any) => {
+    if (kind === "item") return void link(target, detail.channel); // DV-044
     try {
       const raw = (new Error().stack ?? "").split("\n"),
         depth = kind === "mount" ? 5 : 4;
@@ -539,32 +671,61 @@
     }
   };
 
+  const treeKind = (e: Entry) =>
+    e.kind === "component" || e.kind === "each" || e.kind === "mount";
   const poll = (since: number): GG.Poll => {
-    const changed: GG.Entry[] = [];
+    if (!since) (siteIds = new Map()), (newSites = []);
+    const shown = entries.get(inspect),
+      details = [
+        detailOf(inspect, detailSince),
+        detailOf(shown?.kind === "select" ? shown.channel : 0, detailSince),
+      ].flat();
+    // The inspected object and what its detail links to go out even when hidden.
+    const pinned = new Set<number | undefined>(
+      shown && [
+        shown.id,
+        shown.owner,
+        shown.channel,
+        shown.select,
+        shown.source,
+      ],
+    );
+    for (const d of details) for (const r of d.readers) pinned.add(r.link);
+    for (const [, , id] of shown?.props ?? []) pinned.add(id);
+    const changed: GG.Wire[] = [];
     for (const e of entries.values())
-      if (e.version > since) changed.push(summary(e));
-    const shown = entries.get(inspect);
+      if (
+        pinned.has(e.id) ||
+        ((e.version > since || (treeFresh && treeKind(e))) &&
+          (!e.hidden || (wantTree && treeKind(e))))
+      )
+        changed.push(summary(e));
+    treeFresh = false;
     // A tree goes out only while the panel shows it, and only when it changes.
-    let nodes: [number, number, number][] | undefined;
+    let nodes: [number, number, number][] | undefined,
+      labels: [number, string, number][] | undefined;
     if (wantTree) {
-      nodes = tree();
-      const text = JSON.stringify(nodes);
-      if (text === sentTree && since) nodes = undefined;
+      if (wantElements) ({ nodes, labels } = elements());
+      else nodes = tree();
+      const text = JSON.stringify([nodes, labels]);
+      if (text === sentTree && since) nodes = labels = undefined;
       else sentTree = text;
     }
     return {
       tree: nodes,
+      elements: labels,
       protocol: PROTOCOL,
       session,
       seq,
       entries: changed,
+      sites: newSites.splice(0),
+      count: entries.size,
       removed: removed.filter(([, at]) => at > since).map(([id]) => id),
       slots: inspect ? slots(inspect) : undefined,
-      details: [
-        detailOf(inspect, detailSince),
-        detailOf(shown?.kind === "select" ? shown.channel : 0, detailSince),
-      ].flat(),
+      details,
       full: !since,
+      picking: !!stopPick,
+      picked: picked || undefined,
     };
   };
 
@@ -576,11 +737,70 @@
     timer = undefined;
     if (!connected || paused) return;
     const data = poll(sentSeq);
+    picked = 0;
     sentSeq = detailSince = data.seq;
     document.dispatchEvent(
       new CustomEvent("gg-devtools:page", { detail: JSON.stringify(data) }),
     );
   }
+
+  // Scrolls a node into view and outlines it for a moment, as the gg way to show an element.
+  const flash = (node: any) => {
+    const element = node?.nodeType === 1 ? node : node?.parentElement;
+    if (!element) return false;
+    element.scrollIntoView({ block: "center" });
+    const r = element.getBoundingClientRect(),
+      box = document.createElement("div");
+    box.style.cssText = `position:fixed;z-index:2147483647;pointer-events:none;background:rgba(111,168,220,.35);outline:1px solid #6fa8dc;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`;
+    document.documentElement.append(box);
+    setTimeout(() => box.remove(), 1200);
+    return true;
+  };
+
+  // A picker in the page, so a pick stays in the gg panel and skips the Elements panel, which is slow on a large DOM.
+  // It blocks the presses and the click, so the page does not act on them.
+  let stopPick: (() => void) | undefined,
+    picked = 0;
+  const pick = () => {
+    stopPick?.();
+    const box = document.createElement("div");
+    box.style.cssText =
+      "position:fixed;z-index:2147483647;pointer-events:none;display:none;background:rgba(111,168,220,.35);outline:1px solid #6fa8dc";
+    document.documentElement.append(box);
+    const over = (event: Event) => {
+      const r = (event.target as Element).getBoundingClientRect?.();
+      if (r)
+        box.style.cssText += `;display:block;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`;
+    };
+    const block = (event: Event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const choose = (event: Event) => {
+      block(event);
+      stopPick?.();
+      hook.choose(event.target as Node);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      block(event);
+      stopPick?.();
+      flush();
+    };
+    const blocked = ["pointerdown", "mousedown", "pointerup", "mouseup"];
+    addEventListener("mouseover", over, true);
+    for (const type of blocked) addEventListener(type, block, true);
+    addEventListener("click", choose, true);
+    addEventListener("keydown", key, true);
+    stopPick = () => {
+      removeEventListener("mouseover", over, true);
+      for (const type of blocked) removeEventListener(type, block, true);
+      removeEventListener("click", choose, true);
+      removeEventListener("keydown", key, true);
+      box.remove();
+      stopPick = undefined;
+    };
+  };
 
   // Commands from the panel, through relay.ts.
   document.addEventListener("gg-devtools:panel", event => {
@@ -588,13 +808,16 @@
     if (command.type === "connect") {
       connected = true;
       sentSeq = detailSince = 0;
-    } else if (command.type === "disconnect") connected = false;
+    } else if (command.type === "disconnect") (connected = false), stopPick?.();
+    else if (command.type === "pick") command.value ? pick() : stopPick?.();
     else if (command.type === "inspect") {
       inspect = command.id;
       detailSince = 0;
     } else if (command.type === "pause") paused = command.value;
     else if (command.type === "tree") {
+      treeFresh = !wantTree && command.value; // A tree tab needs the hidden objects that earlier batches left out
       wantTree = command.value;
+      wantElements = !!command.elements;
       sentTree = "";
     }
     flush();
@@ -612,6 +835,33 @@
   // The first node that a component shows, so the panel can reveal it with inspect().
   hook.nodeOf = (id: number) => {
     for (const [node, e] of scan().shown) if (e.id === id) return node;
+  };
+  // Shows the node of a component in the elements tab and in the page, with no Elements panel.
+  hook.showNode = (id: number) => {
+    const node = hook.nodeOf(id);
+    wantTree = wantElements = true;
+    picked = hook.domIdOf(node as Node | undefined);
+    flush();
+    return flash(node);
+  };
+  hook.flashDom = (id: number) => flash(walkedNodes.get(id)?.deref());
+  // Sends the row of a node with the tree that holds it, as for a pick or a node that the Elements panel selects.
+  hook.choose = (node: Node | null | undefined) => {
+    picked = wantElements ? hook.domIdOf(node) : hook.ownerOf(node);
+    flush();
+  };
+
+  // The node of an elements tree row, and the row of the closest walked node around a node.
+  hook.domOf = (id: number) => walkedNodes.get(id)?.deref();
+  hook.domIdOf = (node: Node | null | undefined) => {
+    // The walk runs now, so a node past the limit has its row before this returns.
+    focus = node ? new WeakRef(node) : undefined;
+    if (wantTree && wantElements) elements(), (sentTree = ""), schedule();
+    for (let x = node; x; x = x.parentNode) {
+      const id = nodeIds.get(x);
+      if (id && walkedNodes.has(id)) return id;
+    }
+    return 0;
   };
 
   // Gives a component's function, so the panel can open its source with inspect().

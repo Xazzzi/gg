@@ -16,6 +16,8 @@ The hook tracks objects from page start, so the panel can open at any time.
 It keeps the last 500 events per object as text previews, and holds objects only through `WeakRef`.
 While a panel is open, the hook pushes batches of changes through `relay.js` and the background worker.
 A batch has a summary of each changed object, and the log and stack only of the inspected object.
+Objects that the JSX runtime makes, such as components and item channels, go out only while a tree tab shows, or when a detail links to them.
+Objects from one site share one entry in a site table, so a 10k row list opens the panel with a batch of a few kB.
 The panel uses gg and its JSX runtime: `select` holds the panel state, and `each` fills the object list and the log tables.
 `npm run devtools` compiles the extension and the library, and points the library imports at the compiled files, because extension pages have no import map.
 The list collapses more than 10 objects from one creation site into one row, which a click opens.
@@ -25,6 +27,14 @@ An idle page sends nothing, and "Pause" stops the batches, so a performance trac
 - Selects show their slots, reported operations, snapshots and the events of their channel.
 - Feeds show their source and target channel.
 - The Components tab shows a tree of components and `each` lists, like React DevTools, and the Data tab lists selects, channels and feeds.
+- The Elements tab shows the DOM around all hosts, with rows for the component and the `each` list that show each run of nodes.
+  An element with dynamic children is marked as a host, and a click opens its host entry.
+  A double-click outlines the node in the page, and a node row has "Show in page" and "Inspect in Elements panel".
+  A node that the Elements panel selects selects its row.
+  It walks up to 5000 nodes and a selected node, shows the rest as "… N more", and an element with more than 10 children starts closed.
+- "Pick" selects an element in the page without the Elements panel, which is slow on a large DOM, and Escape cancels it.
+  A component's "Show element" selects its node in the Elements tab and outlines it in the page, and "Inspect in Elements panel" opens Chrome's panel.
+- A prop that holds an `Item` links to the item channel once the component reads it, and the channel names the component as its reader.
   A component nests under the host that drives it, or under the closest component or mount around its nodes.
   Its detail shows its props, with links to tracked objects, its parent, and a link that opens its function in Sources, as does a double-click in the tree.
   While the tab shows, a node that the Elements panel selects selects the component that shows it, and "Show element" goes back.
@@ -36,7 +46,7 @@ An idle page sends nothing, and "Pause" stops the batches, so a performance trac
 
 Labels are the creation site, as a path for same-origin scripts, and a click opens it in Sources.
 Names come from the binding at the creation site, such as `const todos = select(...)`, in the script that the page loaded.
-A source map leads to the original code, and the extension needs access to all sites to fetch it.
+A source map leads names, labels, stack lines and Sources links to the original code, and the extension needs access to all sites to fetch it.
 A factory takes its function name, as `makeList()`, and a feed without a binding shows as `source → channel`.
 Workers and iframes are not tracked yet.
 

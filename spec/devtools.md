@@ -18,11 +18,11 @@ So this spec defines only the contract with that extension.
 
 ## Registration
 
-- DV-001: The library MUST read the hook when it creates a `Channel`, when `feed` or `select` is called, and for each registration of DV-040 to DV-042.
+- DV-001: The library MUST read the hook when it creates a `Channel`, when `feed` or `select` is called, and for each registration of DV-040 to DV-042 and DV-046.
   If the value is not a function, the library does no devtools work for that object.
 - DV-002: The library MUST call the hook as `hook(kind, target, detail)`.
   The hook returns an emitter or `undefined`.
-- DV-003: The call stack of the hook MUST be the hook, an internal function, the `Channel` constructor or the `feed`, `select`, `jsx` or `each` function, and then the caller.
+- DV-003: The call stack of the hook MUST be the hook, an internal function, the `Channel` constructor, the `feed`, `select`, `jsx` or `each` function or the `[Symbol.asyncIterator]` method of an `Item`, and then the caller.
   For `"mount"`, it MUST be the hook, two internal functions, `mount` or `jsx`, and then the caller.
   So the hook can find the caller in `new Error().stack`.
 - DV-004: The library MUST NOT catch errors from the hook or from an emitter.
@@ -36,6 +36,7 @@ So this spec defines only the contract with that extension.
 | `"component"` | What the component returned      | `{ type, props }`                                                                    |
 | `"mount"`     | The parent                       | `{}`                                                                                 |
 | `"each"`      | The iterator that `each` returns | `{ state }`                                                                          |
+| `"item"`      | The `Item`                       | `{ channel }`                                                                        |
 
 - DV-005: Each `detail` MUST also have `owner`, which is the owner that creates the object, or `undefined`.
 
@@ -70,5 +71,9 @@ So this spec defines only the contract with that extension.
 - DV-042: `each` MUST register `"each"` before it returns.
 - DV-043: The owner of the select that drives the children of a `mount` is the parent.
   The owner of the select that drives the items of `each`, and of each item channel, is the iterator.
-- DV-044: The library MUST ignore what the hook returns for `"mount"` and `"each"`.
+- DV-044: The library MUST ignore what the hook returns for `"mount"`, `"each"` and `"item"`.
 - DV-045: A host MUST emit `("end")` once to the emitter of a component result that it drives, when the result finishes or fails, leaves the host, or the host stops.
+
+- DV-046: The first iteration of an `Item` MUST register `"item"` after it creates its channel (JX-03F).
+  Its owner is the iterator of `each`, which owns the channel too (DV-043).
+  So a debugger can link a prop that holds the item to the channel that the component reads.

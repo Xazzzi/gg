@@ -52,6 +52,15 @@ export function each<T>(
   state: State<readonly unknown[], any, T[]>,
   render: (item: Item<T>) => Child,
 ): AsyncGenerator<Node[], void, void>;
+export type Context<T> = { readonly [VALUE]?: T }; // VALUE is a type-only symbol
+export const createContext: <T>(key: unknown) => Context<T>;
+export function Provide<T>(props: {
+  context: Context<T>;
+  value: T;
+  children?: Child;
+}): Element;
+export function consume<T>(node: Node, context: Context<T>): T;
+export function use<T>(context: Context<T>): AsyncGenerator<Comment, T, unknown>;
 
 export declare namespace JSX {
   type Element = Child;
@@ -100,7 +109,7 @@ The runtime uses the global `document` when it creates nodes.
   So a `<select value>` finds its options.
   `true` MUST set the attribute to `""`.
   Other values MUST set the attribute to `String(value)`.
-- JX-003: `jsx` MUST mount `props.children` into the element, as `mount` does.
+- JX-003: `jsx` MUST mount `props.children` into the element, as `mount` does, except that the element waits to drive its dynamic children (JX-02B).
 - JX-004: `jsx` MUST ignore `key`.
 - JX-005: `jsx` with a function `type` MUST return `type(props)` unchanged.
   So a call of an async generator function gives one instance for each use.
@@ -152,6 +161,12 @@ The runtime converts a child to nodes by these rules, in order.
   Its first call MUST stop the drive of each host in `parent` and its descendants at the time of the call, and then remove all children of `parent`.
   Its later calls MUST do nothing.
   To stop a drive, the runtime closes its `select`, so each unfinished child gets `return()` (SE-120).
+- JX-02B: An element that `jsx` creates with a dynamic child MUST wait, and MUST NOT create its `select` until the runtime places it.
+  The runtime places nodes when `mount` places its children, and when a started host places nodes that were not its children.
+  For each node that it places, the runtime MUST start each waiting element in the node and its descendants, in tree order.
+  An element MUST start one time.
+  `mount` into a waiting element MUST end its wait, so its earlier children never start.
+  So an element starts only when its ancestors are in place, and an element that is never placed costs no `select`.
 
 ## Each
 
@@ -203,6 +218,31 @@ A component instance that finishes renders again with the next value of its item
   Each iteration MUST give a reader of that one channel.
   So a component that never iterates its `Item` costs no channel.
 
+## Context
+
+A context gives a value to the components inside a provider, so components need no module-level state, and a test provides a fake.
+JSX creates a child before its parent, so a component can ask only after the runtime places its node.
+The runtime uses the `context-request` event of the community context protocol of web components.
+So providers and consumers of other libraries that follow it work with it.
+A context value does not change, so the runtime asks without `subscribe`.
+Provide a `Channel` or a `select` for a value that changes.
+
+- JX-050: `createContext(key)` MUST return `key`.
+  So contexts compare by identity, and two libraries that share a key share the context.
+- JX-051: `Provide` MUST throw a `TypeError` if `children` is not one element.
+  Otherwise it MUST add a `"context-request"` listener to that element, and return the element.
+- JX-052: The listener MUST ignore an event whose `context` is not the same as the provided context.
+  Otherwise it MUST stop the propagation of the event, and call `event.callback(value)`.
+  So the nearest provider of a context answers.
+- JX-053: `consume(node, context)` MUST dispatch an `Event` of type `"context-request"` with `bubbles` and `composed` at `node`.
+  The event MUST have `context`, `contextTarget` set to `node`, `subscribe` set to `false`, and `callback`.
+  `consume` MUST return the value of the first `callback` call.
+  If no call happened during the dispatch, it MUST throw a `TypeError`.
+  So an event handler, which runs when its element is in place, can call `consume(event.currentTarget, context)`.
+- JX-054: `use(context)` MUST return an async generator that yields one new empty `Comment`, waits until the runtime places that comment (JX-02B), and returns `consume(comment, context)`.
+  So `const value = yield* use(context)` in a component yields a placeholder, and the next yield of the component replaces it (JX-027).
+  A component in an element that the runtime never places waits.
+
 ## Limits
 
 - JX-040: The runtime does not end a dynamic child when its nodes leave the host.
@@ -218,6 +258,8 @@ A component instance that finishes renders again with the next value of its item
   Code can change the attributes and the content of the nodes in an entry.
 - JX-044: `jsx` assigns a live property one time, so it does not apply to options that a dynamic child adds later.
   It assigns the value as it is, so a `value` on a file input throws, as the DOM does.
+- JX-045: Other code that inserts a waiting element, for example with `append`, does not start it (JX-02B).
+  Yield the element or make it a child, so that a host places it.
 
 ## Example
 

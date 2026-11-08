@@ -8,11 +8,14 @@ test("Package exports the root exports the public names", () => {
     "CHAN",
     "Channel",
     "Fragment",
+    "Provide",
     "StopError",
     "abortable",
     "applyOps",
     "catching",
     "changes",
+    "consume",
+    "createContext",
     "each",
     "feed",
     "isVal",
@@ -22,6 +25,7 @@ test("Package exports the root exports the public names", () => {
     "mount",
     "select",
     "spread",
+    "use",
   ]);
 });
 
@@ -45,11 +49,15 @@ test("JSX runtime exports its public names, which the root exports too", async (
   const runtime = await import("../src/jsx.ts");
   assert.deepEqual(Object.keys(runtime).sort(), [
     "Fragment",
+    "Provide",
+    "consume",
+    "createContext",
     "each",
     "jsx",
     "jsxDEV",
     "jsxs",
     "mount",
+    "use",
   ]);
   const roots = new Map(Object.entries(root));
   for (const [name, value] of Object.entries(runtime))

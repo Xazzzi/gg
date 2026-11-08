@@ -469,14 +469,53 @@ test("DV-042 DV-043 each registers its iterator, and owns its select and item ch
   }
 });
 
-test("DV-044 the library ignores what the hook returns for mount and each", async () => {
+test("DV-003 DV-046 an item registers once at its first iteration, owned by its each, with its channel", async () => {
+  const { log, details, off } = install();
+  const frames: string[] = [];
+  const hook = g[HOOK];
+  g[HOOK] = (kind: string, target: object, detail: object) => {
+    if (kind === "item")
+      frames.push((new Error().stack as string).split("\n")[4]);
+    return hook(kind, target, detail);
+  };
+  try {
+    const state = select(["a"], open);
+    await setImmediate();
+    const items: any[] = [];
+    const it = each(state, item => (items.push(item), null));
+    await it.next();
+    assert.equal(log.filter(([kind]) => kind === "item").length, 0);
+    const [item] = items;
+    item[Symbol.asyncIterator]();
+    item[Symbol.asyncIterator]();
+    assert.equal(log.filter(([kind]) => kind === "item").length, 1);
+    const { channel, owner } = details.get(item);
+    assert.ok(channel instanceof Channel);
+    assert.equal(owner, it);
+    assert.equal(details.get(channel).owner, it);
+    assert.match(frames[0], /devtools\.test\.ts/);
+    state[CHAN].close();
+    await it.next();
+  } finally {
+    off();
+  }
+});
+
+test("DV-044 the library ignores what the hook returns for mount, each and item", async () => {
   g[HOOK] = (kind: string) =>
-    ["mount", "each"].includes(kind) ? () => assert.fail("emitted") : undefined;
+    ["mount", "each", "item"].includes(kind)
+      ? () => assert.fail("emitted")
+      : undefined;
   try {
     mount(el(), Promise.resolve("x"));
     const state = select(["a"], open);
     const it = each(state, item => Promise.resolve(`${item}`));
     await it.next();
+    const other = select(["b"], open);
+    await setImmediate();
+    let handle: any;
+    await each(other, item => ((handle = item), null)).next();
+    await handle[Symbol.asyncIterator]().next();
     state[CHAN].close();
     await it.next();
     await setImmediate();

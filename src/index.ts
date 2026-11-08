@@ -11,13 +11,25 @@ export type { Caught, Spread } from "./helpers.ts";
 export { abortable, applyOps, catching, isVal, spread } from "./helpers.ts";
 export type {
   Child,
+  Context,
   Dynamic,
   Item,
   JSX,
   Props,
   Static,
 } from "./jsx.ts";
-export { each, Fragment, jsx, jsxDEV, jsxs, mount } from "./jsx.ts";
+export {
+  consume,
+  createContext,
+  each,
+  Fragment,
+  jsx,
+  jsxDEV,
+  jsxs,
+  mount,
+  Provide,
+  use,
+} from "./jsx.ts";
 export type {
   Changes,
   Op,

@@ -1,8 +1,9 @@
-import { mount, type Props } from "@xazzzi/gg";
+import { consume, mount, type Props, Provide, use } from "@xazzzi/gg";
 import {
   COUNTRIES,
+  createForm,
   FEATURES,
-  form,
+  FormContext,
   LANGUAGES,
   PLANS,
   randomize,
@@ -14,13 +15,14 @@ type Keys<T> = {
   [K in keyof Values]: Values[K] extends T ? K : never;
 }[keyof Values];
 
-// Each control sets its first value through a live property, writes the form on input,
-// then follows the form, except while it has focus, so typing "3." in a number survives.
+// Each control takes the form from its provider, sets its first value through a live property,
+// writes the form on input, then follows it, except while focused, so typing "3." survives.
 
 async function* TextField({
   field,
   ...attrs
 }: { field: Keys<string> } & Props) {
+  const form = yield* use(FormContext);
   const input = (
     <input
       {...attrs}
@@ -34,6 +36,7 @@ async function* TextField({
 }
 
 async function* TextArea({ field, ...attrs }: { field: Keys<string> } & Props) {
+  const form = yield* use(FormContext);
   const area = (
     <textarea
       {...attrs}
@@ -50,6 +53,7 @@ async function* NumberField({
   field,
   ...attrs
 }: { field: Keys<number> } & Props) {
+  const form = yield* use(FormContext);
   const input = (
     <input
       {...attrs}
@@ -63,6 +67,7 @@ async function* NumberField({
 }
 
 async function* Toggle({ field }: { field: Keys<boolean> }) {
+  const form = yield* use(FormContext);
   const box = (
     <input
       type="checkbox"
@@ -81,6 +86,7 @@ async function* Radio({
   field: Keys<string>;
   value: string;
 }) {
+  const form = yield* use(FormContext);
   const radio = (
     <input
       type="radio"
@@ -101,6 +107,7 @@ async function* Choice({
   field: Keys<string>;
   options: string[];
 }) {
+  const form = yield* use(FormContext);
   // value finds its option, because JSX assigns it after the children (JX-002).
   const select = (
     <select value={form[field]} onchange={() => (form[field] = select.value)}>
@@ -121,6 +128,7 @@ async function* MultiChoice({
   field: Keys<string[]>;
   options: string[];
 }) {
+  const form = yield* use(FormContext);
   const select = (
     <select
       multiple
@@ -147,6 +155,7 @@ async function* Member({
   field: Keys<string[]>;
   value: string;
 }) {
+  const form = yield* use(FormContext);
   const box = (
     <input
       type="checkbox"
@@ -169,6 +178,7 @@ async function* AllMembers({
   field: Keys<string[]>;
   options: string[];
 }) {
+  const form = yield* use(FormContext);
   const some = (chosen: string[]) =>
     chosen.length > 0 && chosen.length < options.length;
   const box = (
@@ -187,83 +197,98 @@ async function* AllMembers({
 }
 
 async function* Live({ format }: { format: (values: Values) => string }) {
+  const form = yield* use(FormContext);
   for await (const values of form) yield format(values);
 }
 
 mount(
   document.querySelector("main") as Element,
-  <div class="form">
-    <label class="row">
-      <span>Name</span>
-      <TextField field="name" type="text" />
-    </label>
-    <label class="row">
-      <span>Bio</span>
-      <TextArea field="bio" rows="3" />
-    </label>
-    <label class="row">
-      <span>Age</span>
-      <NumberField field="age" type="number" min="0" max="150" />
-    </label>
-    <label class="row">
-      <span>Volume</span>
-      <NumberField field="volume" type="range" min="0" max="100" />
-      <output>
-        <Live format={values => `${values.volume}`} />
-      </output>
-    </label>
-    <label class="row">
-      <span>Color</span>
-      <TextField field="color" type="color" />
-    </label>
-    <label class="row">
-      <span>Date</span>
-      <TextField field="date" type="date" />
-    </label>
-    <fieldset>
-      <legend>Plan</legend>
-      {PLANS.map(plan => (
-        <label>
-          <Radio field="plan" value={plan} />
-          {plan}
+  <Provide context={FormContext} value={createForm()}>
+    <div class="page">
+      <div class="form">
+        <label class="row">
+          <span>Name</span>
+          <TextField field="name" type="text" />
         </label>
-      ))}
-    </fieldset>
-    <label class="row">
-      <span>Country</span>
-      <Choice field="country" options={COUNTRIES} />
-    </label>
-    <fieldset>
-      <legend>Features</legend>
-      <label>
-        <AllMembers field="features" options={FEATURES} />
-        <b>all</b>
-      </label>
-      {FEATURES.map(feature => (
-        <label>
-          <Member field="features" value={feature} />
-          {feature}
+        <label class="row">
+          <span>Bio</span>
+          <TextArea field="bio" rows="3" />
         </label>
-      ))}
-    </fieldset>
-    <label class="row">
-      <span>Languages</span>
-      <MultiChoice field="languages" options={LANGUAGES} />
-    </label>
-    <label class="check">
-      <Toggle field="newsletter" />
-      Newsletter
-    </label>
-    <div class="buttons">
-      <button type="button" onclick={reset}>
-        Reset
-      </button>
-      <button type="button" onclick={randomize}>
-        Randomize
-      </button>
+        <label class="row">
+          <span>Age</span>
+          <NumberField field="age" type="number" min="0" max="150" />
+        </label>
+        <label class="row">
+          <span>Volume</span>
+          <NumberField field="volume" type="range" min="0" max="100" />
+          <output>
+            <Live format={values => `${values.volume}`} />
+          </output>
+        </label>
+        <label class="row">
+          <span>Color</span>
+          <TextField field="color" type="color" />
+        </label>
+        <label class="row">
+          <span>Date</span>
+          <TextField field="date" type="date" />
+        </label>
+        <fieldset>
+          <legend>Plan</legend>
+          {PLANS.map(plan => (
+            <label>
+              <Radio field="plan" value={plan} />
+              {plan}
+            </label>
+          ))}
+        </fieldset>
+        <label class="row">
+          <span>Country</span>
+          <Choice field="country" options={COUNTRIES} />
+        </label>
+        <fieldset>
+          <legend>Features</legend>
+          <label>
+            <AllMembers field="features" options={FEATURES} />
+            <b>all</b>
+          </label>
+          {FEATURES.map(feature => (
+            <label>
+              <Member field="features" value={feature} />
+              {feature}
+            </label>
+          ))}
+        </fieldset>
+        <label class="row">
+          <span>Languages</span>
+          <MultiChoice field="languages" options={LANGUAGES} />
+        </label>
+        <label class="check">
+          <Toggle field="newsletter" />
+          Newsletter
+        </label>
+        <div class="buttons">
+          <button
+            type="button"
+            onclick={(event: Event) =>
+              reset(consume(event.currentTarget as Node, FormContext))
+            }
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            onclick={(event: Event) =>
+              randomize(consume(event.currentTarget as Node, FormContext))
+            }
+          >
+            Randomize
+          </button>
+        </div>
+      </div>
+      <pre class="state">
+        <Live format={values => JSON.stringify(values, null, 2)} />
+      </pre>
     </div>
-  </div>,
-  <pre class="state">
-    <Live format={values => JSON.stringify(values, null, 2)} />
-  </pre>,
+  </Provide>,
 );

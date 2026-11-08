@@ -9,6 +9,7 @@
   --amber: #9a6700;
   --red: #c4314b;
   --blue: #1a5fb4;
+  --purple: #881280;
   font:
     12px system-ui,
     sans-serif;
@@ -24,6 +25,7 @@ body.dark {
   --amber: #e0b04a;
   --red: #f28b82;
   --blue: #8ab4f8;
+  --purple: #5db0d7;
 }
 * {
   box-sizing: border-box;
@@ -122,6 +124,10 @@ nav h3 {
   border-radius: 0;
   border-bottom: 2px solid transparent;
 }
+#pick.active {
+  color: var(--blue);
+  border-color: var(--blue);
+}
 .tab.active {
   border-bottom-color: var(--green);
 }
@@ -134,6 +140,17 @@ nav h3 {
   display: inline-block;
   width: 12px;
   color: var(--muted);
+}
+/* DOM rows of the elements tab, in the colors of the Elements panel */
+.node {
+  color: var(--purple);
+  font-family: ui-monospace, monospace;
+}
+.text {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .name.each,
 .name.mount {

@@ -16,7 +16,7 @@ export const owned = <R>(by: object, make: () => R): R => {
   }
 };
 
-/** Tells the devtools hook about a new object, and gives its event emitter if the hook returns one. */
+/** Tells the devtools hook about a new object, and gives its event emitter if the hook returns one. A detail can name its own owner. */
 export const register = (
   kind: string,
   target: object,
@@ -24,6 +24,6 @@ export const register = (
 ): Emit | undefined => {
   const hook = (globalThis as any)[HOOK];
   return typeof hook === "function"
-    ? hook(kind, target, { ...detail, owner })
+    ? hook(kind, target, { owner, ...detail })
     : undefined;
 };

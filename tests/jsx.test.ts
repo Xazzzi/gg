@@ -4,6 +4,8 @@ import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
 import { CHAN, Channel, select } from "../src/index.ts";
 import {
+  consume,
+  createContext,
   each,
   Fragment,
   type Item,
@@ -11,6 +13,8 @@ import {
   jsxDEV,
   jsxs,
   mount,
+  Provide,
+  use,
 } from "../src/jsx.ts";
 import { FakeElement, FakeNode, FakeText, fakeDocument, html } from "./dom.ts";
 
@@ -105,7 +109,10 @@ test("JX-002 assigns live properties, and skips them for null, undefined and fal
   );
   assert.deepEqual([...node.attributes], [["other", ""]]);
   const empty = h("input", { value: null, checked: false, muted: undefined });
-  assert.ok(!("value" in empty || "checked" in empty || "muted" in empty));
+  assert.deepEqual(
+    Reflect.ownKeys(empty),
+    Reflect.ownKeys(new FakeElement("input")),
+  );
 });
 
 test("JX-002 JX-003 assigns live properties after the children mount", () => {
@@ -353,14 +360,79 @@ test("JX-02A JX-03B unmount stops each host inside the parent, ends each at once
   assert.equal(html(root), "<div>x</div>");
 });
 
-test("JX-001 an element mounts a component", async () => {
+test("JX-001 JX-02B an element mounts a component when a mount places it", async () => {
   async function* Comp({ name }: { name: string }) {
     yield h("b", { children: name });
   }
   const node = h("p", { children: ["a", h(Comp, { name: "n" })] });
   await setImmediate();
+  assert.equal(html(node), "<p>a</p>");
+  mount(el(), node);
+  await setImmediate();
   assert.equal(html(node), "<p>a<b>n</b></p>");
   assert.ok(node.childNodes[0] instanceof FakeNode);
+});
+
+test("JX-02B nested elements wait until a placement reaches them, then start in tree order", async () => {
+  const targets: object[] = [];
+  let outer: any, inner: any;
+  const channels = await selects(async () => {
+    inner = h("b", { children: Promise.resolve("i") });
+    outer = h("div", {
+      children: [h("p", { children: inner }), Promise.resolve("o")],
+    });
+    await setImmediate();
+  }, targets);
+  assert.equal(channels.length, 0);
+  assert.equal(html(outer), "<div><p><b></b></p></div>");
+  const later = await selects(async () => {
+    mount(el(), outer);
+    await setImmediate();
+  });
+  assert.equal(later.length, 2);
+  assert.equal(html(outer), "<div><p><b>i</b></p>o</div>");
+});
+
+test("JX-02B a host starts an element that it places, one time", async () => {
+  const parent = el(),
+    values = latest<any>(),
+    child = latest<string>();
+  const node = h("p", { children: child });
+  const channels = await selects(async () => {
+    mount(parent, values);
+    values.send(node);
+    await setImmediate();
+    child.send("a");
+    await setImmediate();
+    values.send("x");
+    await setImmediate();
+    values.send(node);
+    await setImmediate();
+  });
+  child.send("b");
+  await setImmediate();
+  assert.equal(channels.length, 2);
+  assert.equal(html(parent), "<div><p>b</p></div>");
+});
+
+test("JX-02B a mount into a waiting element ends its wait", async () => {
+  const node = h("p", { children: Promise.resolve("old") });
+  mount(node, "new");
+  mount(el(), node);
+  await setImmediate();
+  assert.equal(html(node), "<p>new</p>");
+});
+
+test("JX-045 an element that other code appends into a host stays idle", async () => {
+  const parent = el(),
+    values = latest<any>();
+  mount(parent, values);
+  const box = el("section");
+  values.send(box);
+  await setImmediate();
+  box.append(h("p", { children: Promise.resolve("p") }));
+  await setImmediate();
+  assert.equal(html(parent), "<div><section><p></p></section></div>");
 });
 
 // Runs each over a select between static siblings, with rows that log values and their end.
@@ -983,4 +1055,129 @@ test("JX-03F an item makes one latest channel at its first iteration", async () 
   } finally {
     delete (globalThis as any)[Symbol.for("gg.devtools")];
   }
+});
+
+const Theme = createContext<string>(Symbol("theme"));
+
+test("JX-050 createContext gives its key", () => {
+  const key = Symbol("key");
+  assert.equal(createContext(key), key);
+});
+
+test("JX-051 Provide needs one element child, and gives it with a listener", () => {
+  for (const bad of [
+    undefined,
+    "x",
+    [el()],
+    new FakeText("t"),
+    Promise.resolve(el()),
+  ])
+    assert.throws(
+      () => Provide({ context: Theme, value: "v", children: bad as any }),
+      /one element child/,
+    );
+  const node = el();
+  assert.equal(Provide({ context: Theme, value: "v", children: node }), node);
+  assert.deepEqual(
+    node.listeners.map(([type]: [string]) => type),
+    ["context-request"],
+  );
+});
+
+test("JX-052 JX-053 the nearest provider of a context answers, and stops the request", () => {
+  const Other = createContext<number>(Symbol("other")),
+    inner = new FakeText("i") as any,
+    outer = new FakeText("o") as any,
+    reached: unknown[] = [],
+    root = el();
+  root.addEventListener("context-request", (event: any) =>
+    reached.push(event.context),
+  );
+  root.append(
+    h(Provide, {
+      context: Theme,
+      value: "outer",
+      children: h("div", {
+        children: [
+          h(Provide, {
+            context: Theme,
+            value: "inner",
+            children: h("p", {
+              children: h(Provide, {
+                context: Other,
+                value: 1,
+                children: h("b", { children: inner }),
+              }),
+            }),
+          }),
+          h("i", { children: outer }),
+        ],
+      }),
+    }),
+  );
+  assert.equal(consume(inner, Theme), "inner");
+  assert.equal(consume(inner, Other), 1);
+  assert.equal(consume(outer, Theme), "outer");
+  assert.deepEqual(reached, []);
+  assert.throws(() => consume(outer, Other), /No provider/);
+  assert.deepEqual(reached, [Other]);
+});
+
+test("JX-053 consume dispatches a context-request event, and takes the first answer", () => {
+  const node = el(),
+    leaf = new FakeText("t") as any,
+    seen: any[] = [];
+  node.addEventListener("context-request", (event: any) => {
+    seen.push(event);
+    event.callback(1);
+    event.callback(2);
+  });
+  node.append(leaf);
+  assert.equal(consume(leaf, Theme), 1);
+  const [event] = seen;
+  assert.deepEqual(
+    [
+      event.type,
+      event.bubbles,
+      event.composed,
+      event.context,
+      event.contextTarget,
+      event.subscribe,
+    ],
+    ["context-request", true, true, Theme, leaf, false],
+  );
+  assert.ok(event instanceof Event);
+});
+
+test("JX-054 use waits until the runtime places its placeholder, also in each rows", async () => {
+  reported.length = 0;
+  const { value: anchor } = (await use(Theme).next()) as { value: Comment };
+  assert.deepEqual([anchor.nodeType, anchor.data], [8, ""]);
+  async function* Label({ prefix }: { prefix: string }) {
+    const theme = yield* use(Theme);
+    yield h("b", { children: `${prefix}${theme}` });
+  }
+  const items = select(["a", "b"], {
+    autoStart: true,
+    autoClose: false,
+    nonYielding: true,
+  });
+  const tree = h(Provide, {
+    context: Theme,
+    value: "!",
+    children: h("div", {
+      children: [
+        h(Label, { prefix: "x" }),
+        h("ul", {
+          children: each(items, item => h(Label, { prefix: item.value })),
+        }),
+      ],
+    }),
+  });
+  await setImmediate();
+  assert.equal(html(tree), "<div><ul></ul></div>");
+  mount(el(), tree);
+  await setImmediate();
+  assert.equal(html(tree), "<div><b>x!</b><ul><b>a!</b><b>b!</b></ul></div>");
+  assert.deepEqual(reported, []);
 });

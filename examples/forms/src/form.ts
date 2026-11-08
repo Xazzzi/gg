@@ -1,4 +1,4 @@
-import { select } from "@xazzzi/gg";
+import { createContext, select } from "@xazzzi/gg";
 
 export type Values = {
   name: string;
@@ -34,7 +34,11 @@ const DEFAULTS: Values = {
 };
 
 // Plain values only, so autoClose would close the form after its first snapshot.
-export const form = select({ ...DEFAULTS }, { autoClose: false });
+export const createForm = (values = DEFAULTS) =>
+  select({ ...values }, { autoClose: false });
+export type Form = ReturnType<typeof createForm>;
+// Components read the form from the nearest provider, so a test can mount them with its own form.
+export const FormContext = createContext<Form>(Symbol("form"));
 
 const pick = <T>(list: readonly T[]) =>
   list[Math.floor(Math.random() * list.length)];
@@ -44,8 +48,8 @@ const int = (min: number, max: number) =>
 const pad = (n: number) => `${n}`.padStart(2, "0");
 
 // Object.assign writes key by key, and select publishes one snapshot for all of them.
-export const reset = () => Object.assign(form, DEFAULTS);
-export const randomize = () =>
+export const reset = (form: Form) => Object.assign(form, DEFAULTS);
+export const randomize = (form: Form) =>
   Object.assign(form, {
     name: pick(["Grace", "Alan", "Barbara", "Edsger", "Radia"]),
     bio: pick(["", "Likes queues.", "Proves things.", "Ships compilers."]),

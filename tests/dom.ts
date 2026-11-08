@@ -53,9 +53,11 @@ export class FakeElement extends FakeNode {
   attributes = new Map<string, string>();
   listeners: [string, unknown][] = [];
   tagName: string;
-  constructor(tagName: string) {
+  namespaceURI: string;
+  constructor(tagName: string, namespaceURI = "http://www.w3.org/1999/xhtml") {
     super(1);
     this.tagName = tagName;
+    this.namespaceURI = namespaceURI;
   }
   setAttribute(name: string, value: string) {
     this.attributes.set(name, value);
@@ -67,6 +69,8 @@ export class FakeElement extends FakeNode {
 
 export const fakeDocument = {
   createElement: (tag: string) => new FakeElement(tag),
+  createElementNS: (namespace: string, tag: string) =>
+    new FakeElement(tag, namespace),
   createTextNode: (data: string) => new FakeText(data),
   createDocumentFragment: () => new FakeNode(11),
 };

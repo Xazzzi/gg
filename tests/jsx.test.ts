@@ -74,6 +74,57 @@ test("JX-002 applies props in key order", () => {
   assert.equal(html(h("a", { href: "x", children: "t" })), '<a href="x">t</a>');
 });
 
+test("JX-001 takes the namespace from xmlns, then from an SVG tag", () => {
+  const SVG = "http://www.w3.org/2000/svg",
+    XHTML = "http://www.w3.org/1999/xhtml",
+    MATH = "http://www.w3.org/1998/Math/MathML";
+  for (const tag of ["svg", "path", "mpath", "feBlend", "feTurbulence"])
+    assert.equal(h(tag).namespaceURI, SVG, tag);
+  for (const tag of ["div", "a", "title", "fe", "feed", "x-feBlend"])
+    assert.equal(h(tag).namespaceURI, XHTML, tag);
+  assert.equal(h("math", { xmlns: MATH }).namespaceURI, MATH);
+  const link = h("a", { xmlns: SVG, href: "#x" });
+  assert.equal(link.namespaceURI, SVG);
+  assert.equal(html(link), `<a xmlns="${SVG}" href="#x"></a>`);
+  assert.equal(h("svg", { xmlns: 1 }).namespaceURI, SVG);
+  assert.equal(h("div", { xmlns: null }).namespaceURI, XHTML);
+});
+
+test("JX-002 assigns live properties, and skips them for null, undefined and false", () => {
+  const node = h("input", {
+    value: 0,
+    checked: true,
+    selected: "s",
+    indeterminate: 1,
+    muted: true,
+    other: true,
+  });
+  assert.deepEqual(
+    [node.value, node.checked, node.selected, node.indeterminate, node.muted],
+    [0, true, "s", 1, true],
+  );
+  assert.deepEqual([...node.attributes], [["other", ""]]);
+  const empty = h("input", { value: null, checked: false, muted: undefined });
+  assert.ok(!("value" in empty || "checked" in empty || "muted" in empty));
+});
+
+test("JX-002 JX-003 assigns live properties after the children mount", () => {
+  const seen: number[] = [],
+    create = fakeDocument.createElement;
+  fakeDocument.createElement = (tag: string) =>
+    Object.defineProperty(create(tag), "value", {
+      set(this: FakeElement) {
+        seen.push(this.childNodes.length);
+      },
+    });
+  try {
+    h("select", { value: "b", children: [el("option"), el("option")] });
+  } finally {
+    fakeDocument.createElement = create;
+  }
+  assert.deepEqual(seen, [2]);
+});
+
 test("JX-003 JX-010 JX-012 JX-013 JX-014 mounts children of all static kinds", () => {
   const b = el("b"),
     fragment = h(Fragment, { children: [el("i"), "f"] });
@@ -256,6 +307,50 @@ test("JX-028 a rejection or a bad output reports an error, and the entry keeps i
   await setImmediate();
   assert.equal(html(parent), "<div>wok</div>");
   values.close();
+});
+
+test("JX-020 a mount into a host stops its drive first, after the conversion", async () => {
+  const parent = el(),
+    count = latest<number>();
+  const channels = await selects(() => mount(parent, count));
+  count.send(1);
+  await setImmediate();
+  assert.throws(() => mount(parent, {} as any), /is not a JSX child/);
+  assert.equal(channels[0].signal.aborted, false);
+  mount(parent, "x");
+  assert.equal(channels[0].signal.aborted, true);
+  count.send(2);
+  await setImmediate();
+  assert.equal(html(parent), "<div>x</div>");
+});
+
+test("JX-02A JX-03B unmount stops each host inside the parent, ends each at once, and empties the parent", async () => {
+  const root = el(),
+    count = latest<number>();
+  let s!: ReturnType<typeof setup>, unmount!: () => void;
+  const channels = await selects(async () => {
+    s = setup(["a", "b"]);
+    unmount = mount(
+      root,
+      h("p", { children: [h("ul", { children: s.list })] }),
+      count,
+    );
+    count.send(1);
+    await setImmediate();
+  });
+  assert.equal(html(root), "<div><p><ul><li>a</li><li>b</li></ul></p>1</div>");
+  assert.equal(channels.length, 4);
+  unmount();
+  assert.equal(html(root), "<div></div>");
+  await setImmediate();
+  assert.deepEqual(s.log, ["a", "b", "end", "end"]);
+  assert.deepEqual(
+    channels.map(channel => channel.signal.aborted),
+    [false, true, true, true],
+  );
+  mount(root, "x");
+  unmount();
+  assert.equal(html(root), "<div>x</div>");
 });
 
 test("JX-001 an element mounts a component", async () => {
@@ -687,6 +782,19 @@ test("JX-03B return() ends the items and stops the drive", async () => {
     globalThis.gc?.();
   }
   assert.ok(collected);
+});
+
+test("JX-03B return() during a pending next() ends each at once", async () => {
+  const s = plain(["a"]);
+  await setImmediate();
+  await s.list.next();
+  const pending = s.list.next();
+  await setImmediate();
+  assert.match(inspect(pending), /pending/);
+  const done = s.list.return();
+  assert.deepEqual(await pending, { done: true, value: undefined });
+  assert.deepEqual(await done, { done: true, value: undefined });
+  assert.equal(s.seen[0].signal.aborted, true);
 });
 
 // Runs each over components that finish on a gate, and logs each item that render gets.

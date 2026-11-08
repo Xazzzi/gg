@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gg • Orbits</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        display: grid;
+        gap: 12px;
+        justify-items: center;
+        font: 14px system-ui, sans-serif;
+        background: #0b0d17;
+        color: #cdd3e0;
+      }
+      .controls,
+      .status {
+        width: min(92vw, 600px);
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .status {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+      }
+      button {
+        font: inherit;
+        padding: 4px 10px;
+        color: inherit;
+        background: #1b2033;
+        border: 1px solid #343b57;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      /* Fixed widths, so a label that changes moves no other button */
+      .run {
+        width: 5em;
+      }
+      .view {
+        width: 9em;
+      }
+      .orrery,
+      .chart {
+        width: min(92vw, 600px);
+        border: 1px dashed #262c44;
+      }
+      .orrery {
+        aspect-ratio: 1;
+      }
+      .chart {
+        height: 100px;
+      }
+      svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      .trail {
+        fill: none;
+        opacity: 0.45;
+      }
+      .line {
+        fill: none;
+        stroke: #6cf;
+        vector-effect: non-scaling-stroke;
+      }
+      text {
+        fill: #8a93ad;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="controls"></div>
+    <p class="status"></p>
+    <section class="orrery"></section>
+    <section class="chart"></section>
+    <script type="module" src="dist/main.js"></script>
+  </body>
+</html>

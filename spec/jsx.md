@@ -43,7 +43,7 @@ export function jsx(
 export const jsxs: typeof jsx;
 export const jsxDEV: typeof jsx;
 export function Fragment(props: { children?: Child }): DocumentFragment;
-export function mount(parent: Element, ...children: Child[]): void;
+export function mount(parent: Element, ...children: Child[]): () => void;
 export type Item<T> = AsyncIterable<T> & {
   readonly value: T;
   readonly signal: AbortSignal;
@@ -80,14 +80,24 @@ The runtime uses the global `document` when it creates nodes.
 - **Output**: the last value that the source of a dynamic entry produced.
 - **Place**: put the nodes of all entries into the host in order, and remove all other children of the host.
 - **Text value**: a string, a number or a bigint.
+- **SVG tag**: `svg`, `g`, `defs`, `symbol`, `use`, `image`, `switch`, `foreignObject`, `desc`, `metadata`, `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `text`, `tspan`, `textPath`, `linearGradient`, `radialGradient`, `stop`, `pattern`, `clipPath`, `mask`, `marker`, `filter`, `view`, `animate`, `animateMotion`, `animateTransform`, `set` or `mpath`, or a tag that starts with `fe` and an upper case letter.
+- **Live property**: `value`, `checked`, `selected`, `indeterminate` or `muted`.
+  Its attribute sets only the initial state, or it has no attribute.
 
 ## Elements
 
-- JX-001: `jsx` with a string `type` MUST create an element with `document.createElement(type)`, and return it.
+- JX-001: `jsx` with a string `type` MUST create an element, and return it.
+  If `props.xmlns` is a string, it MUST use `document.createElementNS(props.xmlns, type)`.
+  Otherwise, for an SVG tag, it MUST use `document.createElementNS("http://www.w3.org/2000/svg", type)`.
+  Otherwise, it MUST use `document.createElement(type)`.
+  JSX creates children before their parent, so the namespace of a parent cannot apply to its children.
+  So `a`, `script`, `style` and `title`, which are also HTML tags, need `xmlns` inside an SVG element.
 - JX-002: For each own enumerable key of `props` other than `children`, `jsx` MUST apply the value in key order.
   A function value at a key that starts with `on` MUST become a listener, with `addEventListener`.
   The event type is the rest of the key in lower case.
   `null`, `undefined` and `false` MUST set nothing.
+  Another value at a live property MUST be assigned to the property of the element, after JX-003 mounts the children.
+  So a `<select value>` finds its options.
   `true` MUST set the attribute to `""`.
   Other values MUST set the attribute to `String(value)`.
 - JX-003: `jsx` MUST mount `props.children` into the element, as `mount` does.
@@ -116,6 +126,7 @@ The runtime converts a child to nodes by these rules, in order.
 ## Mount
 
 - JX-020: `mount` MUST make `parent` a host for `children`.
+  If `parent` is a host already, `mount` MUST stop its drive first, after the conversion.
   Each dynamic child is one entry.
   The static nodes between two dynamic children are one entry.
 - JX-021: `mount` MUST place the static nodes synchronously.
@@ -137,6 +148,10 @@ The runtime converts a child to nodes by these rules, in order.
   It MUST move only the nodes outside one longest run of nodes that keep their order, so a swap moves two nodes.
   It MUST remove a node that leaves the host, and MUST NOT move the nodes after it.
   A node that two entries give MUST land at its last place.
+- JX-02A: `mount` MUST return an unmount function.
+  Its first call MUST stop the drive of each host in `parent` and its descendants at the time of the call, and then remove all children of `parent`.
+  Its later calls MUST do nothing.
+  To stop a drive, the runtime closes its `select`, so each unfinished child gets `return()` (SE-120).
 
 ## Each
 
@@ -174,7 +189,8 @@ A component instance that finishes renders again with the next value of its item
 - JX-03A: An error from `render` or from `applyOps` MUST end `each` as a rejection of the reader does.
   `each` MUST finish its reader first.
 - JX-03B: `return()` on the generator MUST finish the reader, end the `Item` of each entry and stop the drive.
-  A pending `next()` delays `return()` (JX-041).
+  It MUST do so also while a `next()` is pending, which then resolves with `{ done: true, value: undefined }`.
+  So a host that stops ends its `each` children at once.
 - JX-03C: When the dynamic child of an entry finishes and the item stays, `each` MUST render the item again.
   It MUST end the `Item` of the entry, and call `render` with a new `Item` as JX-032 does.
   It MUST do so at once if it gave a value to the `Item` after the last `render`, and at the next value of the item otherwise.
@@ -190,15 +206,18 @@ A component instance that finishes renders again with the next value of its item
 ## Limits
 
 - JX-040: The runtime does not end a dynamic child when its nodes leave the host.
-  A dynamic child ends when its source finishes.
+  A dynamic child ends when its source finishes, or when its host stops (JX-02A).
   So close the channels that a component reads to end the component, as `each` does.
   In `each`, a child that finishes renders again (JX-03C).
 - JX-041: An async generator queues `return()` behind a pending `next()`.
   So a component that waits on an open channel ends only when that channel closes, or at its next `yield`.
+  This holds when its host stops too, but not for `each` (JX-03B).
 - JX-042: A node in the entries of two hosts, or in two entries of one host, has no defined position.
 - JX-043: The children of a host belong to the runtime.
   A place removes nodes that other code adds.
   Code can change the attributes and the content of the nodes in an entry.
+- JX-044: `jsx` assigns a live property one time, so it does not apply to options that a dynamic child adds later.
+  It assigns the value as it is, so a `value` on a file input throws, as the DOM does.
 
 ## Example
 

@@ -3,7 +3,7 @@
 Tiny zero-dependency concurrent primitives for JavaScript and TypeScript.
 `Channel` moves values, `feed` fills channels from sources, and `select` combines sources into one state.
 
-9kB gzipped, tree-shakeable.
+10kB gzipped, tree-shakeable.
 Features 100% coverage, including Stryker mutation tests.
 Requires Node 22 or later. ESM only.
 
@@ -108,6 +108,9 @@ A component is an async generator function, and each use gives one instance.
 The instance yields its node, then changes the nodes it owns.
 It yields again only to replace its node, or to wake its host with the same node.
 A promise or an async iterable is a child, so a channel of strings is live text.
+Props set attributes, and `value`, `checked`, `selected`, `indeterminate` and `muted` set properties.
+SVG tags get the SVG namespace, and an `xmlns` prop sets any namespace.
+`mount` returns a function that stops the components and empties the parent.
 
 ```tsx
 import { type Channel, each, mount, select } from "@xazzzi/gg";
@@ -138,7 +141,7 @@ It gives each item a channel, sends it each new value, and closes it when the it
 A row that finishes renders again with the next value, so a row can also read its item once.
 So a row updates itself, and the list moves only nodes that change place.
 State needs no UI code, and a busy list renders all changes since its last read in one pass.
-[`examples/todomvc`](examples/todomvc) renders with it.
+[`examples/todomvc`](examples/todomvc) renders with it, [`examples/orbits`](examples/orbits) draws a simulation in SVG with views that mount and unmount, and [`examples/forms`](examples/forms) binds each kind of input to one state.
 
 ## Specification
 

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gg • Forms</title>
+    <style>
+      body {
+        margin: 0;
+        font: 14px system-ui, sans-serif;
+        background: #f6f7fb;
+        color: #1d2433;
+      }
+      main {
+        padding: 16px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 24px;
+        justify-content: center;
+        align-items: flex-start;
+      }
+      .form {
+        width: 420px;
+        display: grid;
+        gap: 10px;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 90px 1fr auto;
+        gap: 8px;
+        align-items: center;
+      }
+      input:not([type="checkbox"], [type="radio"], [type="range"]),
+      textarea,
+      select {
+        font: inherit;
+        box-sizing: border-box;
+        width: 100%;
+      }
+      output {
+        width: 3ch;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      fieldset {
+        display: flex;
+        gap: 14px;
+        margin: 0;
+        border: 1px solid #d4d8e4;
+        border-radius: 4px;
+      }
+      .buttons {
+        display: flex;
+        gap: 8px;
+      }
+      button {
+        font: inherit;
+        padding: 4px 12px;
+      }
+      /* Fixed size, so the state preview never moves the form */
+      .state {
+        width: 320px;
+        height: 420px;
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        background: #1d2433;
+        color: #d6deeb;
+        border-radius: 4px;
+        font: 12px ui-monospace, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <main></main>
+    <script type="module" src="dist/main.js"></script>
+  </body>
+</html>

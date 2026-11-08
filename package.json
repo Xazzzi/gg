@@ -42,7 +42,7 @@
     "postbuild": "npm run minify",
     "prepack": "npm run build",
     "spec:examples": "node update-spec-examples.ts",
-    "serve:examples": "esbuild examples/todomvc/dist/main=examples/todomvc/src/main.tsx examples/bench/dist/main=examples/bench/src/main.tsx --bundle --format=esm --outdir=. --servedir=. --serve=localhost:5173"
+    "serve:examples": "esbuild examples/todomvc/dist/main=examples/todomvc/src/main.tsx examples/bench/dist/main=examples/bench/src/main.tsx examples/orbits/dist/main=examples/orbits/src/main.tsx examples/forms/dist/main=examples/forms/src/main.tsx --bundle --format=esm --outdir=. --servedir=. --serve=localhost:5173"
   },
   "keywords": [
     "generator",

@@ -78,6 +78,9 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 - A promise or an async iterable is a dynamic child.
   A channel of strings is live text.
 - `on*` props with a function become listeners, and the event type is the lower case rest of the key.
+- Other props set attributes, except `value`, `checked`, `selected`, `indeterminate` and `muted`, which set properties (JX-002).
+- SVG tags get the SVG namespace (JX-001).
+  `a`, `script`, `style` and `title` inside an SVG element need `xmlns="http://www.w3.org/2000/svg"`.
 - Cast elements to their DOM type: `<input /> as HTMLInputElement`.
 
 ```tsx
@@ -106,9 +109,12 @@ async function* Title({ title }: { title: Channel<string> }) {
 
 ## Limits of the runtime
 
-- A dynamic child ends only when its source finishes (JX-040).
+- A dynamic child ends only when its source finishes, or when its host stops (JX-040).
   Removal of its nodes does not end it.
   Close the channel that a component reads to end the component.
+- `mount` returns an unmount function (JX-02A).
+  It stops every host inside the parent, which ends `each` lists and their items, and empties the parent.
+  A component that waits on an open channel still ends only when that channel closes (JX-041).
 - An element with dynamic children belongs to the runtime (JX-043).
   Do not add or remove its children by hand.
   You can change attributes and the content of nodes inside an entry.

@@ -50,6 +50,22 @@ type Kept = Entry & {
   sent?: boolean;
 };
 
+const SVG = "http://www.w3.org/2000/svg";
+// Children exist before their parent, so a tag alone picks the namespace.
+const SVG_TAGS = new Set(
+  "svg g defs symbol use image switch foreignObject desc metadata path rect circle ellipse line polyline polygon text tspan textPath linearGradient radialGradient stop pattern clipPath mask marker filter view animate animateMotion animateTransform set mpath".split(
+    " ",
+  ),
+);
+// Properties whose attribute sets only the initial state, or that have no attribute.
+const LIVE = new Set([
+  "value",
+  "checked",
+  "selected",
+  "indeterminate",
+  "muted",
+]);
+
 /** Tells if a value renders as a `Text` node. */
 const isText = (value: unknown) =>
   typeof value === "string" ||
@@ -229,6 +245,14 @@ const drive = <E extends Entry>(
   };
 };
 
+// The stop function of the drive of each host.
+const hosts = new WeakMap<Node, () => void>();
+/** Stops the drives of node and its descendants. */
+const unmount = (node: Node) => {
+  hosts.get(node)?.();
+  for (const child of node.childNodes) unmount(child);
+};
+
 /**
  * Makes parent a host for children, with static runs and dynamic entries in order.
  * mount and jsx both call it, so the hook finds their caller at one depth (DV-003). */
@@ -245,16 +269,25 @@ const attach = (parent: Element, children: Child) => {
       entries.push(entry, (run = { nodes: [] }));
     },
   );
+  hosts.get(parent)?.();
   place(parent, entries);
   if (!dynamic.length) return;
   register("mount", parent, {});
   const host = drive(parent, () => place(parent, entries), true);
+  hosts.set(parent, host.stop);
   for (const entry of dynamic) host.add(entry);
 };
 
-/** Mounts children into parent, and keeps dynamic children live. */
-export function mount(parent: Element, ...children: Child[]): void {
+/** Mounts children into parent, keeps dynamic children live, and gives a function that unmounts them. */
+export function mount(parent: Element, ...children: Child[]): () => void {
   attach(parent, children);
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    unmount(parent);
+    parent.replaceChildren();
+  };
 }
 
 /** Creates an element with props and children, or calls a component with props. */
@@ -272,15 +305,25 @@ export function jsx(
     }
     return result;
   }
-  const element = document.createElement(type);
+  const { xmlns } = props;
+  const element =
+    typeof xmlns === "string"
+      ? document.createElementNS(xmlns, type)
+      : SVG_TAGS.has(type) || /^fe[A-Z]/.test(type)
+        ? document.createElementNS(SVG, type)
+        : document.createElement(type);
+  const live: [string, unknown][] = [];
   for (const name of Object.keys(props)) {
     const value = props[name];
     if (name === "children" || value == null || value === false) continue;
     if (typeof value === "function" && name.startsWith("on"))
       element.addEventListener(name.slice(2).toLowerCase(), value as any);
+    else if (LIVE.has(name)) live.push([name, value]);
     else element.setAttribute(name, value === true ? "" : `${value}`);
   }
   attach(element, props.children);
+  // After the children, so a select finds the option that its value names.
+  for (const [name, value] of live) (element as any)[name] = value;
   return element;
 }
 
@@ -372,11 +415,16 @@ export function each<T>(
     throw new TypeError("each needs a select proxy with an array shape");
   if (typeof render !== "function")
     throw new TypeError("each render must be a function");
+  const control = new AbortController();
   const iterator: AsyncGenerator<Node[], void, void> = replay(
     state,
     render,
     () => iterator,
+    control.signal,
   );
+  // A generator queues return() behind a pending next(), so the abort wakes the wait first (JX-03B).
+  const finish = iterator.return.bind(iterator);
+  iterator.return = value => (control.abort(), finish(value));
   register("each", iterator, { state });
   return iterator;
 }
@@ -386,6 +434,7 @@ async function* replay<T>(
   state: State<readonly unknown[], any, T[]>,
   render: (item: Item<T>) => Child,
   owner: () => object,
+  signal: AbortSignal,
 ) {
   const self = owner(),
     entries: Kept[] = [],
@@ -442,6 +491,7 @@ async function* replay<T>(
     }
   };
   const reader = changes(state);
+  signal.addEventListener("abort", () => woke.resolve());
   try {
     for (const value of reader.outputs) entries.push(map(value));
     // A read starts only to wait, so reports during a yield join one read (JX-037).
@@ -462,6 +512,7 @@ async function* replay<T>(
         (read ??= reader.next()),
         woke.promise,
       ]);
+      if (signal.aborted) return;
       if (!result) woke = Promise.withResolvers();
       else if (result.done) return;
       else (read = undefined), apply(result.value);

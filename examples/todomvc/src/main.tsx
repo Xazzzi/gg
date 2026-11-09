@@ -14,7 +14,7 @@ mount(
 // A text child follows the save state, so the runtime changes one Text node.
 mount(
   $(".saved"),
-  derive(view, ({ saved }) => (saved ? "Saved" : "Saving…")),
+  derive(view, "saved", saved => (saved ? "Saved" : "Saving…")),
 );
 ($(".new-todo") as HTMLInputElement).focus();
 if (BENCH) import("./bench.ts");

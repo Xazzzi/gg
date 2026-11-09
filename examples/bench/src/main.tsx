@@ -74,7 +74,6 @@ const build = (count: number) =>
 // Only each reads the rows, so the select runs with no snapshot consumer.
 const rows = select([] as Row[], {
   autoStart: true,
-  autoClose: false,
   nonYielding: true,
 });
 let selected = 0;

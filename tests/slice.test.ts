@@ -184,18 +184,13 @@ test("SE-155 a slice made before start names the slots at start, and describes t
   ]);
 });
 
-test("SE-156 a slice made before start finishes at start when it names no slot", async () => {
+test("SE-156 SE-037 a slice made before start finishes at the start of its first read when it names no slot", async () => {
   for (const [shape, keys] of [
     [[], [0]],
     [["a"], [1]],
   ] as const) {
-    const s = select([...shape], { autoClose: false, nonYielding: true });
-    const r = changes(s, [...keys]);
-    const next = r.next();
-    await setImmediate();
-    assert.ok(pending(next));
-    void s[CHAN][Symbol.asyncIterator]().next();
-    assert.deepEqual(await next, done);
+    const s = select([...shape], { nonYielding: true });
+    assert.deepEqual(await changes(s, [...keys]).next(), done);
   }
 });
 
@@ -455,4 +450,34 @@ test("SE-166 the calls of watch settle in call order", async () => {
     { done: false, value: "a" },
     { done: false, value: "b" },
   ]);
+});
+
+test("SE-04A a waiting slice reader of an unchanged slot does not stall a flush", async () => {
+  const s = select({ a: 1, b: 1 });
+  const r = changes(s, ["a"]);
+  await r.next();
+  const read = r.next();
+  s.b = 2;
+  await setImmediate();
+  s.a = 2;
+  assert.deepEqual(await read, {
+    done: false,
+    value: [{ op: "set", key: "a", value: 2, prev: 1 }],
+  });
+  s[CHAN].close();
+});
+
+test("SE-04A a slice reader that waits later releases a flush", async () => {
+  const s = select({ a: 1, b: 1 });
+  const r = changes(s, ["a"]);
+  await r.next();
+  s.b = 2;
+  await setImmediate();
+  const read = r.next();
+  s.a = 2;
+  assert.deepEqual(await read, {
+    done: false,
+    value: [{ op: "set", key: "a", value: 2, prev: 1 }],
+  });
+  s[CHAN].close();
 });

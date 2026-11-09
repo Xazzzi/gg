@@ -82,6 +82,9 @@ Without `unwrap`, each source appears as a `Val` with `status`, `value`, `reason
 `sort` and `reverse` move slots without restarting sources, and `sort` compares sources.
 `sortOutputs` moves slots the same way, and compares outputs once.
 
+A select starts at its first observer, which is a `for await` or a read of `changes`, and stays open until code closes it.
+[`spec/scope.md`](spec/scope.md#defaults) gives the reason for each default.
+
 `break` detaches one consumer, and leaves the sources open.
 Bind the state with `using`, or call `close` in `finally`, to stop them.
 
@@ -95,6 +98,7 @@ for await (const { users } of state) if (users?.length) break;
 - `abortable(promise, signal)` waits for a promise until a signal aborts.
 - `catching(source, onError)` wraps a source so a failure ends it quietly.
 - `derive(source, map)` maps each value of an async iterable, so a dynamic prop or child follows a computed value.
+  When `map` reads one key of a `select`, use `derive(state, key, map)`, so `map` runs only when that key changes.
 - `spread` turns `Val` fields into `kLoading`, `kError` and `kDone`, for `mapSnapshot: spread`.
 - `isVal(value)` tests for a `Val`, across copies of the library.
 - `applyOps(target, ops, map?, { eager })` replays operations onto a mirror, and `map` derives each entry.
@@ -128,11 +132,8 @@ async function* Row({ todo }: { todo: Channel<Todo> }) {
   for await (const { title } of todo) li.textContent = title;
 }
 
-const todos = select([] as Todo[], {
-  autoStart: true,
-  autoClose: false,
-  nonYielding: true,
-});
+// Only each reads todos, so it builds no snapshots.
+const todos = select([] as Todo[], { nonYielding: true });
 mount(
   document.body,
   <ul>
@@ -153,7 +154,7 @@ State needs no UI code, and a busy list renders all changes since its last read 
 ## Specification
 
 [`spec/`](spec/) defines intended behaviour, with numbered rules that the tests reference.
-[`learn-gg.ts`](learn-gg.ts) is a runnable tour of the library, and needs `npm run build` first.
+[`learn-gg.tsx`](learn-gg.tsx) is a runnable tour of the library and its JSX, and `npm run learn` runs it.
 
 ## License
 

@@ -7,6 +7,11 @@ import { applyOps, CHAN, changes, type Op, select } from "../src/index.ts";
 const open = { autoStart: true, autoClose: false, nonYielding: true } as const;
 const done = { done: true, value: undefined };
 const started = async <T>(state: T) => (await setImmediate(), state);
+const pending = (promise: Promise<unknown>) => /pending/.test(inspect(promise));
+const set = (value: number, prev: unknown) => ({
+  done: false,
+  value: [{ op: "set", key: "a", value, prev }],
+});
 // Resolves whether the value that put hands over gets collected.
 const collected = async (put: (value: object) => unknown) => {
   const registry = new FinalizationRegistry<() => void>(done => done());
@@ -339,5 +344,68 @@ test("SE-14C without onChanges, the log drops its operations when the last reade
     globalThis.gc?.();
   }
   assert.ok(collected);
+  s[CHAN].close();
+});
+
+test("SE-037 the first read of a reader starts the select, and a reader alone does not", async () => {
+  const s = select({ a: 1 });
+  const r = changes(s);
+  await setImmediate();
+  assert.deepEqual(changes(s).outputs, {});
+  assert.deepEqual(await r.next(), set(1, undefined));
+  assert.deepEqual(changes(s).outputs, { a: 1 });
+  s[CHAN].close();
+});
+
+test("SE-037 SE-030 reads and a consumer start the select once", async () => {
+  const s = select({ a: 1 }, { backPressure: false });
+  const r = changes(s);
+  const first = r.next(),
+    second = r.next();
+  void s[Symbol.asyncIterator]().next();
+  assert.deepEqual(await first, set(1, undefined));
+  await setImmediate();
+  assert.ok(pending(second));
+  s[CHAN].close();
+});
+
+test("SE-04A a waiting read releases a flush that no consumer reads", async () => {
+  const s = select({ a: 1 });
+  const r = changes(s);
+  assert.deepEqual(await r.next(), set(1, undefined));
+  s.a = 2;
+  assert.deepEqual(await r.next(), set(2, 1));
+  s.a = 3;
+  assert.deepEqual(await r.next(), set(3, 2));
+  s[CHAN].close();
+});
+
+test("SE-04A a later read releases a waiting flush, and each flush waits for its own read", async () => {
+  const s = select({ a: 1 });
+  const r = changes(s);
+  await r.next();
+  s.a = 2;
+  await setImmediate();
+  s.a = 3;
+  await setImmediate();
+  assert.deepEqual(await r.next(), set(2, 1));
+  await setImmediate();
+  s.a = 4;
+  await setImmediate();
+  assert.deepEqual(await r.next(), set(3, 2));
+  assert.deepEqual(await r.next(), set(4, 3));
+  s[CHAN].close();
+});
+
+test("SE-04A under ackStyle all, only a snapshot consumer releases a flush", async () => {
+  const s = select({ a: 1 }, { ackStyle: "all" });
+  const r = changes(s);
+  await r.next();
+  s.a = 2;
+  const read = r.next();
+  await setImmediate();
+  assert.ok(pending(read));
+  await s[Symbol.asyncIterator]().next();
+  assert.deepEqual(await read, set(2, 1));
   s[CHAN].close();
 });

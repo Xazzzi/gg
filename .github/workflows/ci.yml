@@ -20,7 +20,7 @@ jobs:
       - run: npm run test:branches
       - run: npm run test:perf
       - run: npm run build
-      - run: node learn-gg.ts
+      - run: npm run learn
 
   # Tests need no install, and Node 22 applies the test timeout to the whole file.
   compat:

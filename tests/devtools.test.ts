@@ -45,7 +45,10 @@ test("DV-001 a missing or non-function hook does no devtools work", async () => 
     g[HOOK] = value;
     const ch = new Channel<number>();
     ch.send(1);
-    const s = select({ a: 1 }, { autoStart: true, nonYielding: true });
+    const s = select(
+      { a: 1 },
+      { autoClose: true, autoStart: true, nonYielding: true },
+    );
     feed([1], new Channel(), { autoStart: true });
     await setImmediate();
     assert.ok(s[CHAN].signal.aborted);
@@ -291,6 +294,7 @@ test("DV-032 report emits before onChanges", async () => {
     const s = select(
       { a: 1 },
       {
+        autoClose: true,
         autoStart: true,
         nonYielding: true,
         onChanges: () => order.push("onChanges"),
@@ -653,7 +657,11 @@ test("DV-004 DV-005 a hook error inside an owner leaves no owner behind", () => 
 test("DV-050 changes registers a reader with its state and keys, and watch at its first next()", async () => {
   const { log, details, off } = install();
   try {
-    const s = select(["a"], { autoStart: true, nonYielding: true });
+    const s = select(["a"], {
+      autoClose: true,
+      autoStart: true,
+      nonYielding: true,
+    });
     const all = changes(s),
       some = changes(s, [0]);
     assert.deepEqual(details.get(all), {

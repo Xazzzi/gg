@@ -109,7 +109,7 @@ export type Watch<V> = Disposable & {
 };
 
 // A state of unknown outputs, such as an any, takes any key.
-type Keys<O> = unknown extends O
+export type Keys<O> = unknown extends O
   ? PropertyKey
   : O extends readonly unknown[]
     ? number
@@ -119,12 +119,12 @@ type Slice<O, K> = unknown extends O
   : O extends readonly unknown[]
     ? O
     : { [P in K & keyof O]?: O[P] };
-type Entry<O, K> = unknown extends O
+export type Entry<O, K> = unknown extends O
   ? unknown
   : O extends readonly (infer E)[]
     ? E
     : O[K & keyof O];
-type Reads<O> = { [CHAN]: Channel<any>; readonly [OUTPUTS]?: O };
+export type Reads<O> = { [CHAN]: Channel<any>; readonly [OUTPUTS]?: O };
 
 /** Maps each select proxy to its select. */
 const openers = new WeakMap<object, Select>();
@@ -346,9 +346,23 @@ class Log {
   base = 0;
   readers = new Set<Reader>();
   kept?: boolean; // onChanges or devtools read each report, which connect sets
+  read?: boolean; // A reader read or waited since the flush cleared it, so the flush was observed (SE-04A)
+  #seen?: PromiseWithResolvers<void>;
 
   constructor(pending?: Op[]) {
     this.pending = pending;
+  }
+
+  /** Marks a reader that read, or that waits with nothing to read, and releases a flush that waits for one. */
+  observe() {
+    this.read = true;
+    this.#seen?.resolve();
+    this.#seen = undefined;
+  }
+
+  /** Resolves at the next read that takes operations. */
+  seen() {
+    return (this.#seen ??= Promise.withResolvers()).promise;
   }
 
   /** The absolute index after the last reported operation. */
@@ -500,6 +514,7 @@ class Reader implements Changes<unknown> {
   #closed = false; // By return() or dispose, or by the SE-14A rejection
   #ended = false;
   #emit?: Emit;
+  #start: () => void;
 
   static {
     positionOf = reader => reader.#at;
@@ -514,8 +529,10 @@ class Reader implements Changes<unknown> {
     keys: readonly PropertyKey[] | undefined,
     slice: View | undefined,
     outputs: unknown,
+    start: () => void,
   ) {
     this.outputs = outputs;
+    this.#start = start;
     this.#log = log;
     this.#channel = channel;
     this.#slice = slice;
@@ -535,6 +552,7 @@ class Reader implements Changes<unknown> {
   }
 
   next(): Promise<IteratorResult<Op[], undefined>> {
+    this.#start(); // SE-037
     const read = Promise.withResolvers<IteratorResult<Op[], undefined>>();
     this.#waiting.push(read);
     this.#settle();
@@ -609,10 +627,12 @@ class Reader implements Changes<unknown> {
         value = this.#read();
       if (value) {
         next.resolve({ done: false, value });
+        this.#log.observe();
         this.#emit?.("read", value);
-      } else if (!signal.aborted && !this.#closed && !this.#slice?.spent?.())
+      } else if (!signal.aborted && !this.#closed && !this.#slice?.spent?.()) {
+        this.#log.observe(); // SE-04A: a reader with nothing to read observed all that concerns it
         return;
-      else {
+      } else {
         this.#log.readers.delete(this);
         this.#log.trim();
         if (!this.#closed && failed(this.#channel))
@@ -666,6 +686,7 @@ class Select {
   #map = new Map<PropertyKey, Slot>();
   #autoClose: boolean;
   #backPressure: boolean;
+  #anyAck: boolean; // Under "all", only snapshot consumers release a flush (SE-04A)
   #nonYielding: boolean;
   #unwrap: boolean;
   #onChanges?: (ops: Op[]) => void;
@@ -754,7 +775,7 @@ class Select {
   constructor(shape: any, options: any, channel: Channel<any>) {
     const {
       autoStart = false,
-      autoClose = true,
+      autoClose = false,
       backPressure = true,
       nonYielding = false,
       unwrap = false,
@@ -763,6 +784,7 @@ class Select {
     } = options;
     this.#autoClose = autoClose;
     this.#backPressure = backPressure;
+    this.#anyAck = options.ackStyle !== "all";
     this.#nonYielding = nonYielding;
     this.#unwrap = unwrap;
     this.#onChanges = onChanges;
@@ -845,8 +867,16 @@ class Select {
       keys,
       slice,
       outputs,
+      this.#request,
     );
   }
+
+  /** Starts the select in a microtask at the first read of a reader, as a consumer does (SE-037). */
+  #request = () => {
+    // Stryker disable next-line ConditionalExpression: an optimization, because #start checks again
+    if (this.#started) return;
+    queueMicrotask(() => this.#start());
+  };
 
   get(_: unknown, key: PropertyKey, receiver: unknown) {
     if (key === Symbol.asyncIterator) return this.#iterate;
@@ -1093,6 +1123,7 @@ class Select {
 
   /** Starts the select, logs the initial shape, and activates all slots. */
   #start() {
+    if (this.#started) return; // A consumer and a reader can both start it
     this.#phase = IDLE;
     this.#emit?.("start");
     const all = this.#slots();
@@ -1175,6 +1206,7 @@ class Select {
         .filter(([, awaited]) => awaited)
         .map(([slot]) => slot);
       this.#results = new Map();
+      this.#log.read = false;
       const report = this.#log.take();
       if (report) {
         this.#emit?.("report", report);
@@ -1185,8 +1217,14 @@ class Select {
       if (publish && !this.#nonYielding) {
         const snap = this.#snapshot();
         const value = this.#mapSnapshot ? this.#mapSnapshot(snap) : snap;
-        if (this.#backPressure) await channel.asend(value);
-        else channel.send(value);
+        if (!this.#backPressure) channel.send(value);
+        else {
+          const sent = channel.asend(value);
+          // SE-04A: a reader that reads the report observes this flush too
+          if (!this.#anyAck) await sent;
+          else if (!this.#log.read)
+            await Promise.race([sent, this.#log.seen()]);
+        }
       }
       for (const slot of settled.sort(byIndex))
         if (slot.kind === SYNC_RAW && idle(slot)) this.#pull(slot);

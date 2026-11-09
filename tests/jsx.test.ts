@@ -956,16 +956,13 @@ test("JX-036 JX-037 a dynamic item that settles later makes each yield again", a
   assert.equal(html(parent), "<div>p</div>");
 });
 
-test("JX-031 each over a select that did not start renders the start description", async () => {
+test("JX-031 SE-037 each starts a select that did not start, and renders the start description", async () => {
   const parent = el(),
-    items = select(["a", "b"], { autoClose: false, backPressure: false });
+    items = select(["a", "b"]);
   mount(
     parent,
     each(items, () => "x"),
   );
-  await setImmediate();
-  assert.equal(html(parent), "<div></div>");
-  void items[Symbol.asyncIterator]().next();
   await setImmediate();
   assert.equal(html(parent), "<div>xx</div>");
 });

@@ -6,6 +6,7 @@ import { inspect } from "node:util";
 import {
   abortable,
   applyOps,
+  CHAN,
   Channel,
   catching,
   derive,
@@ -551,7 +552,7 @@ test("HE-01A return during onError leaves next with onError", async () => {
 test("HE-020 isVal reads the brand only", async () => {
   const s = select(
     { a: Promise.resolve(1) },
-    { autoStart: true, backPressure: false },
+    { autoClose: true, autoStart: true, backPressure: false },
   );
   const it = s[Symbol.asyncIterator]();
   const { value }: any = await it.next();
@@ -1263,4 +1264,33 @@ test("HE-053 return calls return on the iterator of the source", async () => {
   await it.next();
   assert.deepEqual(await it.return(), end());
   assert.equal(returned, 1);
+});
+
+test("HE-054 derive with a key maps the outputs of that slot, only when it changes", async () => {
+  const s = select({ a: 1, b: 1 });
+  const calls: number[] = [];
+  const it = derive(s, "a", a => (calls.push(a), a * 10));
+  assert.deepEqual(await it.next(), { done: false, value: 10 });
+  s.b = 2;
+  await setImmediate();
+  s.a = 2;
+  assert.deepEqual(await it.next(), { done: false, value: 20 });
+  assert.deepEqual(calls, [1, 2]);
+  s[CHAN].close();
+  assert.deepEqual(await it.next(), end());
+});
+
+test("HE-050 HE-054 derive with a key checks the map, the state and the key", () => {
+  assert.throws(() => derive(select({ a: 1 }), "a" as any, undefined as any), {
+    name: "TypeError",
+    message: "derive map must be a function",
+  });
+  assert.throws(() => derive(new Channel() as any, "a", String), {
+    name: "TypeError",
+    message: "watch needs a select proxy",
+  });
+  assert.throws(() => derive(select({ a: 1 }), {} as any, String), {
+    name: "TypeError",
+    message: "An object slice takes property keys",
+  });
 });

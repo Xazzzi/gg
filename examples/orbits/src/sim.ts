@@ -64,7 +64,6 @@ export const createSim = (count = 12) => {
   // Views read the bodies with each, so a view can mount at any time.
   const bodies = select(Array.from({ length: count }, orbit), {
     autoStart: true,
-    autoClose: false,
     nonYielding: true,
   });
   const running = latest<boolean>(),

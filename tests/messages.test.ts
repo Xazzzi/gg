@@ -168,7 +168,10 @@ test("Messages iterator results", async () => {
   await target[Symbol.asyncIterator]()
     .next()
     .catch(error => seen.push(error));
-  for await (const { raw } of select({ raw: { next: () => 1 } }) as any)
+  for await (const { raw } of select(
+    { raw: { next: () => 1 } },
+    { autoClose: true },
+  ) as any)
     seen.push((raw as any).reason);
   assert.deepEqual(
     seen.map(error => error.message),

@@ -138,7 +138,8 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 
 ## Options
 
-- SE-001: The defaults MUST be `autoStart: false`, `autoClose: true`, `backPressure: true`, `nonYielding: false`, `unwrap: false`.
+- SE-001: The defaults MUST be `autoStart: false`, `autoClose: false`, `backPressure: true`, `nonYielding: false`, `unwrap: false`.
+  `scope.md` gives the reason for each default.
 - SE-002: `thenReceive` MUST default to `"latest"`.
   `firstReceive` MUST default to `"latest"`, or to `"unread"` when `thenReceive` is `"unread"`.
 - SE-003: `select` MUST pass other `ChannelOptions` to the channel unchanged.
@@ -219,7 +220,7 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 
 ## Start
 
-- SE-030: Without `autoStart`, the slots MUST start when the channel has an active consumer.
+- SE-030: Without `autoStart`, the slots MUST start when the channel has an active consumer, or as SE-037 says.
   This uses `attached(channel)` from `channel.md`.
   A rejection from `attached` means no start.
 - SE-031: With `autoStart`, the slots MUST start in a microtask queued by `select`.
@@ -238,6 +239,10 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 - SE-036: `select` MUST call `[Symbol.asyncIterator]()` at start, or at assignment after start.
   If this call or a read of `next` on its result throws, the slot MUST become rejected.
   SE-055 then applies.
+- SE-037: Before start, the first `next()` of a reader MUST start the slots in a microtask, as an active consumer does.
+  A reader that no code reads MUST NOT start them.
+  The slots MUST start one time, also when a consumer and a reader both start them.
+  So `changes`, `watch` and `each` work on a select with no consumer and no `autoStart`.
 
 ## Flush
 
@@ -248,7 +253,7 @@ A flush runs these steps in order.
 1. Advance idle sync iterators, and make the first pull on each new raw iterator.
 2. Report to readers and to `onChanges`.
 3. Publish.
-4. With `backPressure`, wait until a consumer reads that publish.
+4. With `backPressure`, wait until a consumer reads that publish, or a reader reads (SE-04A).
 5. Advance each sync iterator due under SE-064.
 6. Pull each idle async iterator.
 7. Apply the auto close rule.
@@ -277,6 +282,12 @@ A flush runs these steps in order.
 - SE-048: A flush SHOULD cost time for the slots that changed and the raw iterators, and not for the other slots.
   Publish builds a snapshot of all slots, so `nonYielding` and readers of operations get this cost.
 - SE-049: After the flush that reports its removal, `select` MUST NOT retain the source of a slot that left the shape.
+- SE-04A: Under `ackStyle: "any"`, a reader that reads operations, or that waits with no operation to read, MUST also end the wait of step 4.
+  A reader that does so in step 2 ends the wait before it starts.
+  A slice reader whose slots did not change has no operation to read, so it does not stall the select.
+  Under `ackStyle: "all"`, only the channel ends the wait.
+  So a select with only readers does not stall, and its sources still wait until a reader reads or waits.
+  `onChanges` does not end the wait.
 
 ## Snapshots
 
@@ -574,7 +585,7 @@ Default states, with a pending promise:
 
 ```ts
 const p = Promise.withResolvers<number>();
-const s = select({ a: 42, b: p.promise });
+const s = select({ a: 42, b: p.promise }, { autoClose: true });
 const it = s[Symbol.asyncIterator]();
 (await it.next()).value; // => { a: 42, b: { status: 'pending', value: undefined, reason: undefined, done: false } }
 p.resolve(1);
@@ -586,7 +597,7 @@ Plain outputs, where a rejection fails the channel:
 
 ```ts
 const fetchUser = async () => "ann";
-const s = select({ user: fetchUser() }, { unwrap: true });
+const s = select({ user: fetchUser() }, { autoClose: true, unwrap: true });
 for await (const { user } of s) console.log(user); // => ann
 ```
 
@@ -600,7 +611,7 @@ const fetchAds = async () => {
 const log = (error: unknown) => console.log(`${error}`);
 const s = select(
   { user: fetchUser(), ads: catching(fetchAds(), log) },
-  { unwrap: true },
+  { autoClose: true, unwrap: true },
 );
 for await (const snapshot of s) console.log(snapshot); // => { user: 'ann', ads: undefined }, Error: offline
 ```
@@ -611,7 +622,6 @@ Replay array changes onto DOM nodes:
 import { setImmediate } from "node:timers/promises";
 const s = select([] as string[], {
   nonYielding: true,
-  autoClose: false,
   autoStart: true,
   onChanges: ops => console.log(...ops),
 });
@@ -631,7 +641,6 @@ Read the changes of one row, which the reader follows when the array moves it:
 import { setImmediate } from "node:timers/promises";
 const s = select(["a", "b", "c"], {
   nonYielding: true,
-  autoClose: false,
   autoStart: true,
 });
 await setImmediate(); // Start has run
@@ -651,7 +660,6 @@ const form = select(
   { name: "ann", age: 30 },
   {
     nonYielding: true,
-    autoClose: false,
     autoStart: true,
   },
 );
@@ -670,7 +678,6 @@ Read batched changes, where one read covers two reports:
 import { setImmediate } from "node:timers/promises";
 const s = select(["a"], {
   nonYielding: true,
-  autoClose: false,
   autoStart: true,
 });
 await setImmediate(); // Start has run

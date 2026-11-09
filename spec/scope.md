@@ -63,6 +63,33 @@ These words have one meaning in all specs:
 - `each` is a dynamic child, so it shares a host with other children and owns only its own nodes.
 - A host tracks dynamic children by key, not by index, because an index write to a `select` replaces the source (SE-088).
 
+## Defaults
+
+Each default follows from the purpose: the library does no work if no code observes the result.
+An observer of a `select` is a consumer of its channel, or a reader from `changes` that reads.
+`onChanges` is not an observer, because it cannot start or slow the select.
+
+- `Channel` defaults to `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"` and `ackStyle: "any"` (CH-001).
+  So a channel is a queue that discards no value, and the first read of a value settles its `asend`.
+- `feed` defaults to `autoClose: true` (FE-001).
+  A feed is a pipe, so its channel closes after the last source finishes, and `for await` on that channel ends.
+- `select` defaults to `autoClose: false` (SE-001).
+  A select is state, so it stays open until code closes it, and later writes stay tracked.
+  A join of sources sets `autoClose: true`, so that `for await` ends when the sources finish.
+- `autoStart: false` makes the sources of a `feed` or a `select` start at the first observer (FE-001, SE-030, SE-037).
+  So a select with only `onChanges` needs `autoStart`.
+- `backPressure: true` makes a producer wait until an observer reads its last value (FE-001, SE-042).
+  For a `select`, a reader that reads, or that waits with nothing to read, counts under `ackStyle: "any"` (SE-04A).
+  So a select with only `onChanges` needs `nonYielding` or `backPressure: false`.
+- `nonYielding: false` makes a select publish snapshots, because `for await` is the main way to read it.
+  Set `nonYielding: true` when only readers or `onChanges` read the state, so that no flush builds a snapshot.
+- `unwrap: false` keeps the `status` of each source visible in a `Val`.
+  Under `unwrap`, a pending slot reads as `undefined`, and a rejection fails the channel.
+- `select` defaults to `thenReceive: "latest"` (SE-002).
+  A consumer of state needs the newest snapshot, so a slow consumer skips the snapshots between its reads.
+- A write to a terminal select changes the proxy, and does not throw (SE-08A).
+  The proxy acts as a plain object, so code that only assigns does not expect an error.
+
 ## Package exports
 
 The package root MUST export these names.

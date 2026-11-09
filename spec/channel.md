@@ -85,6 +85,7 @@ The implementation MAY use any internal structure that gives the same observable
 ## Construction
 
 - CH-001: The defaults MUST be `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"`, `ackStyle: "any"`.
+  `scope.md` gives the reason for each default.
 - CH-002: The constructor MUST throw a `TypeError` if `thenReceive` is `"unread"` and `firstReceive` is not `"unread"`.
 - CH-003: The constructor MUST throw a `TypeError` for an option value that the Public API does not list.
 - CH-004: The constructor MUST throw a `TypeError` if `ackStyle` is `"all"` and `thenReceive` is `"unread"`.

@@ -38,7 +38,7 @@ const state = select(
     tab: "data" as Tab,
     status: "Waiting for the page, reload it if it loaded before the extension",
   },
-  { autoStart: true, autoClose: false, backPressure: false },
+  { autoStart: true, backPressure: false },
 );
 type Tab = "data" | "components" | "elements";
 type View = {
@@ -242,7 +242,6 @@ async function* Table<T>(props: {
   const { feed, head, write, draw, empty } = props;
   const rows = select([] as T[], {
     autoStart: true,
-    autoClose: false,
     nonYielding: true,
   });
   const blank = (<div class="empty" />) as HTMLElement;
@@ -1109,7 +1108,6 @@ const treeRow = (
 async function* List() {
   const rows = select([] as Line[], {
     autoStart: true,
-    autoClose: false,
     nonYielding: true,
   });
   yield <nav id="list">{each(rows, line => derive(line, l => l.draw()))}</nav>;
@@ -1182,7 +1180,7 @@ const Header = () => {
         send({ type: "pause", value: state.paused });
       }}
     >
-      {derive(watch(state, "paused"), paused => (paused ? "Resume" : "Pause"))}
+      {derive(state, "paused", paused => (paused ? "Resume" : "Pause"))}
     </button>
   );
   const clear = () => {
@@ -1206,10 +1204,7 @@ const Header = () => {
   ).map(([tab, title]) => (
     <button
       type="button"
-      class={derive(
-        watch(state, "tab"),
-        on => `tab${on === tab ? " active" : ""}`,
-      )}
+      class={derive(state, "tab", on => `tab${on === tab ? " active" : ""}`)}
       onclick={() => show(tab)}
     >
       {title}
@@ -1220,7 +1215,7 @@ const Header = () => {
     <button
       type="button"
       id="pick"
-      class={derive(watch(state, "picking"), on => on && "active")}
+      class={derive(state, "picking", on => on && "active")}
       title="Select an element in the page"
       onclick={() => {
         const on = !state.picking;

@@ -313,7 +313,6 @@ async function* Item({ name }: { name: Channel<string> }) {
 
 const names = select(["ann", "bob"], {
   autoStart: true,
-  autoClose: false,
   nonYielding: true,
 });
 mount(

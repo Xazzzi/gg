@@ -61,6 +61,7 @@ FE-014 rejects it at runtime.
 ## Options
 
 - FE-001: The defaults MUST be `autoStart: false`, `autoClose: true`, `backPressure: true`, `sendReturn: false`.
+  `scope.md` gives the reason for each default.
 - FE-002: `feed` MUST NOT add methods to `Channel`.
 - FE-003: An option value of the wrong type MUST make `feed` throw a `TypeError` synchronously.
   `undefined` selects the default.

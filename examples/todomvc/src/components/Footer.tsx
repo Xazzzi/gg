@@ -3,7 +3,7 @@ import type { Send, Todo, View } from "../state.ts";
 
 const left = (todos: Todo[]) => todos.filter(todo => !todo.completed).length;
 
-// Dynamic props and text children follow the view, so the footer needs no loop of its own.
+// Dynamic props and text children follow one key of the view each, so the footer needs no loop of its own.
 export function Footer({ view, send }: { view: View; send: Send }) {
   const filters = [
     ["#/", "all", "All"],
@@ -13,11 +13,11 @@ export function Footer({ view, send }: { view: View; send: Send }) {
   return (
     <footer
       class="footer"
-      hidden={derive(view, ({ todos = [] }) => !todos.length)}
+      hidden={derive(view, "todos", (todos = []) => !todos.length)}
     >
       <span class="todo-count">
-        <strong>{derive(view, ({ todos = [] }) => left(todos))}</strong>
-        {derive(view, ({ todos = [] }) =>
+        <strong>{derive(view, "todos", (todos = []) => left(todos))}</strong>
+        {derive(view, "todos", (todos = []) =>
           left(todos) === 1 ? " item left" : " items left",
         )}
       </span>
@@ -26,7 +26,7 @@ export function Footer({ view, send }: { view: View; send: Send }) {
           <li>
             <a
               href={hash}
-              class={derive(view, ({ filter = "all" }) =>
+              class={derive(view, "filter", (filter = "all") =>
                 filter === key ? "selected" : null,
               )}
             >
@@ -38,7 +38,11 @@ export function Footer({ view, send }: { view: View; send: Send }) {
       <button
         class="clear-completed"
         type="button"
-        hidden={derive(view, ({ todos = [] }) => left(todos) === todos.length)}
+        hidden={derive(
+          view,
+          "todos",
+          (todos = []) => left(todos) === todos.length,
+        )}
         onclick={() => send({ type: "clearCompleted" })}
       >
         Clear completed

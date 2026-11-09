@@ -68,7 +68,7 @@ const returning = (results: unknown[], extra: object = {}) => {
 
 test("Examples default states with a pending promise", async () => {
   const p = Promise.withResolvers<number>();
-  const s = select({ a: 42, b: p.promise });
+  const s = select({ a: 42, b: p.promise }, { autoClose: true });
   const it = iter(s);
   assert.deepEqual((await it.next()).value, { a: 42, b: pendingVal });
   p.resolve(1);
@@ -79,7 +79,7 @@ test("Examples default states with a pending promise", async () => {
 test("Examples unwrap outputs and a rejection fails the channel", async () => {
   const p = Promise.withResolvers<string>();
   const seen: unknown[] = [];
-  const s = select({ user: p.promise }, { unwrap: true });
+  const s = select({ user: p.promise }, { autoClose: true, unwrap: true });
   const run = (async () => {
     for await (const { user } of s) seen.push(user);
   })();
@@ -99,7 +99,7 @@ test("Examples catching keeps one source quiet under unwrap", async () => {
       user: Promise.resolve("u"),
       ads: catching(Promise.reject(new Error("x")), e => void seen.push(e)),
     },
-    { unwrap: true },
+    { autoClose: true, unwrap: true },
   );
   let last: any;
   for await (const value of s) last = value;
@@ -132,8 +132,8 @@ test("SE-001 SE-002 option defaults", async () => {
   assert.ok(!ch.signal.aborted); // No autoStart
   assert.deepEqual((await iter(s).next()).value, { a: 1 });
   await setImmediate();
-  assert.ok(ch.signal.aborted); // autoClose
-  const q = select({ a: 1 }, { thenReceive: "unread" });
+  assert.ok(!ch.signal.aborted); // No autoClose
+  const q = select({ a: 1 }, { autoClose: true, thenReceive: "unread" });
   assert.deepEqual((await iter(q).next()).value, { a: 1 });
   assert.throws(
     () => select({}, { firstReceive: "latest", thenReceive: "unread" }),
@@ -175,9 +175,13 @@ test("SE-007 options of the wrong type throw, and undefined selects the default"
     onChanges: undefined,
     mapSnapshot: undefined,
   };
-  assert.deepEqual((await iter(select({ a: 1 }, undefineds)).next()).value, {
-    a: 1,
-  });
+  assert.deepEqual(
+    (await iter(select({ a: 1 }, { autoClose: true, ...undefineds })).next())
+      .value,
+    {
+      a: 1,
+    },
+  );
 });
 
 test("SE-003 invalid options reach the channel unchanged", () => {
@@ -190,6 +194,7 @@ test("SE-003 options pass to the channel", async () => {
   const s = select(
     { a: 1 },
     {
+      autoClose: true,
       stopStyle: "stop",
       firstReceive: "next",
       autoStart: true,
@@ -221,12 +226,15 @@ test("SE-010 SE-011 enumerable string and symbol keys, holes and plain kinds", a
     value: 1,
     enumerable: false,
   });
-  assert.deepEqual((await iter(select(hidden)).next()).value, {
-    a: "str",
-    [key]: [1],
-  });
+  assert.deepEqual(
+    (await iter(select(hidden, { autoClose: true })).next()).value,
+    {
+      a: "str",
+      [key]: [1],
+    },
+  );
   // biome-ignore lint/suspicious/noSparseArray: the test needs a hole
-  const holes = select([1, , 3]);
+  const holes = select([1, , 3], { autoClose: true });
   assert.ok(1 in holes);
   assert.deepEqual((await iter(holes).next()).value, [1, undefined, 3]);
 });
@@ -249,12 +257,15 @@ test("SE-012 SE-020 SE-026 promise states", async () => {
 
 test("SE-013 an async iterable stays async, and each result is awaited", async () => {
   const seen: unknown[] = [];
-  const s = select({
-    a: (async function* () {
-      yield 1;
-      yield 2;
-    })(),
-  });
+  const s = select(
+    {
+      a: (async function* () {
+        yield 1;
+        yield 2;
+      })(),
+    },
+    { autoClose: true },
+  );
   for await (const value of s as any) seen.push(value.a);
   assert.deepEqual(seen, [pendingVal, ok(1, false), ok(2, false), ok(2, true)]);
 });
@@ -266,7 +277,8 @@ test("SE-013 a plain result from an async iterator is accepted", async () => {
     },
   };
   let last: any;
-  for await (const value of select({ it }) as any) last = value;
+  for await (const value of select({ it }, { autoClose: true }) as any)
+    last = value;
   assert.deepEqual(last, { it: ok(1) });
 });
 
@@ -276,18 +288,22 @@ test("SE-014 a thenable first result makes a raw iterator async", async () => {
     Promise.resolve({ value: 2, done: true }),
   ]);
   let last: any;
-  for await (const value of select({ raw }) as any) last = value;
+  for await (const value of select({ raw }, { autoClose: true }) as any)
+    last = value;
   assert.deepEqual(last, { raw: ok(2) });
 });
 
 test("SE-014 a sync raw iterator is not treated as async", async () => {
   const seen: unknown[] = [];
-  for await (const value of select({
-    raw: returning([
-      { value: 1, done: false },
-      { value: 2, done: false },
-    ]),
-  }) as any)
+  for await (const value of select(
+    {
+      raw: returning([
+        { value: 1, done: false },
+        { value: 2, done: false },
+      ]),
+    },
+    { autoClose: true },
+  ) as any)
     seen.push(value.raw);
   assert.deepEqual(seen, [ok(1, false)]);
 });
@@ -300,7 +316,7 @@ test("SE-015 SE-033 a raw iterator's first pull waits for a flush", async () => 
       return { value: 1, done: false };
     },
   };
-  const s = select({ raw });
+  const s = select({ raw }, { autoClose: true });
   await setImmediate();
   assert.equal(pulls, 0);
   await iter(s).next();
@@ -425,7 +441,8 @@ test("SE-021 SE-023 SE-024 iterator ends", async () => {
       },
     };
     let last: any;
-    for await (const value of select({ raw }) as any) last = value.raw;
+    for await (const value of select({ raw }, { autoClose: true }) as any)
+      last = value.raw;
     assert.deepEqual(last, expected);
   }
 });
@@ -473,12 +490,14 @@ test("SE-025 iterator failures", async () => {
     ]),
   ]) {
     let last: any;
-    for await (const value of select({ raw }) as any) last = value.raw;
+    for await (const value of select({ raw }, { autoClose: true }) as any)
+      last = value.raw;
     assert.deepEqual(last, bad(failure));
   }
   for (const raw of [returning([1]), returning([Promise.resolve(1)])]) {
     let last: any;
-    for await (const value of select({ raw }) as any) last = value.raw;
+    for await (const value of select({ raw }, { autoClose: true }) as any)
+      last = value.raw;
     assert.ok(last.reason instanceof TypeError);
   }
 });
@@ -523,14 +542,17 @@ test("SE-025 an error from reading done or value fails with no return", async ()
         },
       });
       let last: any;
-      for await (const value of select({
-        raw: {
-          next: () => wrap(result),
-          return() {
-            returned++;
+      for await (const value of select(
+        {
+          raw: {
+            next: () => wrap(result),
+            return() {
+              returned++;
+            },
           },
         },
-      }) as any)
+        { autoClose: true },
+      ) as any)
         last = value.raw;
       assert.deepEqual(last, bad(failure));
       assert.equal(returned, 0, key);
@@ -551,14 +573,17 @@ test("SE-02A a throwing then getter on a value counts as a rejected value", asyn
       },
     };
     let last: any;
-    for await (const snap of select({
-      raw: {
-        next: () => wrap({ value, done }),
-        return() {
-          returned++;
+    for await (const snap of select(
+      {
+        raw: {
+          next: () => wrap({ value, done }),
+          return() {
+            returned++;
+          },
         },
       },
-    }) as any)
+      { autoClose: true },
+    ) as any)
       last = snap.raw;
     assert.deepEqual(last, bad(failure));
     assert.equal(returned, done ? 0 : 1); // A finished iterator gets no return()
@@ -584,9 +609,12 @@ test("SE-025 a failed iterator is not pulled again", async () => {
 });
 
 test("SE-027 a fulfilled value is never a thenable", async () => {
-  const s = select({
-    a: returning([{ value: Promise.resolve(1), done: true }]),
-  });
+  const s = select(
+    {
+      a: returning([{ value: Promise.resolve(1), done: true }]),
+    },
+    { autoClose: true },
+  );
   let last: any;
   for await (const value of s as any) last = value;
   assert.deepEqual(last, { a: ok(1) });
@@ -621,9 +649,12 @@ test("SE-02A a value rejection closes an open iterator, ignoring errors", async 
         throw new Error("ignored");
       },
     });
-  for await (const _ of select({ raw: raw(false) }) as any);
+  for await (const _ of select(
+    { raw: raw(false) },
+    { autoClose: true },
+  ) as any);
   assert.equal(returned, 1);
-  for await (const _ of select({ raw: raw(true) }) as any);
+  for await (const _ of select({ raw: raw(true) }, { autoClose: true }) as any);
   assert.equal(returned, 1);
 });
 
@@ -676,10 +707,13 @@ test("SE-030 a terminal channel means no start", async () => {
 test("SE-032 a settled Promise assigned before start appears settled", async () => {
   const failure = new Error("x");
   const { value } = await iter(
-    select({ a: Promise.resolve(1), b: Promise.reject(failure) }),
+    select(
+      { a: Promise.resolve(1), b: Promise.reject(failure) },
+      { autoClose: true },
+    ),
   ).next();
   assert.deepEqual(value, { a: ok(1), b: bad(failure) });
-  const s: any = select({} as any, { autoStart: true });
+  const s: any = select({} as any, { autoClose: true, autoStart: true });
   s.a = Promise.resolve(2);
   assert.deepEqual((await iter(s).next()).value, { a: ok(2) });
 });
@@ -701,7 +735,7 @@ test("SE-034 a rejection before start records without flushing", async () => {
   const failure = new Error("x");
   const s = select(
     { a: Promise.reject(failure) },
-    { ...log, backPressure: false },
+    { autoClose: true, ...log, backPressure: false },
   );
   await setImmediate();
   assert.deepEqual(log.ops, []);
@@ -720,7 +754,7 @@ test("SE-035 a thenable waits for start, and is untouched on terminal", async ()
       ok(1);
     },
   });
-  const s: any = select({ a: thenable() });
+  const s: any = select({ a: thenable() }, { autoClose: true });
   await setImmediate();
   assert.equal(calls, 0);
   assert.deepEqual((await iter(s).next()).value, { a: ok(1) });
@@ -738,9 +772,12 @@ test("SE-035 a throwing then rejects the slot, and SE-055 applies", async () => 
       throw failure;
     },
   };
-  assert.deepEqual((await iter(select({ source })).next()).value, {
-    source: bad(failure),
-  });
+  assert.deepEqual(
+    (await iter(select({ source }, { autoClose: true })).next()).value,
+    {
+      source: bad(failure),
+    },
+  );
   await assert.rejects(
     iter(select({ source }, { unwrap: true })).next(),
     e => e === failure,
@@ -773,9 +810,12 @@ test("SE-036 a throwing factory rejects the slot", async () => {
       throw failure;
     },
   };
-  assert.deepEqual((await iter(select({ source })).next()).value, {
-    source: bad(failure),
-  });
+  assert.deepEqual(
+    (await iter(select({ source }, { autoClose: true })).next()).value,
+    {
+      source: bad(failure),
+    },
+  );
   await assert.rejects(
     iter(select({ source }, { unwrap: true })).next(),
     e => e === failure,
@@ -786,7 +826,8 @@ test("SE-036 an async iterator without a callable next fails its slot", async ()
   for (const iterator of [{}, undefined]) {
     const source = { [Symbol.asyncIterator]: () => iterator } as any;
     let last: any;
-    for await (const value of select({ source }) as any) last = value.source;
+    for await (const value of select({ source }, { autoClose: true }) as any)
+      last = value.source;
     assert.ok(last.reason instanceof TypeError);
   }
 });
@@ -903,7 +944,10 @@ test("SE-040 changes in one run publish once", async () => {
 });
 
 test("SE-041 mapSnapshot applies to the sent value", async () => {
-  const s = select({ a: 1 }, { mapSnapshot: snap => snap.a + 1 });
+  const s = select(
+    { a: 1 },
+    { autoClose: true, mapSnapshot: snap => snap.a + 1 },
+  );
   assert.equal((await iter(s).next()).value, 2);
 });
 
@@ -1106,6 +1150,7 @@ test("SE-045 nonYielding sends nothing and skips step 4", async () => {
   const s = select(
     { raw },
     {
+      autoClose: true,
       autoStart: true,
       nonYielding: true,
       mapSnapshot: () => void mapped++,
@@ -1132,7 +1177,9 @@ test("SE-050 SE-053 unwrap snapshot, in slot order", async () => {
 });
 
 test("SE-050 a __proto__ key stays an own snapshot field", async () => {
-  const s: any = select(Object.fromEntries([["__proto__", 1]]));
+  const s: any = select(Object.fromEntries([["__proto__", 1]]), {
+    autoClose: true,
+  });
   Reflect.set(s, "__proto__", 2);
   const value = (await iter(s).next()).value;
   assert.equal(Object.getPrototypeOf(value), Object.prototype);
@@ -1150,7 +1197,10 @@ test("SE-052 SE-054 SE-111 a thenable snapshot fails the channel", async () => {
 
 test("SE-055 a rejection before start takes effect at start, unless replaced", async () => {
   const failure = new Error("x");
-  const s: any = select({ a: Promise.reject(failure) }, { unwrap: true });
+  const s: any = select(
+    { a: Promise.reject(failure) },
+    { autoClose: true, unwrap: true },
+  );
   await setImmediate();
   s.a = 1;
   assert.deepEqual((await iter(s).next()).value, { a: 1 });
@@ -1274,14 +1324,18 @@ test("SE-066 a rejected yielded promise fails the iterator", async () => {
     },
   });
   let last: any;
-  for await (const value of select({ raw }) as any) last = value.raw;
+  for await (const value of select({ raw }, { autoClose: true }) as any)
+    last = value.raw;
   assert.deepEqual(last, bad(failure));
   assert.equal(returned, 1);
 });
 
 test("SE-070 SE-071 pending sources keep the channel open", async () => {
   const p = Promise.withResolvers<number>();
-  const s = select({ p: p.promise }, { autoStart: true, backPressure: false });
+  const s = select(
+    { p: p.promise },
+    { autoClose: true, autoStart: true, backPressure: false },
+  );
   await setImmediate();
   assert.ok(!s[CHAN].signal.aborted);
   p.resolve(1);
@@ -1309,7 +1363,7 @@ test("SE-072 SE-073 sync iterators keep it open only with a pending yield", asyn
         { value: 2, done: false },
       ]),
     },
-    { autoStart: true, backPressure: false },
+    { autoClose: true, autoStart: true, backPressure: false },
   );
   await setImmediate();
   assert.ok(!s[CHAN].signal.aborted);
@@ -1319,7 +1373,7 @@ test("SE-072 SE-073 sync iterators keep it open only with a pending yield", asyn
   const last = Promise.withResolvers<number>();
   const t = select(
     { raw: returning([{ value: last.promise, done: true }]) },
-    { autoStart: true, backPressure: false },
+    { autoClose: true, autoStart: true, backPressure: false },
   );
   await setImmediate();
   assert.ok(!t[CHAN].signal.aborted); // The final yielded promise keeps it open too
@@ -1331,14 +1385,18 @@ test("SE-072 SE-073 sync iterators keep it open only with a pending yield", asyn
 
 test("SE-074 a shape with no sources closes after its first flush", async () => {
   for (const shape of [{}, [], { a: 1 }]) {
-    const s = select(shape, { autoStart: true, backPressure: false });
+    const s = select(shape, {
+      autoClose: true,
+      autoStart: true,
+      backPressure: false,
+    });
     await setImmediate();
     assert.ok(s[CHAN].signal.aborted);
   }
 });
 
 test("SE-075 collected changes keep the channel open", async () => {
-  const s: any = select({ a: 1 }, { autoStart: true });
+  const s: any = select({ a: 1 }, { autoClose: true, autoStart: true });
   await setImmediate();
   s.b = 2;
   const it = iter(s);
@@ -2057,7 +2115,7 @@ test("SE-09D fill starts a promise source in each slot", async () => {
 test("SE-043 changes in one tick schedule one flush", async () => {
   const s: any = select(
     { a: 1, p: new Promise(() => {}) },
-    { stopStyle: "stop", unwrap: true },
+    { autoClose: true, stopStyle: "stop", unwrap: true },
   );
   const it = iter(s);
   await it.next();
@@ -2075,7 +2133,12 @@ test("SE-02B unwrap skips the snapshot for a finish that keeps the value", async
   }
   const seen: unknown[] = [];
   const log = opLog();
-  for await (const v of select([gen()], { unwrap: true, ...log })) seen.push(v);
+  for await (const v of select([gen()], {
+    autoClose: true,
+    unwrap: true,
+    ...log,
+  }))
+    seen.push(v);
   assert.deepEqual(seen, [[undefined], [1], [2]]);
   assert.equal(log.ops.filter(op => op.op === "set").length, 2);
 });
@@ -2087,7 +2150,8 @@ test("SE-02B unwrap still publishes a return value and a repeated value", async 
     return 2;
   }
   const seen: unknown[] = [];
-  for await (const v of select([gen()], { unwrap: true })) seen.push(v);
+  for await (const v of select([gen()], { autoClose: true, unwrap: true }))
+    seen.push(v);
   assert.deepEqual(seen, [[undefined], [1], [1], [2]]);
 });
 
@@ -2096,7 +2160,8 @@ test("SE-02B without unwrap the finish still publishes done", async () => {
     yield 1;
   }
   const seen: boolean[] = [];
-  for await (const [v] of select([gen()]) as any) seen.push(v.done);
+  for await (const [v] of select([gen()], { autoClose: true }) as any)
+    seen.push(v.done);
   assert.deepEqual(seen, [false, false, true]);
 });
 
@@ -2125,7 +2190,8 @@ test("SE-132 slots sharing an iterator deal its values in pull order", async () 
   }
   const it = gen();
   const seen: unknown[] = [];
-  for await (const v of select([it, it], { unwrap: true })) seen.push(v);
+  for await (const v of select([it, it], { autoClose: true, unwrap: true }))
+    seen.push(v);
   assert.deepEqual(seen.at(-1), [3, 2]);
 });
 
@@ -2133,7 +2199,8 @@ test("SE-132 a Channel in two slots reaches both", async () => {
   const ch = new Channel<number>({ firstReceive: "first" });
   feed([1, 2], ch);
   const seen: unknown[] = [];
-  for await (const v of select([ch, ch], { unwrap: true })) seen.push(v);
+  for await (const v of select([ch, ch], { autoClose: true, unwrap: true }))
+    seen.push(v);
   assert.deepEqual(seen, [
     [undefined, undefined],
     [1, 1],
@@ -2696,7 +2763,10 @@ test("SE-133 a late next consumer never reads the first publish", async () => {
 });
 
 test("SE-134 stop with no backPressure can drop the final snapshot", async () => {
-  const s = select({ a: 1 }, { stopStyle: "stop", backPressure: false });
+  const s = select(
+    { a: 1 },
+    { autoClose: true, stopStyle: "stop", backPressure: false },
+  );
   assert.equal((await iter(s).next()).done, true);
 });
 
@@ -2713,14 +2783,19 @@ test("SE-138 Array.prototype mutators follow the write rules", async () => {
 });
 
 test("SE-053 a plain slot holding a Val keeps it under unwrap", async () => {
-  const held = (await iter(select({ a: Promise.resolve(1) })).next()).value.a;
-  const s = select({ held }, { unwrap: true });
+  const held = (
+    await iter(select({ a: Promise.resolve(1) }, { autoClose: true })).next()
+  ).value.a;
+  const s = select({ held }, { autoClose: true, unwrap: true });
   assert.equal((await iter(s).next()).value.held, held);
 });
 
 test("SE-053 plain slots never fail the channel at start under unwrap", async () => {
   const lookalike = { status: "rejected", reason: "x" };
-  const s = select({ lookalike, none: null }, { unwrap: true });
+  const s = select(
+    { lookalike, none: null },
+    { autoClose: true, unwrap: true },
+  );
   assert.deepEqual((await iter(s).next()).value, { lookalike, none: null });
 });
 
@@ -2823,7 +2898,8 @@ test("SE-025 a throwing then getter on a result fails with no return", async () 
     },
   };
   let last: any;
-  for await (const value of select({ raw }) as any) last = value.raw;
+  for await (const value of select({ raw }, { autoClose: true }) as any)
+    last = value.raw;
   assert.deepEqual(last, bad(failure));
   assert.equal(returned, 0);
 });
@@ -2837,9 +2913,12 @@ test("SE-036 an error reading next on the iterator rejects the slot", async () =
       },
     }),
   } as any;
-  assert.deepEqual((await iter(select({ source })).next()).value, {
-    source: bad(failure),
-  });
+  assert.deepEqual(
+    (await iter(select({ source }, { autoClose: true })).next()).value,
+    {
+      source: bad(failure),
+    },
+  );
 });
 
 test("SE-08A deleting a key added on a terminal channel succeeds", () => {
@@ -2909,7 +2988,7 @@ test("Read-only array methods work through the proxy", () => {
 
 test("spread as mapSnapshot", async () => {
   const p = Promise.withResolvers<number>();
-  const s = select({ p: p.promise }, { mapSnapshot: spread });
+  const s = select({ p: p.promise }, { autoClose: true, mapSnapshot: spread });
   const it = iter(s);
   assert.deepEqual((await it.next()).value, {
     p: undefined,
@@ -2976,7 +3055,7 @@ test("SE-034 SE-035 a Promise whose then throws rejects the slot", async () => {
     throw boom;
   };
   let last: any;
-  for await (const snap of select({ p })) last = snap;
+  for await (const snap of select({ p }, { autoClose: true })) last = snap;
   assert.deepEqual(last.p, bad(boom));
 });
 
@@ -3010,7 +3089,10 @@ test("SE-034 a Promise with a patched then is still handled", async () => {
 
 test("SE-035 a thenable borrowing Promise then rejects the slot", async () => {
   let last: any;
-  for await (const snap of select({ p: { then: Promise.prototype.then } }))
+  for await (const snap of select(
+    { p: { then: Promise.prototype.then } },
+    { autoClose: true },
+  ))
     last = snap;
   assert.equal(last.p.status, "rejected");
   assert.ok(last.p.reason instanceof TypeError);
@@ -3127,7 +3209,12 @@ test("SE-137 an always-ready async source starves the event loop", async () => {
   })();
   const s = select(
     { source },
-    { autoStart: true, backPressure: false, nonYielding: true },
+    {
+      autoClose: true,
+      autoStart: true,
+      backPressure: false,
+      nonYielding: true,
+    },
   );
   await new Promise(resolve =>
     s[CHAN].signal.addEventListener("abort", resolve),
@@ -3247,7 +3334,7 @@ test("SE-049 a removed source is not retained", async () => {
 test("SE-070 a removed source does not keep the channel open", async () => {
   const s: any = select(
     { a: new Promise(() => {}), b: stuck([], "") },
-    { autoStart: true, backPressure: false },
+    { autoClose: true, autoStart: true, backPressure: false },
   );
   await setImmediate();
   assert.ok(!s[CHAN].signal.aborted);

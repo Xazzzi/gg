@@ -33,9 +33,7 @@ const DEFAULTS: Values = {
   newsletter: true,
 };
 
-// Plain values only, so autoClose would close the form after its first snapshot.
-export const createForm = (values = DEFAULTS) =>
-  select({ ...values }, { autoClose: false });
+export const createForm = (values = DEFAULTS) => select({ ...values });
 export type Form = ReturnType<typeof createForm>;
 // Components read the form from the nearest provider, so a test can mount them with its own form.
 export const FormContext = createContext<Form>(Symbol("form"));

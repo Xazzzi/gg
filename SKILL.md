@@ -25,6 +25,9 @@ When this file and the spec do not agree, the spec is correct.
 - `select` tracks only the top level of the shape.
   A nested object needs its own `select`, or a replacement of the whole item.
 - No work occurs when no code observes the result.
+  An observer of a select is a `for await` consumer, or a reader from `changes` that reads.
+  `watch` and `each` read through `changes`, so they observe too.
+  `onChanges` is not an observer, because it cannot start or slow the select.
 
 We recommend that state does not import UI code.
 The UI then reads state through `for await`, `changes` and `each`, and state stays testable without a DOM.
@@ -33,24 +36,22 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 
 | Option         | Default | Use                                                                         |
 | -------------- | ------- | --------------------------------------------------------------------------- |
-| `autoStart`    | `false` | Without it, a select starts only when a `for await` attaches (SE-030).      |
-| `autoClose`    | `true`  | Set `false` for long-lived state, or the select closes when sources finish. |
-| `backPressure` | `true`  | A flush waits until a consumer reads its snapshot (SE-042).                 |
-| `nonYielding`  | `false` | Set `true` when only `changes`, `each` or `onChanges` read the state.       |
+| `autoStart`    | `false` | Without it, a select starts at its first observer (SE-030, SE-037).         |
+| `autoClose`    | `false` | Set `true` to close the select when its sources finish, as a join.          |
+| `backPressure` | `true`  | A flush waits until a consumer reads, or a reader reads or waits (SE-04A).  |
+| `nonYielding`  | `false` | Set `true` when only `changes`, `each` or `onChanges` read, to skip snapshots. |
 | `unwrap`       | `false` | Gives values, not `Val` objects. A rejection then fails the channel.        |
 
-`feed` has the same `autoStart`, `autoClose` and `backPressure` defaults (FE-001).
+`feed` has the same `autoStart` and `backPressure` defaults, but `autoClose: true` (FE-001).
+[`spec/scope.md`](https://github.com/Xazzzi/gg/blob/master/spec/scope.md#defaults) gives the reason for each default.
 
 ## Pitfalls
 
-- A select of plain values with default `autoClose` closes after its first flush (SE-074).
+- With `autoClose: true`, a select of plain values closes after its first flush (SE-074).
   After that, writes change the proxy with no tracking and no error (SE-08A).
-- A `changes` reader, `watch` and `each` do not start a select.
-  Use `autoStart: true`, or give the select a `for await` consumer.
-- With `autoStart` and default `backPressure`, a select with no snapshot consumer stops after its first publish.
-  Its later changes do not reach `changes` readers or `onChanges`.
-  Use `nonYielding: true`, `backPressure: false`, or a consumer.
-  One consumer that reads unblocks it for all (CH-017).
+- A select with only `onChanges` needs `autoStart: true`, and `nonYielding: true` or `backPressure: false`.
+  Otherwise it does not start, or it stops at its first publish.
+- Under `ackStyle: "all"`, only snapshot consumers release a flush, so a select with only readers stops at its first publish (SE-04A).
 - `state.items[0].done = true` changes nothing that `select` sees.
   Write `state.items[0] = { ...state.items[0], done: true }`.
 - An index write replaces the source, so an iterator in that slot restarts (SE-088).
@@ -83,7 +84,9 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 - A promise or an async iterable prop is live, so `class={channel}` changes the attribute with each value, and `null`, `undefined` or `false` removes it (JX-064).
   An `on*` prop cannot be dynamic (JX-060).
 - `derive(source, map)` maps each value of a `select`, a `Channel`, a `watch` or an `Item`, so a dynamic prop or child follows a computed value (HE-051).
-  ``class={derive(view, ({ filter }) => `list-${filter}`)}`` needs no loop in the component.
+  ``class={derive(view, "filter", filter => `list-${filter}`)}`` needs no loop in the component.
+  When a map reads one key, use `derive(state, key, map)`, so the map runs only when that key changes (HE-054).
+  `derive(state, map)` runs the map on every snapshot.
 - SVG tags get the SVG namespace (JX-001).
   `a`, `script`, `style` and `title` inside an SVG element need `xmlns="http://www.w3.org/2000/svg"`.
 - Cast elements to their DOM type: `<input /> as HTMLInputElement`.

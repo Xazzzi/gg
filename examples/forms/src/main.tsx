@@ -101,7 +101,7 @@ async function* Radio({
       type="radio"
       name={field}
       value={value}
-      checked={derive(watch(form, field), chosen => chosen === value)}
+      checked={derive(form, field, chosen => chosen === value)}
       onchange={() => (form[field] = value)}
     />
   ) as HTMLInputElement;
@@ -147,9 +147,7 @@ async function* MultiChoice({
     >
       {options.map(option => (
         <option
-          selected={derive(watch(form, field), chosen =>
-            chosen.includes(option),
-          )}
+          selected={derive(form, field, chosen => chosen.includes(option))}
         >
           {option}
         </option>
@@ -170,7 +168,7 @@ async function* Member({
   const box = (
     <input
       type="checkbox"
-      checked={derive(watch(form, field), chosen => chosen.includes(value))}
+      checked={derive(form, field, chosen => chosen.includes(value))}
       onchange={() =>
         (form[field] = box.checked
           ? [...form[field], value]
@@ -194,11 +192,8 @@ async function* AllMembers({
   const box = (
     <input
       type="checkbox"
-      checked={derive(
-        watch(form, field),
-        chosen => chosen.length === options.length,
-      )}
-      indeterminate={derive(watch(form, field), some)}
+      checked={derive(form, field, chosen => chosen.length === options.length)}
+      indeterminate={derive(form, field, some)}
       onchange={() => (form[field] = box.checked ? [...options] : [])}
     />
   ) as HTMLInputElement;
@@ -227,7 +222,7 @@ mount(
         <label class="row">
           <span>Volume</span>
           <NumberField field="volume" type="range" min="0" max="100" />
-          <output>{derive(form, values => values.volume)}</output>
+          <output>{watch(form, "volume")}</output>
         </label>
         <label class="row">
           <span>Color</span>

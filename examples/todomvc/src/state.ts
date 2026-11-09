@@ -36,7 +36,7 @@ export const send = (action: Action) => actions.send(action);
 export type Send = typeof send;
 
 // The UI reads the changes of todos with each, so state needs no UI code.
-const todos = select(BENCH ? [] : load(), { autoClose: false });
+const todos = select(BENCH ? [] : load());
 
 // The route is a "latest" channel that a feed fills from hash changes.
 async function* hashes() {

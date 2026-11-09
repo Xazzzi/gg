@@ -5,6 +5,7 @@ import {
   Channel,
   catching,
   changes,
+  derive,
   feed,
   type Op,
   type SelectOptions,
@@ -161,3 +162,13 @@ const outputsOf = <T>(state: State<readonly unknown[], any, T[]>) =>
 yes<Eq<ReturnType<typeof outputsOf<boolean>>, boolean[]>>();
 // @ts-expect-error SE-140 needs a select proxy
 changes({});
+
+const keyed = derive(select({ n: 1, s: "x" }), "n", n => {
+  yes<Eq<typeof n, number>>();
+  return `${n}`;
+});
+yes<Eq<typeof keyed, AsyncGenerator<string, void, void>>>();
+const pendingKey = derive(rows, 0, n => n);
+yes<Eq<typeof pendingKey, AsyncGenerator<number | undefined, void, void>>>();
+// @ts-expect-error HE-054 takes a key of the shape
+derive(select({ n: 1 }), "m", n => n);

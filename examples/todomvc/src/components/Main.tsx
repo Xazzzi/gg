@@ -2,7 +2,7 @@ import { derive, each } from "@xazzzi/gg";
 import type { Send, View } from "../state.ts";
 import { Row } from "./Row.tsx";
 
-// Dynamic props follow the view, so the section needs no loop of its own.
+// Dynamic props follow one key of the view each, so the section needs no loop of its own.
 export function Main({ view, send }: { view: View; send: Send }) {
   const toggleAll = (
     <input
@@ -11,8 +11,8 @@ export function Main({ view, send }: { view: View; send: Send }) {
       type="checkbox"
       checked={derive(
         view,
-        ({ todos = [] }) =>
-          todos.length > 0 && todos.every(todo => todo.completed),
+        "todos",
+        (todos = []) => todos.length > 0 && todos.every(todo => todo.completed),
       )}
       onchange={() => send({ type: "toggleAll", completed: toggleAll.checked })}
     />
@@ -21,14 +21,15 @@ export function Main({ view, send }: { view: View; send: Send }) {
   return (
     <section
       class="main"
-      hidden={derive(view, ({ todos = [] }) => !todos.length)}
+      hidden={derive(view, "todos", (todos = []) => !todos.length)}
     >
       {toggleAll}
       <label for="toggle-all">Mark all as complete</label>
       <ul
         class={derive(
           view,
-          ({ filter = "all" }) => `todo-list filter-${filter}`,
+          "filter",
+          (filter = "all") => `todo-list filter-${filter}`,
         )}
       >
         {each(view.todos, todo => (

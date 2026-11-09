@@ -1,6 +1,13 @@
 import { type Emit, register } from "./devtools.ts";
 import type { Source } from "./feed.ts";
-import type { Op, Val } from "./select.ts";
+import {
+  type Keys,
+  type Op,
+  type Reads,
+  type Entry as SlotOutput,
+  type Val,
+  watch,
+} from "./select.ts";
 import {
   checkOptions,
   detectStream,
@@ -116,15 +123,29 @@ export function catching<T>(
   };
 }
 
+/** Maps each output of one slot of a select, from `watch`, so the map runs only when that slot changes (HE-054). */
+export function derive<O, K extends Keys<O>, R>(
+  state: Reads<O>,
+  key: K,
+  map: (value: SlotOutput<O, K>) => R,
+): AsyncGenerator<Awaited<R>, void, void>;
 /** Maps each value of an async iterable, so a dynamic prop or child follows a derived value. */
 export function derive<T, R>(
   source: AsyncIterable<T>,
   map: (value: T) => R,
-): AsyncGenerator<Awaited<R>, void, void> {
-  if (typeof (source as any)?.[Symbol.asyncIterator] !== "function")
+): AsyncGenerator<Awaited<R>, void, void>;
+export function derive(
+  source: any,
+  keyOrMap: unknown,
+  mapper?: (value: unknown) => unknown,
+): AsyncGenerator<unknown, void, void> {
+  const keyed = typeof keyOrMap !== "function",
+    map = keyed ? mapper : (keyOrMap as (value: unknown) => unknown);
+  if (typeof source?.[Symbol.asyncIterator] !== "function")
     throw new TypeError("derive source is not an async iterable");
   if (typeof map !== "function")
     throw new TypeError("derive map must be a function");
+  if (keyed) source = watch(source, keyOrMap as PropertyKey); // SE-160 checks the state and the key
   const box: { emit?: Emit } = {},
     generator = mapped(source, map, box);
   box.emit = register("derive", generator, { source, map }); // Here, so the hook finds the caller at its fixed depth (DV-003)

@@ -2,6 +2,7 @@
 
 `isVal` and `spread` in this document use `Val` from `select.md`.
 `applyOps` uses `Op` from `select.md`.
+`derive` uses `watch`, `State`, `Keys` and `Entry` from `select.md`.
 `Channel`, `feed` and `select` MUST NOT require callers to use a helper.
 The key words MUST, MUST NOT, SHOULD and MAY are normative.
 
@@ -25,6 +26,11 @@ export function catching<T>(
 export function derive<T, R>(
   source: AsyncIterable<T>,
   map: (value: T) => R,
+): AsyncGenerator<Awaited<R>, void, void>;
+export function derive<O, K extends Keys<O>, R>(
+  state: State<any, any, O>,
+  key: K,
+  map: (value: Entry<O, K>) => R,
 ): AsyncGenerator<Awaited<R>, void, void>;
 
 export function isVal(value: unknown): value is Val<unknown>;
@@ -127,6 +133,8 @@ It also keeps the channel open.
 
 `derive` maps each value of an async iterable.
 So a dynamic prop or a dynamic child follows a value that code computes from a `select`, a `Channel`, a `watch` or an `Item`.
+`derive(state, key, map)` maps the outputs of one slot.
+So a map that reads one key of a `select` runs only when that key changes, and not at each snapshot.
 
 - HE-050: `derive` MUST throw a `TypeError` synchronously if `source` has no callable `Symbol.asyncIterator`, or if `map` is not a function.
 - HE-051: `derive` MUST return an async generator that yields `map(value)` for each value of `source`, in order.
@@ -136,6 +144,10 @@ So a dynamic prop or a dynamic child follows a value that code computes from a `
   It MUST reject with the unchanged error when `source` or `map` throws.
 - HE-053: `return()` on the generator MUST call `return()` on the iterator of `source`.
   An async generator queues `return()` behind a pending `next()`, as JX-041 says.
+- HE-054: If the second argument is not a function, `derive` MUST take it as a key, and the third argument as `map`.
+  It MUST then check `source` and `map` as HE-050 says, and call `watch(source, key)` synchronously.
+  So `watch` checks `source` and `key` as SE-160 says.
+  The generator MUST then act as HE-051 to HE-053 say, with the `watch` as its source.
 
 ```ts
 const count = new Channel<number>();
@@ -215,7 +227,7 @@ HE-031 still adds the fields when the key holds a `Val`.
 
 ```ts
 const { promise, resolve } = Promise.withResolvers<number>();
-const s = select({ p: promise }, { mapSnapshot: spread });
+const s = select({ p: promise }, { autoClose: true, mapSnapshot: spread });
 const it = s[Symbol.asyncIterator]();
 (await it.next()).value; // => { p: undefined, pLoading: true, pError: null, pDone: false }
 resolve(42);
@@ -300,7 +312,6 @@ import { setImmediate } from "node:timers/promises";
 const rows: { user: unknown }[] = [];
 const users = select(["ann", "bob"], {
   autoStart: true,
-  autoClose: false,
   nonYielding: true,
   onChanges: ops =>
     applyOps(rows, ops, (user, row) => Object.assign(row ?? {}, { user })),

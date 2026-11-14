@@ -6,8 +6,10 @@ import {
   converted,
   drive,
   type Entry,
+  holds,
   isDynamic,
-  release,
+  PARK,
+  stopIn,
   toNodes,
 } from "./host.ts";
 import type { Child } from "./jsx.ts";
@@ -21,6 +23,7 @@ type Kept = Entry & {
   finished?: boolean;
   sent?: boolean;
   round?: number; // The last structural read that kept the entry
+  past?: Set<Node>; // Earlier nodes that hold a scope, which stops when the entry leaves (JX-035)
 };
 
 /** The item that `each` gives `render`, with its current value, its later values and its end. */
@@ -103,13 +106,17 @@ export function each<T>(
     throw new TypeError("each needs a select proxy with an array shape");
   if (typeof render !== "function")
     throw new TypeError("each render must be a function");
-  const control = new AbortController();
+  const control = new AbortController(),
+    rows: Rows = {};
   const iterator: AsyncGenerator<Node[], void, void> = replay(
     state,
     render,
     () => iterator,
     control.signal,
+    rows,
   );
+  // The drive of the rows parks with the host that holds each (JX-084).
+  (iterator as any)[PARK] = (on: boolean) => rows.park?.(on);
   // A generator queues return() behind a pending next(), so the abort wakes the wait first (JX-03B).
   const finish = iterator.return.bind(iterator);
   iterator.return = value => {
@@ -120,12 +127,16 @@ export function each<T>(
   return iterator;
 }
 
+// The park function of the drive of the rows, which exists after the first `next()`.
+type Rows = { park?: (on: boolean) => void };
+
 /** Replays the changes of state onto the entries of each, and yields their nodes when they change. */
 async function* replay<T>(
   state: State<readonly unknown[], any, T[]>,
   render: (item: Item<T>) => Child,
   owner: () => object,
   signal: AbortSignal,
+  rows: Rows,
 ) {
   const self = owner(),
     entries: Kept[] = [],
@@ -145,7 +156,12 @@ async function* replay<T>(
   // A child that ends after a send may have missed it, so it restarts at once.
   const host = drive(
     self,
-    applyOutput,
+    (entry: Kept, state, parts) => {
+      const old = entry.nodes,
+        moved = applyOutput(entry, state, parts);
+      if (moved) keep(entry, old);
+      return moved;
+    },
     () => {
       dirty = true;
       wake();
@@ -159,6 +175,13 @@ async function* replay<T>(
       }
     },
   );
+  rows.park = host.park;
+  /** Keeps the old nodes of an entry that hold a scope and left its nodes, so the entry stops them when it leaves. */
+  const keep = (entry: Kept, old: Node[]) => {
+    for (const node of old)
+      if (holds(node) && !entry.nodes.includes(node))
+        (entry.past ??= new Set()).add(node);
+  };
   /** Renders the item into the entry, which keeps its nodes until a dynamic child outputs. */
   const start = (entry: Entry & { item: unknown }): Kept => {
     const handle = new Handle(entry.item, self),
@@ -167,7 +190,11 @@ async function* replay<T>(
     if (isDynamic(child)) {
       kept.source = child;
       fresh.push(kept);
-    } else kept.nodes = toNodes(child);
+    } else {
+      const old = kept.nodes;
+      kept.nodes = toNodes(child);
+      keep(kept, old);
+    }
     return kept;
   };
   /**
@@ -207,7 +234,8 @@ async function* replay<T>(
       if (entry.round !== round) {
         leave(entry.handle);
         host.remove(entry);
-        entry.nodes.forEach(release);
+        entry.nodes.forEach(stopIn);
+        entry.past?.forEach(stopIn);
       }
     dirty = true;
   };

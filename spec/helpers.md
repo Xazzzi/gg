@@ -2,7 +2,7 @@
 
 `isVal` and `spread` in this document use `Val` from `select.md`.
 `applyOps` uses `Op` from `select.md`.
-`derive` uses `watch`, `State`, `Keys` and `Entry` from `select.md`.
+`derive` and `iff` use `watch`, `State`, `Keys` and `Entry` from `select.md`.
 `Channel`, `feed` and `select` MUST NOT require callers to use a helper.
 The key words MUST, MUST NOT, SHOULD and MAY are normative.
 
@@ -23,15 +23,27 @@ export function catching<T>(
   onError: (error: unknown) => void | PromiseLike<void>,
 ): Caught<T>;
 
+export interface Derived<T>
+  extends AsyncIterableIterator<T, void, void>,
+    AsyncDisposable {
+  return(): Promise<IteratorResult<T, void>>;
+}
+
 export function derive<T, R>(
   source: AsyncIterable<T>,
   map: (value: T) => R,
-): AsyncGenerator<Awaited<R>, void, void>;
+): Derived<Awaited<R>>;
 export function derive<O, K extends Keys<O>, R>(
   state: State<any, any, O>,
   key: K,
   map: (value: Entry<O, K>) => R,
-): AsyncGenerator<Awaited<R>, void, void>;
+): Derived<Awaited<R>>;
+
+export function iff<A, B = undefined>(
+  source: AsyncIterable<unknown>,
+  then: A | (() => A),
+  otherwise?: B | (() => B),
+): Derived<Awaited<A | B>>;
 
 export function isVal(value: unknown): value is Val<unknown>;
 export function spread<S>(snapshot: S): Spread<S>;
@@ -137,17 +149,45 @@ So a dynamic prop or a dynamic child follows a value that code computes from a `
 So a map that reads one key of a `select` runs only when that key changes, and not at each snapshot.
 
 - HE-050: `derive` MUST throw a `TypeError` synchronously if `source` has no callable `Symbol.asyncIterator`, or if `map` is not a function.
-- HE-051: `derive` MUST return an async generator that yields `map(value)` for each value of `source`, in order.
+- HE-051: `derive` MUST return an async iterator that gives `map(value)` for each value of `source`, in order.
   It MUST NOT read `source` before the first `next()`.
-  `yield` awaits a thenable result of `map`.
-- HE-052: The generator MUST finish when `source` finishes.
-  It MUST reject with the unchanged error when `source` or `map` throws.
-- HE-053: `return()` on the generator MUST call `return()` on the iterator of `source`.
-  An async generator queues `return()` behind a pending `next()`, as JX-041 says.
+  It awaits a thenable result of `map`.
+- HE-052: The iterator MUST finish when `source` finishes.
+  It MUST reject with the unchanged error when `source` or `map` throws, and then finish.
+- HE-053: The first `return()` on an unfinished iterator MUST finish it, and call `return()` on the iterator of `source` synchronously, if that iterator exists and has `return`.
+  It MUST resolve with `{ done: true, value: undefined }` after that call settles, and reject as that call does.
+  Before the first `next()` it does not open `source`.
+  A later `return()` MUST resolve the same way with no call.
+- HE-055: `return()` MUST resolve each pending `next()` with `{ done: true, value: undefined }` at once.
+  It MUST discard a value or a failure that `source` gives later, and a later result of `map`.
+  `map` MUST NOT run for a value that `source` gives after `return()`.
+  So the consumer of a derive ends at once, and HE-053 does not permit a plain `async function*` wrapper.
+  The source decides when its own consumer ends: a `Channel` consumer with a pending `next()` detaches when that `next()` settles (CH-073).
+- HE-056: The iterator MUST serve `next()` calls one at a time, in order.
+  A `next()` after the finish MUST resolve with `{ done: true, value: undefined }`.
+  `[Symbol.asyncIterator]()` MUST return the iterator.
+- HE-057: When `map` throws or rejects, the iterator MUST call `return()` on the iterator of `source`, and ignore what that call throws or rejects with.
+  It MUST NOT call `return()` when `source` fails.
+- HE-058: `[Symbol.asyncDispose]()` MUST act as `return()`.
+  So `await using` in a scope returns a derive that the scope owns.
 - HE-054: If the second argument is not a function, `derive` MUST take it as a key, and the third argument as `map`.
   It MUST then check `source` and `map` as HE-050 says, and call `watch(source, key)` synchronously.
   So `watch` checks `source` and `key` as SE-160 says.
-  The generator MUST then act as HE-051 to HE-053 say, with the `watch` as its source.
+  The iterator MUST then act as HE-051 to HE-053 and HE-055 to HE-058 say, with the `watch` as its source.
+
+- HE-059: `derive` owns what `map` builds.
+  While `map` runs, the JSX runtime records each element that `jsx` creates with a dynamic child or a dynamic prop, each wait of `use`, and each dynamic result of a component.
+  When the iterator gives the next output, it MUST stop what the call for the output before it built.
+  `return()` MUST stop what the call for the last output built.
+  To stop an element is to end its wait (JX-02B) and to stop its scope (JX-081).
+  To stop a component result is to take its part out of its drive and return it (JX-086), or to call its `return()` if no host drives it.
+  An output that is the `Object.is` same as the output before it keeps what that output owns, and the iterator MUST stop what the new call built.
+  The iterator MUST also stop what a call built whose output it discards (HE-055).
+  When `source` finishes or fails, the last output keeps what it owns.
+  A node that code built outside `map` is not owned, so a host parks it (JX-082).
+  `map` owns only what it builds before it returns, so an element that an async `map` builds after an `await` is not owned.
+  What starts later under an owned element stops with it (JX-081).
+  A `map` that returns a node that an earlier call built gives a stopped node.
 
 ```ts
 const count = new Channel<number>();
@@ -157,6 +197,28 @@ count.close();
 const labels: string[] = [];
 for await (const label of derive(count, n => `#${n}`)) labels.push(label);
 labels; // => [ '#1', '#2' ]
+```
+
+## iff
+
+`iff` gives one of two values for a source of truthy and falsy values.
+So a `Channel<boolean>` is a gate for a view, or picks the value of a prop.
+
+- HE-060: `iff` MUST throw a `TypeError` synchronously if `source` has no callable `Symbol.asyncIterator`.
+- HE-061: `iff` MUST return an iterator that acts as the iterator of `derive` does (HE-051 to HE-053, HE-055 to HE-059), with these differences.
+  It MUST skip a value of `source` whose truthiness is the same as that of the value before it.
+  For a truthy value it gives `then`, and for another value it gives `otherwise`.
+  If that branch is a function, it MUST call the function with no argument, and give its result.
+  So a function branch builds a new view at each change to its side, and `iff` stops the view before it (HE-059).
+  A branch that is not a function is not owned, so a host parks its nodes.
+
+```ts
+const open = new Channel<boolean>();
+for (const value of [true, true, false]) open.send(value);
+open.close();
+const seen: string[] = [];
+for await (const label of iff(open, "Close", "Open")) seen.push(label);
+seen; // => [ 'Close', 'Open' ]
 ```
 
 ## isVal

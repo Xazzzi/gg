@@ -5,6 +5,7 @@ import {
   Channel,
   catching,
   changes,
+  type Derived,
   derive,
   feed,
   type Op,
@@ -167,8 +168,8 @@ const keyed = derive(select({ n: 1, s: "x" }), "n", n => {
   yes<Eq<typeof n, number>>();
   return `${n}`;
 });
-yes<Eq<typeof keyed, AsyncGenerator<string, void, void>>>();
+yes<Eq<typeof keyed, Derived<string>>>();
 const pendingKey = derive(rows, 0, n => n);
-yes<Eq<typeof pendingKey, AsyncGenerator<number | undefined, void, void>>>();
+yes<Eq<typeof pendingKey, Derived<number | undefined>>>();
 // @ts-expect-error HE-054 takes a key of the shape
 derive(select({ n: 1 }), "m", n => n);

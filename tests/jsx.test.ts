@@ -329,7 +329,7 @@ test("JX-026 a text output changes the data of the runtime Text node", async () 
   values.close();
 });
 
-test("JX-028 JX-027 JX-011 a rejection or a bad output reports an error, and the entry keeps its nodes", async () => {
+test("JX-028 JX-027 a rejection or a bad output reports an error, and the entry keeps its nodes", async () => {
   reported.length = 0;
   const parent = el(),
     failure = new Error("x"),
@@ -339,17 +339,10 @@ test("JX-028 JX-027 JX-011 a rejection or a bad output reports an error, and the
   await setImmediate();
   values.send({});
   await setImmediate();
-  values.send([Promise.resolve(1)]);
-  await setImmediate();
   assert.equal(html(parent), "<div>vok</div>");
   assert.equal(reported[0], failure);
   assert.ok(reported[1] instanceof TypeError);
-  assert.ok(reported[2] instanceof TypeError);
-  assert.equal(
-    (reported[2] as Error).message,
-    "A dynamic child is not permitted here",
-  );
-  assert.equal(reported.length, 3);
+  assert.equal(reported.length, 2);
   values.send("w");
   await setImmediate();
   assert.equal(html(parent), "<div>wok</div>");
@@ -922,7 +915,7 @@ test("JX-035 an entry that leaves stops the hosts and the dynamic props that sta
   );
 });
 
-test("JX-046 a started element that code moves under a new ancestor stays driven", async () => {
+test("JX-046 JX-080 a started element that code moves stays bound to the entry under which it started", async () => {
   const parent = el("ul"),
     text = latest<string>(),
     moved = h("b", { children: text }),
@@ -948,7 +941,7 @@ test("JX-046 a started element that code moves under a new ancestor stays driven
   assert.equal(html(parent), "<ul></ul>");
   assert.deepEqual(
     channels.map(channel => channel.signal.aborted),
-    [false, false, false, true],
+    [false, false, true, true],
   );
 });
 

@@ -1,12 +1,4 @@
-import {
-  Channel,
-  derive,
-  each,
-  type Item,
-  latest,
-  select,
-  watch,
-} from "@xazzzi/gg";
+import { Channel, derive, each, iff, type Item, latest } from "@xazzzi/gg";
 import { type Body, type Sim, STAR, type Stats } from "./sim.ts";
 
 const TRAIL = 60,
@@ -23,11 +15,11 @@ async function* trail(body: Item<Body>) {
 }
 
 // Each dynamic prop reads the item, so the props end when its body leaves the list or the view unmounts.
-const Planet = ({ body }: { body: Item<Body> }) => {
+const Planet = ({ body, withTrail }: { body: Item<Body>, withTrail: Channel<boolean> }) => {
   const color = `hsl(${body.value.hue} 85% 65%)`;
   return (
     <g>
-      <polyline class="trail" stroke={color} points={trail(body)} />
+      {iff(withTrail, () => <polyline class="trail" stroke={color} points={trail(body)} />)}
       <circle
         r={body.value.r}
         fill={color}
@@ -74,7 +66,7 @@ export const Orrery = ({ sim }: { sim: Sim }) => {
       <circle r={STAR} fill="#fff2b0" filter="url(#soft)" />
       <g>
         {each(sim.bodies, body => (
-          <Planet body={body} />
+          <Planet body={body} withTrail={sim.trail}  />
         ))}
       </g>
       <text x="-290" y="-280">

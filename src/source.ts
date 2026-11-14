@@ -132,3 +132,18 @@ export const quietReturn = async (iterator: any) => {
     await iterator.return(); // A missing method throws here, and is ignored too
   } catch {}
 };
+
+// The stop functions of what code builds now, while a builder runs.
+let built: (() => void)[] | undefined;
+/** Runs make, and gives its result with the stop functions of the elements that it builds (HE-059). */
+export const building = <R>(make: () => R): [R, (() => void)[]] => {
+  const outer = built,
+    list: (() => void)[] = (built = []);
+  try {
+    return [make(), list];
+  } finally {
+    built = outer;
+  }
+};
+/** Records what stops a thing that code builds now, if a builder runs. */
+export const record = (stop: () => void) => built?.push(stop);

@@ -19,6 +19,7 @@ test("Package exports the root exports the public names", () => {
     "derive",
     "each",
     "feed",
+    "iff",
     "isVal",
     "jsx",
     "jsxDEV",

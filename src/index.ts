@@ -8,12 +8,13 @@ export type {
 export { Channel, latest, StopError } from "./channel.ts";
 export type { FeedOptions, Source } from "./feed.ts";
 export { feed } from "./feed.ts";
-export type { Caught, Spread } from "./helpers.ts";
+export type { Caught, Derived, Spread } from "./helpers.ts";
 export {
   abortable,
   applyOps,
   catching,
   derive,
+  iff,
   isVal,
   spread,
 } from "./helpers.ts";

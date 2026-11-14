@@ -86,6 +86,10 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
   ``class={derive(view, "filter", filter => `list-${filter}`)}`` needs no loop in the component.
   When a map reads one key, use `derive(state, key, map)`, so the map runs only when that key changes (HE-054).
   `derive(state, map)` runs the map on every snapshot.
+- `iff(gate, () => <View />, otherwise?)` shows a view while a source is truthy, and `class={iff(gate, "active")}` picks a prop value (HE-061).
+  `derive` and `iff` stop the views that their map built at the next output (HE-059).
+  A node that code built outside the map is parked while it is out of the tree, and resumes when an output holds it again (JX-082).
+  An output can hold dynamic children, so a component can yield another component (JX-085).
 - SVG tags get the SVG namespace (JX-001).
   `a`, `script`, `style` and `title` inside an SVG element need `xmlns="http://www.w3.org/2000/svg"`.
 - Cast elements to their DOM type: `<input /> as HTMLInputElement`.

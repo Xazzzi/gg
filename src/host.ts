@@ -1,12 +1,23 @@
 // The host machinery of the JSX runtime: conversion, placement, drives, placement waits and dynamic props.
-import { type Emit, owned, register } from "./devtools.ts";
+import { type Emit, owned, pulling, register } from "./devtools.ts";
 import type { Child } from "./jsx.ts";
 import { REPORT, select, type Val } from "./select.ts";
-import { noop } from "./source.ts";
+import { noop, record } from "./source.ts";
 
 // An entry that a drive keys, with its source and its last applied output.
-type Driven = { key?: string; source?: unknown; value?: unknown };
-export type Entry = Driven & { nodes: Node[]; text?: Text };
+type Driven = { key?: string; source?: unknown; value?: unknown; via?: Gated };
+// A part is a dynamic child in an output of the entry `in`, or a run of static nodes between two of them (JX-085).
+export type Entry = Driven & {
+  nodes: Node[];
+  text?: Text;
+  parts?: Entry[]; // The parts of the last output, in order
+  pool?: Map<unknown, Entry>; // Each part that the outputs of the entry made, by its source
+  in?: Entry;
+  gate?: PromiseWithResolvers<void>; // Of a parked part
+};
+type Gated = { next(): unknown; return(): unknown };
+// What adds a part to the drive of its entry, and what takes it out.
+type Parts = { add(entry: Entry): void; quit(entry: Entry): void };
 type Prop = Driven & { name: string };
 // Properties whose attribute sets only the initial state, or that have no attribute.
 export const LIVE = new Set([
@@ -120,6 +131,7 @@ const arrange = (
     // Stryker disable next-line ConditionalExpression,EqualityOperator: the whole range gives the same nodes
     if (inside > old.size) return undefined;
   }
+  for (const node of leave) shift(node, true);
   // Stryker disable next-line ConditionalExpression,BlockStatement: the general path gives the same nodes, with one removal for each
   if (!old.size && whole) {
     parent.replaceChildren();
@@ -178,10 +190,76 @@ const place = (parent: Element, entries: Entry[]): Node[] => {
 // The node arrays that each yields hold converted nodes, so a host takes them as they are.
 export const converted = new WeakSet<Node[]>();
 
+// What a drive tells each source when it parks or resumes, so an each parks the drive of its rows (JX-084).
+export const PARK: unique symbol = Symbol() as any;
+// What takes the part of a source out of its drive, for the builder that owns the source (HE-059).
+const evict = new WeakMap<object, () => void>();
+
+/** Reads the source of a part for a drive, and pulls it only while the part is not parked (JX-086). */
+const gated = (part: Entry): Gated => {
+  const source = part.source as AsyncIterable<unknown>;
+  let iterator: AsyncIterator<unknown> | undefined;
+  const pull = () =>
+    pulling(source, () => (iterator ??= source[Symbol.asyncIterator]()).next()); // DV-052
+  return {
+    next: () => (part.gate ? part.gate.promise.then(pull) : pull()),
+    return: () => iterator?.return?.(),
+  };
+};
+
+/** Parks or resumes a part and the parts of its last output. */
+const hold = (part: Entry, on: boolean) => {
+  if (!part.gate === !on) return;
+  if (on) part.gate = Promise.withResolvers();
+  else
+    (part.gate as PromiseWithResolvers<void>).resolve(),
+      (part.gate = undefined);
+  (part.source as any)[PARK]?.(on);
+  if (part.parts) for (const sub of part.parts) if (sub.source) hold(sub, on);
+};
+
+/** Throws for a source that an entry or an entry around it reads, because one iterator has one reader. */
+const check = (entry: Entry, source: unknown) => {
+  for (let at: Entry | undefined = entry; at; at = at.in)
+    if (at.source === source)
+      throw new TypeError("A dynamic child is in its own output");
+};
+
+/** Gives the part of entry for a source, and adds a new part to the drive. */
+const take = (entry: Entry, source: any, host: Parts): Entry => {
+  const pool = (entry.pool ??= new Map());
+  let part: Entry | undefined = pool.get(source);
+  if (part) return part;
+  part = { nodes: [], source, in: entry };
+  pool.set(source, part);
+  // A promise has no pull to park.
+  if (typeof source.then !== "function") {
+    part.via = gated(part);
+    register("part", part.via, { source });
+  }
+  evict.set(source, () => {
+    pool.delete(source);
+    host.quit(part);
+  });
+  host.add(part);
+  return part;
+};
+
+/** Stops a dynamic child that a builder owns, in the drive that holds it or by its own `return` (HE-059). */
+export const quitSource = (source: any) => {
+  const out = evict.get(source);
+  if (out) out();
+  else source.return?.();
+};
+
 /**
- * Applies a source state to the nodes of its entry, and tells if the nodes changed.
+ * Applies a source state to the nodes of its entry, and tells if the nodes of its host changed.
  * A pending state has an undefined value, as a new entry has, so it keeps the nodes. */
-export const applyOutput = (entry: Entry, state: Val<unknown>): boolean => {
+export const applyOutput = (
+  entry: Entry,
+  state: Val<unknown>,
+  host: Parts,
+): boolean => {
   if (state.status === "rejected") {
     reportError(state.reason);
     return false;
@@ -192,17 +270,52 @@ export const applyOutput = (entry: Entry, state: Val<unknown>): boolean => {
   if (retext) (entry.text as Text).data = `${value}`;
   else
     try {
+      let nodes: Node[] = [],
+        parts: Entry[] | undefined;
+      const cuts: [number, unknown][] = [];
       // Stryker disable next-line ConditionalExpression: a conversion gives the same nodes
-      entry.nodes = converted.has(value as Node[])
-        ? (value as Node[])
-        : toNodes(value);
+      if (converted.has(value as Node[])) nodes = value as Node[];
+      else
+        convert(
+          value,
+          node => nodes.push(node),
+          source => cuts.push([nodes.length, source]),
+        );
+      if (cuts.length) {
+        for (const [, source] of cuts) check(entry, source);
+        parts = [];
+        let from = 0;
+        for (const [at, source] of cuts) {
+          parts.push(
+            { nodes: nodes.slice(from, at) },
+            take(entry, source, host),
+          );
+          from = at;
+        }
+        parts.push({ nodes: nodes.slice(from) });
+        // The parts in the output run as the entry does (JX-086).
+        for (const part of parts) if (part.source) hold(part, !!entry.gate);
+        nodes = parts.flatMap(part => part.nodes);
+      }
+      // The parts that left the output park.
+      if (entry.parts)
+        for (const part of entry.parts)
+          if (part.source && !parts?.includes(part)) hold(part, true);
+      entry.parts = parts;
+      entry.nodes = nodes;
       entry.text = isText(value) ? (entry.nodes[0] as Text) : undefined;
     } catch (error) {
       reportError(error);
       return false;
     }
   entry.value = value;
-  return !retext;
+  if (retext) return false;
+  // The nodes of a part are in the nodes of each entry around it, while its output holds the part.
+  for (let part = entry, at = entry.in; at; part = at, at = at.in) {
+    if (!at.parts?.includes(part)) return false;
+    at.nodes = at.parts.flatMap(each => each.nodes);
+  }
+  return true;
 };
 
 // The emitters of component results, which a host ends one time (DV-045).
@@ -213,18 +326,23 @@ export const end = (source: unknown) => {
   ends.delete(source as object);
 };
 
+type Driving = { stop(): void; park(on: boolean): void };
+
 /**
  * Drives dynamic entries with one select by key, so a move in the host never restarts a source.
- * Calls changed after a report in which apply changed the nodes of an entry (JX-023), and done for each entry whose source finished. */
+ * Calls changed after a report in which apply changed the nodes of an entry (JX-023), done for each entry whose source finished, and over when no entry is left. */
 export const drive = <E extends Driven>(
   owner: object,
-  apply: (entry: E, state: Val<unknown>) => unknown, // Tells if the nodes changed
+  apply: (entry: E, state: Val<unknown>, parts: Parts) => unknown, // Tells if the nodes changed
   changed: () => void,
   autoClose: boolean,
   done?: (entry: E) => void,
+  over?: () => void,
 ) => {
   const keyed = new Map<string, E>();
-  let id = 0;
+  let id = 0,
+    parked = false,
+    gate: PromiseWithResolvers<void> | undefined;
   const sources = owned(owner, () =>
     select({} as Record<string, unknown>, {
       autoStart: true,
@@ -233,30 +351,48 @@ export const drive = <E extends Driven>(
       [REPORT]: ops => {
         let moved = false;
         for (const op of ops) {
-          const entry = keyed.get((op as { key: string }).key),
+          const { key } = op as { key: string },
+            entry = keyed.get(key),
             state = (op as { value: Val<unknown> }).value;
           if (!entry) continue;
-          if (apply(entry, state)) moved = true;
+          if (apply(entry, state, parts)) moved = true;
           if (state.done) {
             end(entry.source);
-            done?.(entry);
+            if (!(entry as Driven as Entry).in) done?.(entry);
+            keyed.delete(key);
+            if (!keyed.size) over?.();
           }
         }
         if (moved) changed();
+        // A parked drive applies the outputs that it has, and pulls no more until it resumes (JX-083).
+        if (parked) return (gate ??= Promise.withResolvers()).promise;
       },
     }),
   );
+  /** Takes an entry and the parts that its outputs made out of the select, and returns the source of a part. */
+  const quit = (entry: Entry) => {
+    if (entry.pool) for (const part of entry.pool.values()) quit(part);
+    entry.pool = undefined;
+    keyed.delete(entry.key as string);
+    delete sources[entry.key as string];
+    entry.gate = undefined; // So a parked pull of the part never runs
+    entry.via?.return();
+    end(entry.source);
+  };
+  const add = (entry: Driven) => {
+    // Stryker disable next-line UpdateOperator: keys only need to differ
+    entry.key = `${id++}`;
+    keyed.set(entry.key, entry as E);
+    sources[entry.key] = entry.via ?? entry.source;
+  };
+  const parts: Parts = { add, quit };
   return {
-    add(entry: E) {
-      // Stryker disable next-line UpdateOperator: keys only need to differ
-      entry.key = `${id++}`;
-      keyed.set(entry.key, entry);
-      sources[entry.key] = entry.source;
-    },
-    remove({ key, source }: E) {
-      keyed.delete(key as string);
-      delete sources[key as string];
-      end(source);
+    add: add as (entry: E) => void,
+    remove: quit as unknown as (entry: E) => void,
+    park(on: boolean) {
+      parked = on;
+      if (!on) gate?.resolve(), (gate = undefined);
+      for (const { source } of keyed.values()) (source as any)[PARK]?.(on);
     },
     stop() {
       sources[Symbol.dispose]();
@@ -265,19 +401,28 @@ export const drive = <E extends Driven>(
   };
 };
 
-// The stop function of the drive of each host, and of the dynamic props of each element.
-const hosts = new WeakMap<Node, () => void>(),
-  bound = new WeakMap<Node, () => void>();
+// The drives of a started element, and the scopes of the elements that started under it (JX-080).
+// A scope is live while its top and the tops of the scopes above it are in the tree.
+type Scope = {
+  node: Node;
+  up?: Scope; // The scope of the closest started element above, or of a mount
+  top?: Node; // The child of the node of up that holds node, or node
+  kids?: Set<Scope>;
+  host?: Driving; // The drive of the children
+  props?: Driving; // The drive of the dynamic props
+  off?: boolean; // A place removed top
+  live: boolean;
+};
+const scopes = new WeakMap<Node, Scope>(),
+  under = new WeakMap<Node, Set<Scope>>(); // The scopes that a top holds
 // What starts when a runtime placement first reaches a node: a host (JX-02B), or the wait of use (JX-054).
 export const waiting = new WeakMap<Node, () => void>(),
   binding = new WeakMap<Node, () => void>(); // The dynamic props, which start after the host (JX-061)
 type Wait = (() => void) & { ref: WeakRef<Node> };
 // The nodes of the waits that are not started, so a placement walks no node when there is none.
 const unstarted = new Set<WeakRef<Node>>();
-// The ancestors that an element had when its drive started, so a stop of a subtree walks only to drives.
-const holds = new WeakSet<Node>();
 
-/** Makes start wait in map until a runtime placement reaches node. */
+/** Makes start wait in map until a runtime placement reaches node, and records the node for a builder (HE-059). */
 export const defer = (
   map: WeakMap<Node, () => void>,
   node: Node,
@@ -290,6 +435,7 @@ export const defer = (
     };
   unstarted.add(ref);
   map.set(node, Object.assign(wait, { ref }));
+  record(() => quit(node));
 };
 /** Ends the wait of node in map, if it has one. */
 const settle = (map: WeakMap<Node, () => void>, node: Node) => {
@@ -302,11 +448,6 @@ const waits = () => {
   for (const ref of unstarted) if (!ref.deref()) unstarted.delete(ref);
   return unstarted.size > 0;
 };
-/** Marks the ancestors of an element whose drive starts. */
-const hold = (node: Node) => {
-  for (let at = node.parentNode; at && !holds.has(at); at = at.parentNode)
-    holds.add(at);
-};
 /** Starts the waiting hosts and dynamic props in node and its descendants, in tree order. */
 const wake = (node: Node) => {
   waiting.get(node)?.();
@@ -314,24 +455,102 @@ const wake = (node: Node) => {
   for (let child = node.firstChild; child; child = child.nextSibling)
     wake(child);
 };
-/** Places the entries of a started host, and wakes the nodes that were not its children (JX-02B). */
-const settleIn = (parent: Element, entries: Entry[]) => {
+
+/** Gives the scope of node, and binds a new scope to the closest scope above it. */
+const enter = (node: Node): Scope => {
+  let scope = scopes.get(node);
+  if (scope) return scope;
+  scope = { node, live: true };
+  scopes.set(node, scope);
+  for (let top = node, at = node.parentNode; at; top = at, at = at.parentNode) {
+    const up = scopes.get(at);
+    if (!up) continue;
+    Object.assign(scope, { up, top, live: up.live });
+    (up.kids ??= new Set()).add(scope);
+    under.get(top)?.add(scope) ?? under.set(top, new Set([scope]));
+    break;
+  }
+  return scope;
+};
+/** Takes a scope out of the scope above it. */
+const leave = (scope: Scope) => {
+  scopes.delete(scope.node);
+  scope.up?.kids?.delete(scope);
+  under.get(scope.top as Node)?.delete(scope);
+};
+/** Stops the drive of the children of a scope, and each scope under it. */
+const clear = (scope: Scope) => {
+  scope.host?.stop();
+  scope.host = undefined;
+  if (scope.kids) for (const kid of scope.kids) stop(kid);
+};
+/** Stops the drives of a scope and of each scope under it, for good. */
+const stop = (scope: Scope) => {
+  clear(scope);
+  scope.props?.stop();
+  scope.props = undefined;
+  leave(scope);
+};
+/** Takes out a scope that drives nothing and holds no scope, and then the scopes above that it leaves empty. */
+const tidy = (scope: Scope) => {
+  if (scope.host || scope.props || scope.kids?.size || !scope.up) return;
+  leave(scope);
+  tidy(scope.up);
+};
+/** Parks or resumes the drives of a scope and of the scopes under it that are not off (JX-083). */
+const sync = (scope: Scope, live: boolean) => {
+  if (scope.live === live) return;
+  scope.live = live;
+  scope.host?.park(!live);
+  scope.props?.park(!live);
+  if (scope.kids) for (const kid of scope.kids) sync(kid, live && !kid.off);
+};
+/** Parks the scopes that node holds when a place removes it, and resumes them when a place adds it again. */
+const shift = (node: Node, off: boolean) => {
+  const held = under.get(node);
+  if (held)
+    for (const scope of held) {
+      scope.off = off;
+      sync(scope, !off && (scope.up as Scope).live);
+    }
+};
+/** Starts a drive of node in its scope, parked if the scope is not live. */
+const driveIn = <D extends Driving>(
+  node: Node,
+  slot: "host" | "props",
+  make: (scope: Scope, over: () => void) => D,
+): D => {
+  const scope = enter(node),
+    driving = make(scope, () => {
+      scope[slot] = undefined;
+      tidy(scope);
+    });
+  scope[slot] = driving;
+  if (!scope.live) driving.park(true);
+  return driving;
+};
+
+/** Tells if node holds a scope, so its owner keeps it to stop it later. */
+export const holds = (node: Node) => !!under.get(node)?.size;
+/** Stops the scopes that node holds (JX-035). */
+export const stopIn = (node: Node) => under.get(node)?.forEach(stop);
+/** Ends the waits of node and stops its scope, for the builder that owns it (HE-059). */
+const quit = (node: Node) => {
+  settle(waiting, node);
+  settle(binding, node);
+  const scope = scopes.get(node);
+  if (scope) stop(scope);
+};
+/** Stops the drive of the children of node and each scope under it (JX-02A). */
+export const unmount = (node: Node) => {
+  const scope = scopes.get(node);
+  if (scope) clear(scope);
+};
+/** Places the entries of a host, resumes the nodes that come back, and wakes the nodes that were not its children (JX-02B). */
+const settleIn = (parent: Element, entries: Entry[], scope: Scope) => {
   const added = place(parent, entries);
-  if (waits()) added.forEach(wake);
-};
-/** Stops the drives of node and its descendants, and the dynamic props of the descendants. */
-export const unmount = (node: Node, props = false) => {
-  hosts.get(node)?.();
-  if (props) bound.get(node)?.();
-  for (const child of node.childNodes) unmount(child, true);
-};
-/** Stops the drives and the dynamic props that started in node and its descendants (JX-035). */
-export const release = (node: Node) => {
-  hosts.get(node)?.();
-  bound.get(node)?.();
-  if (holds.has(node))
-    for (let child = node.firstChild; child; child = child.nextSibling)
-      release(child);
+  for (const node of added) shift(node, false);
+  if (scope.live && waits()) added.forEach(wake);
 };
 
 /** Applies an output of a dynamic prop to its element, and changes no node (JX-062 to JX-065). */
@@ -353,14 +572,16 @@ const applyProp = (element: Element, entry: Prop, state: Val<unknown>) => {
 /** Makes the dynamic props of an element wait until the runtime places it, and then drives them (JX-061). */
 export const bind = (element: Element, props: [string, unknown][]) =>
   defer(binding, element, () => {
-    hold(element);
-    const host = drive(
-      element,
-      (entry: Prop, state) => applyProp(element, entry, state),
-      noop,
-      true,
+    const host = driveIn(element, "props", (_, over) =>
+      drive(
+        element,
+        (entry: Prop, state) => applyProp(element, entry, state),
+        noop,
+        true,
+        undefined,
+        over,
+      ),
     );
-    bound.set(element, host.stop);
     for (const [name, source] of props) host.add({ name, source });
   });
 
@@ -382,9 +603,10 @@ export const attach = (parent: Element, children: Child, placed: boolean) => {
     },
   );
   if (placed) {
-    hosts.get(parent)?.();
     settle(waiting, parent);
-    settleIn(parent, entries);
+    const scope = enter(parent);
+    clear(scope);
+    settleIn(parent, entries, scope);
   }
   // A new element has no child and no host, so its nodes land in order with no placement.
   else
@@ -393,14 +615,16 @@ export const attach = (parent: Element, children: Child, placed: boolean) => {
   if (!dynamic.length) return;
   register("mount", parent, {});
   const start = () => {
-    hold(parent);
-    const host = drive(
-      parent,
-      applyOutput,
-      () => settleIn(parent, entries),
-      true,
+    const host = driveIn(parent, "host", (scope, over) =>
+      drive(
+        parent,
+        applyOutput,
+        () => settleIn(parent, entries, scope),
+        true,
+        undefined,
+        over,
+      ),
     );
-    hosts.set(parent, host.stop);
     for (const entry of dynamic) host.add(entry);
   };
   if (placed) start();

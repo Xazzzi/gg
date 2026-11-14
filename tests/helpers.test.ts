@@ -1360,18 +1360,153 @@ test("HE-052 derive rejects with the error of the source or of map", async () =>
   );
 });
 
-test("HE-053 return calls return on the iterator of the source", async () => {
+test("HE-053 return calls return on the iterator of the source one time, and awaits it", async () => {
   let returned = 0;
+  const gate = Promise.withResolvers<void>();
   const source = {
     [Symbol.asyncIterator]: () => ({
       next: async () => ({ value: 1, done: false }),
-      return: async () => (returned++, { value: undefined, done: true }),
+      return: async () => (
+        returned++, await gate.promise, { value: undefined, done: true }
+      ),
     }),
   };
   const it = derive(source, n => n);
   await it.next();
+  const first = it.return();
+  assert.equal(returned, 1);
+  await setImmediate();
+  assert.ok(isPending(first));
+  gate.resolve();
+  assert.deepEqual(await first, end());
   assert.deepEqual(await it.return(), end());
   assert.equal(returned, 1);
+  assert.deepEqual(await it.next(), end());
+});
+
+test("HE-053 return before the first next does not open the source, and a source with no return finishes", async () => {
+  let opened = 0;
+  const source = {
+    [Symbol.asyncIterator]: () => (
+      opened++, { next: async () => ({ value: 1, done: false }) }
+    ),
+  };
+  const early = derive(source, n => n);
+  assert.deepEqual(await early.return(), end());
+  assert.deepEqual(await early.next(), end());
+  assert.equal(opened, 0);
+  const it = derive(source, n => n);
+  assert.deepEqual(await it.next(), val(1));
+  assert.deepEqual(await it.return(), end());
+  assert.deepEqual(await it.next(), end());
+});
+
+test("HE-055 return during a pending next returns the source at once, finishes each pending next, and discards the late value", async () => {
+  const late = Promise.withResolvers<IteratorResult<number>>();
+  let maps = 0,
+    returned = 0;
+  const slow = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => late.promise,
+      return: async () => (returned++, { value: undefined, done: true }),
+    }),
+  };
+  const it = derive(slow, n => (maps++, n));
+  const first = it.next(),
+    second = it.next();
+  await setImmediate();
+  assert.ok(isPending(first));
+  const stopped = it.return();
+  assert.equal(returned, 1);
+  assert.deepEqual(await first, end());
+  assert.deepEqual(await second, end());
+  assert.deepEqual(await stopped, end());
+  const after = it.next(); // The old read of the source still pends
+  late.resolve({ value: 1, done: false });
+  assert.deepEqual(await after, end());
+  await setImmediate();
+  assert.equal(maps, 0);
+});
+
+test("HE-055 return discards a late failure of the source and a late result of map", async () => {
+  const late = Promise.withResolvers<IteratorResult<number>>();
+  let returned = 0;
+  const failing = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => late.promise,
+      return: async () => (returned++, { value: undefined, done: true }),
+    }),
+  };
+  const it = derive(failing, n => n);
+  const read = it.next();
+  await it.return();
+  late.reject(new Error("late"));
+  assert.deepEqual(await read, end());
+  await setImmediate();
+  assert.equal(returned, 1);
+  const mapped = Promise.withResolvers<string>();
+  const ch = new Channel<number>();
+  ch.send(1);
+  const slow = derive(ch, () => mapped.promise);
+  const pending = slow.next();
+  await setImmediate();
+  await slow.return();
+  mapped.resolve("x");
+  assert.deepEqual(await pending, end());
+});
+
+test("HE-056 next calls queue in order, and each call after the finish gives done", async () => {
+  const ch = new Channel<number>();
+  const it = derive(ch, n => n * 2);
+  const reads = [it.next(), it.next(), it.next(), it.next()];
+  ch.send(1);
+  ch.send(2);
+  ch.close();
+  assert.deepEqual(await Promise.all(reads), [val(2), val(4), end(), end()]);
+  assert.deepEqual(await it.next(), end());
+  assert.equal(it[Symbol.asyncIterator](), it);
+});
+
+test("HE-057 a throw of map returns the source, and a failure of the source does not", async () => {
+  const error = new Error("x");
+  let returned = 0,
+    fail = false;
+  const source = {
+    [Symbol.asyncIterator]: () => ({
+      next: async () => {
+        if (fail) throw error;
+        return { value: 1, done: false };
+      },
+      return: async () => {
+        returned++;
+        throw new Error("ignored");
+      },
+    }),
+  };
+  const it = derive(source, () => {
+    throw error;
+  });
+  await assert.rejects(it.next(), error);
+  assert.equal(returned, 1);
+  assert.deepEqual(await it.next(), end());
+  assert.deepEqual(await it.return(), end());
+  assert.equal(returned, 1);
+  fail = true;
+  const other = derive(source, n => n);
+  await assert.rejects(other.next(), error);
+  assert.equal(returned, 1);
+});
+
+test("HE-058 await using returns the derive at the end of its scope", async () => {
+  const ch = new Channel<number>();
+  ch.send(1);
+  let seen: Promise<IteratorResult<number, void>>;
+  {
+    await using it = derive(ch, n => n);
+    assert.deepEqual(await it.next(), val(1));
+    seen = it.next();
+  }
+  assert.deepEqual(await seen, end());
 });
 
 test("HE-054 derive with a key maps the outputs of that slot, only when it changes", async () => {

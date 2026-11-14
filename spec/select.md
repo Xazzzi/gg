@@ -265,6 +265,9 @@ A flush runs these steps in order.
 
 - SE-040: Report MUST call the report hook with the operations since the last report, if the hook exists and there are operations.
   It MUST make those operations readable to readers before it calls the hook.
+- SE-04C: If the report hook returns a truthy value, the flush MUST await it before step 3.
+  So the JSX host holds the pulls of a parked drive (JX-083).
+  The hook is still not an observer.
 - SE-041: Without `nonYielding`, publish MUST build a snapshot.
   It MUST then apply `mapSnapshot` and send the result.
   SE-02B skips steps 3 and 4 for a flush with no other change.

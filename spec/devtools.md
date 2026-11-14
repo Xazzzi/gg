@@ -29,17 +29,17 @@ So this spec defines only the contract with that extension.
 - DV-004: The library MUST NOT catch errors from the hook or from an emitter.
   The hook MUST NOT throw.
 
-| `kind`        | `target`                            | `detail`                                                                             |
-| ------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `"channel"`   | The channel                         | `{ firstReceive, thenReceive, stopStyle, ackStyle }`, with defaults applied          |
-| `"feed"`      | The source                          | `{ channel, autoStart, autoClose, backPressure, sendReturn }`, with defaults applied |
-| `"select"`    | The proxy                           | `{ channel, array, unwrap, slots }`                                                  |
-| `"component"` | What the component returned         | `{ type, props }`                                                                    |
-| `"mount"`     | The parent                          | `{}`                                                                                 |
-| `"each"`      | The iterator that `each` returns    | `{ state }`                                                                          |
-| `"item"`      | The `Item`                          | `{ channel }`                                                                        |
-| `"reader"`    | The reader that `changes` makes     | `{ state, keys, source }`, with `keys` undefined for a reader of all slots           |
-| `"derive"`    | The generator that `derive` returns | `{ source, map }`                                                                    |
+| `kind`        | `target`                           | `detail`                                                                             |
+| ------------- | ---------------------------------- | ------------------------------------------------------------------------------------ |
+| `"channel"`   | The channel                        | `{ firstReceive, thenReceive, stopStyle, ackStyle }`, with defaults applied          |
+| `"feed"`      | The source                         | `{ channel, autoStart, autoClose, backPressure, sendReturn }`, with defaults applied |
+| `"select"`    | The proxy                          | `{ channel, array, unwrap, slots }`                                                  |
+| `"component"` | What the component returned        | `{ type, props }`                                                                    |
+| `"mount"`     | The parent                         | `{}`                                                                                 |
+| `"each"`      | The iterator that `each` returns   | `{ state }`                                                                          |
+| `"item"`      | The `Item`                         | `{ channel }`                                                                        |
+| `"reader"`    | The reader that `changes` makes    | `{ state, keys, source }`, with `keys` undefined for a reader of all slots           |
+| `"derive"`    | The iterator that `derive` returns | `{ source, map }`                                                                    |
 
 - DV-005: Each `detail` MUST also have `owner`, which is the owner that creates the object, or `undefined`.
 
@@ -69,8 +69,8 @@ So this spec defines only the contract with that extension.
 
 ## Derive events
 
-- DV-060: The generator of `derive` MUST emit `("start")` when its first `next()` call runs.
-- DV-061: It MUST emit `("value", output)` before it yields each output.
+- DV-060: The iterator of `derive` MUST emit `("start")` when its first `next()` call runs.
+- DV-061: It MUST emit `("value", output)` before it gives each output.
 - DV-062: It MUST emit `("end")` one time, when it finishes, rejects or returns after its start.
   So a debugger can show a derive that waits, runs or ended, and link the source that it reads.
 
@@ -82,12 +82,17 @@ So this spec defines only the contract with that extension.
 - DV-042: `each` MUST register `"each"` before it returns.
 - DV-043: The owner of the select that drives the children of a `mount` is the parent.
   The owner of the select that drives the items of `each`, of each item channel, and of its reader of `state`, is the iterator.
-- DV-044: The library MUST ignore what the hook returns for `"mount"`, `"each"` and `"item"`.
+- DV-044: The library MUST ignore what the hook returns for `"mount"`, `"each"`, `"item"` and `"part"`.
 - DV-045: A host MUST emit `("end")` once to the emitter of a component result that it drives, when the result finishes or fails, leaves the host, or the host stops.
 
 - DV-046: The first iteration of an `Item` MUST register `"item"` after it creates its channel (JX-03F).
   Its owner is the iterator of `each`, which owns the channel too (DV-043).
   So a debugger can link a prop that holds the item to the channel that the component reads.
+
+- DV-047: A host MUST register `"part"` when it makes a part for an async iterable (JX-085).
+  The target is the object that the drive reads in place of the source, and `detail` is `{ source }`.
+  The host pulls the source as DV-052 says, with the source and not the target as `source`.
+  So a debugger can link the slot of a part to the component or the derive that it reads.
 
 ## Reader events
 

@@ -82,7 +82,8 @@ Each of these props also takes `null`, `undefined` and a dynamic value.
 Any other prop, and any prop of another tag, takes any value.
 A JSX expression has the type `Child`.
 An async iterable child can produce any `Child` in its type, so a component yields JSX with no cast.
-A dynamic value in an output still fails at runtime (JX-027, JX-028).
+A dynamic child in an output becomes a part of its entry (JX-085).
+The type of a promise child permits only a static child, because a recursive type has no `await`.
 Cast an element to its DOM type, such as `<input /> as HTMLInputElement`.
 The runtime uses the global `document` when it creates nodes.
 
@@ -95,6 +96,12 @@ The runtime uses the global `document` when it creates nodes.
 - **Entry**: one part of a host, with the nodes that the part has now.
   A host keeps its entries in order.
 - **Output**: the last value that the source of a dynamic entry produced.
+- **Part**: a dynamic child in an output, which the host of the entry drives.
+- **Scope**: a `mount`, or a started element, with the elements that started under it.
+- **Park**: pull a source no more, and not return it.
+  A parked drive resumes.
+- **Stop**: close the `select` of a drive, so each unfinished source gets `return()`.
+  A stopped drive does not resume.
 - **Place**: put the nodes of all entries into the host in order, and remove all other children of the host.
 - **Text value**: a string, a number or a bigint.
 - **SVG tag**: `svg`, `g`, `defs`, `symbol`, `use`, `image`, `switch`, `foreignObject`, `desc`, `metadata`, `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `text`, `tspan`, `textPath`, `linearGradient`, `radialGradient`, `stop`, `pattern`, `clipPath`, `mask`, `marker`, `filter`, `view`, `animate`, `animateMotion`, `animateTransform`, `set` or `mpath`, or a tag that starts with `fe` and an upper case letter.
@@ -134,8 +141,8 @@ The runtime uses the global `document` when it creates nodes.
 The runtime converts a child to nodes by these rules, in order.
 
 - JX-010: An array MUST convert each item in order, at any depth.
-- JX-011: A dynamic child MUST become an entry, if the place permits it.
-  Otherwise it MUST throw a `TypeError`.
+- JX-011: A dynamic child MUST become an entry in the children of a host, and a part in an output (JX-085).
+  In a static `Fragment` and in a static result of `render`, it MUST throw a `TypeError`.
 - JX-012: A value with a `nodeType` of type number is a node.
   A `DocumentFragment` MUST give its child nodes at the time of the conversion.
   Another node MUST give itself.
@@ -161,7 +168,7 @@ The runtime converts a child to nodes by these rules, in order.
   So a component yields its node again to wake a host with no change to the DOM.
 - JX-026: A text value output MUST change the `data` of the entry's `Text` node, if the runtime made that node for the previous output.
 - JX-027: Another output MUST replace the nodes of the entry with the conversion of the output.
-  A dynamic child in an output is not permitted (JX-011).
+  A dynamic child in an output becomes a part (JX-085).
 - JX-028: A rejected state MUST call `globalThis.reportError` with the reason.
   A conversion error MUST call `globalThis.reportError` with that error.
   The entry MUST keep its nodes.
@@ -171,7 +178,8 @@ The runtime converts a child to nodes by these rules, in order.
   It MUST remove a node that leaves the host, and MUST NOT move the nodes after it.
   A node that two entries give MUST land at its last place.
 - JX-02A: `mount` MUST return an unmount function.
-  Its first call MUST stop the drive of each host in `parent` and its descendants at the time of the call, and the dynamic props of the descendants, and then remove all children of `parent`.
+  Its first call MUST stop the drive of `parent`, and each scope under the scope of `parent` (JX-081), and then remove all children of `parent`.
+  So it stops each element that started under `parent`, also one that is not in the tree at the time of the call.
   Its later calls MUST do nothing.
   To stop a drive, the runtime closes its `select`, so each unfinished child gets `return()` (SE-120).
 - JX-02B: An element that `jsx` creates with a dynamic child MUST wait, and MUST NOT create its `select` until the runtime places it.
@@ -196,7 +204,56 @@ A dynamic prop changes with its source, so a component needs no code to update a
 - JX-065: A rejected state, and an error that applying an output throws, MUST call `globalThis.reportError`.
   The element keeps its attribute or property, and the other dynamic props continue.
 - JX-066: A dynamic prop MUST keep its last output when its source finishes.
-  It stops when the unmount function of a `mount` around the element runs (JX-02A), or when its entry leaves `each` (JX-035).
+  It stops when the scope of the element stops (JX-081).
+
+## Scopes
+
+Each started element is a scope, and belongs to the scope above it.
+So the code that places an element passes the duty to stop it up the tree, to a `mount` or to an entry of `each`.
+An element that is not in the tree does no work, and continues when it comes back.
+So a component can keep the views that it built, and show one of them at a time.
+
+- JX-080: When an element starts a drive (JX-02B, JX-061), the runtime MUST bind it to the closest ancestor that is a scope.
+  It binds through the top: the child of that ancestor that holds the element, or the element itself.
+  `mount` MUST make `parent` a scope, and bind it the same way if an ancestor is a scope.
+  The binding does not change after that (JX-046).
+- JX-081: To stop a scope, the runtime MUST stop its drives and each scope bound to it, and end its binding.
+  The unmount function stops what is under the scope of `parent` (JX-02A), and a `mount` into a host does the same before it places (JX-020).
+  `each` stops the scopes of an entry that leaves (JX-035).
+  When the drives of an element all finish and no scope is bound to it, the runtime MUST end its binding.
+  It MUST then do the same for the scope above, if that scope drives nothing and holds no scope.
+  So a finished element is not retained.
+- JX-082: When a place removes a node, the runtime MUST park each scope that is bound through that node, and each scope under it.
+  When a place adds that node again, the runtime MUST resume them, except a scope whose own top is not in place, and the scopes under that one.
+  A place by a parked scope MUST NOT start a waiting element (JX-02B).
+  The resume of the scope starts it.
+  A drive that starts in a parked scope starts parked.
+- JX-083: A parked drive MUST apply the results of the pulls that are pending, and MUST NOT pull again until it resumes (SE-04C).
+  A drive that starts parked pulls nothing.
+  So a source keeps the values that the drive did not read, as its options say, and an `asend` waits.
+- JX-084: A drive that parks or resumes MUST tell each `each` that it drives.
+  That `each` MUST park or resume the drive of its entries.
+  A parked host does not pull its `each`, so the `each` replays the missed operations at the first pull after the resume.
+
+## Parts
+
+An output can hold dynamic children, so a component yields another component, and `derive` gives a component with no element around it.
+
+- JX-085: For each dynamic child in an output, the host MUST make a part, and add its source to the drive of the entry.
+  The nodes of the entry are the nodes of the output in order, with the nodes of each part at the place of its dynamic child.
+  JX-024 to JX-028 apply to a part.
+  A part can hold parts.
+  An async iterable is opened one time, at the first pull of its part.
+- JX-086: An entry keeps the parts that its outputs made, by source.
+  When an output does not hold a part of the output before it, the host MUST park that part and the parts in its last output.
+  A parked part follows JX-083.
+  When a later output of the same entry holds that source again, the host MUST use the same part, with its nodes, and resume it.
+  A part of a parked part starts parked.
+  A part that finished keeps its nodes.
+  The stop of the drive returns each unfinished part (SE-120), and `each` returns the parts of an entry that leaves or renders again.
+- JX-087: An output that holds the source of its entry, or of an entry around it, MUST call `globalThis.reportError` with a `TypeError`, and the entry MUST keep its nodes and its parts.
+  The same holds for an output with a child that fails to convert (JX-028).
+  Two sources that give each other have no defined result.
 
 ## Each
 
@@ -220,8 +277,10 @@ A component instance that finishes renders again with the next value of its item
   It MUST NOT call `render`, unless JX-03C applies.
 - JX-035: For an item that leaves the mirror, `each` MUST end its `Item` and stop the drive of its child.
   To end an `Item`, `each` MUST close its channel if it has one, and abort its `signal`.
-  `each` MUST then stop the drive of each host, and the dynamic props, that started in the nodes of the entry and in their descendants (JX-046).
-  So a row that leaves ends the dynamic children and the dynamic props inside it.
+  `each` MUST then stop each scope that is bound through a node of the entry (JX-080).
+  This includes a node that an earlier output of the child gave, if a scope is still bound through it.
+  It MUST also return each part that the outputs of the child made (JX-086).
+  So a row that leaves ends the dynamic children and the dynamic props inside it, also the ones that are parked.
 - JX-036: `each` MUST drive the dynamic children of its entries with one `select`, with `autoStart`, `nonYielding` and no `autoClose`.
   JX-024 to JX-028 apply.
 - JX-037: When the nodes of its entries changed after its last yield, `each` MUST yield a new array of the nodes of all entries in order.
@@ -279,9 +338,11 @@ Provide a `Channel` or a `select` for a value that changes.
 
 ## Limits
 
-- JX-040: The runtime does not end a dynamic child when its nodes leave the host.
-  A dynamic child ends when its source finishes, or when its host stops (JX-02A, JX-035).
-  So close the channels that a component reads to end the component, as `each` does.
+- JX-040: The runtime does not stop an element or a part when an output replaces it.
+  It parks them (JX-082, JX-086), and they stop with their scope (JX-081).
+  So a source that gives a new element for each output grows its scope, until the scope stops.
+  `derive` and `iff` stop what their `map` built (HE-059).
+  A generator component that builds a view for each value has no such owner, so wrap the view in `derive`.
   In `each`, a child that finishes renders again (JX-03C).
 - JX-041: An async generator queues `return()` behind a pending `next()`.
   So a component that waits on an open channel ends only when that channel closes, or at its next `yield`.
@@ -294,9 +355,10 @@ Provide a `Channel` or a `select` for a value that changes.
   It assigns the value as it is, so a `value` on a file input throws, as the DOM does.
 - JX-045: Other code that inserts a waiting element, for example with `append`, does not start it (JX-02B).
   Yield the element or make it a child, so that a host places it.
-- JX-046: `each` finds a started element through the ancestors that the element had when it started (JX-035).
-  So a started element that other code moves under a new ancestor inside its entry stays driven when the entry leaves.
-  It ends when its sources finish, or when an unmount function stops it (JX-02A).
+- JX-046: An element stays bound to the scope under which it started (JX-080).
+  So a started element that code moves into another entry or another host stops with the first scope.
+- JX-047: Only a place of the runtime parks and resumes (JX-082).
+  Other code that removes a node, for example with `remove`, parks nothing.
 
 ## Example
 

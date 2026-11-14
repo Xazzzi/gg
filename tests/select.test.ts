@@ -3398,3 +3398,44 @@ test("SE-070 a removed source does not keep the channel open", async () => {
   await setImmediate();
   assert.ok(s[CHAN].signal.aborted);
 });
+
+test("SE-04C a flush waits for a promise from the report hook before it pulls", async () => {
+  const queue = new Channel<number>();
+  let pulls = 0,
+    gate: PromiseWithResolvers<void> | undefined = Promise.withResolvers();
+  const source = {
+    [Symbol.asyncIterator]() {
+      const iterator = queue[Symbol.asyncIterator]();
+      return { next: () => (pulls++, iterator.next()) };
+    },
+  };
+  const seen: unknown[] = [];
+  const s = select(
+    { a: source },
+    {
+      autoStart: true,
+      nonYielding: true,
+      [REPORT]: ops => {
+        seen.push(...ops.map(op => (op as any).value.value));
+        return gate?.promise;
+      },
+    },
+  );
+  await setImmediate();
+  assert.equal(pulls, 0);
+  gate.resolve();
+  gate = undefined;
+  queue.send(1);
+  await setImmediate();
+  assert.equal(pulls, 2);
+  gate = Promise.withResolvers();
+  queue.send(2);
+  queue.send(3);
+  await setImmediate();
+  assert.equal(pulls, 2);
+  assert.deepEqual(seen, [undefined, 1, 2]);
+  s[CHAN].close();
+  gate.resolve();
+  await setImmediate();
+  assert.equal(pulls, 2);
+});

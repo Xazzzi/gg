@@ -51,7 +51,7 @@ export type SelectOptions<S, R> = ChannelOptions & {
   nonYielding?: boolean;
   unwrap?: boolean;
   mapSnapshot?: (snapshot: S) => R;
-  [REPORT]?: (ops: Op[]) => void;
+  [REPORT]?: (ops: Op[]) => unknown; // A promise holds the next pulls (JX-083)
 };
 
 type Returned<R> = 0 extends 1 & R
@@ -1379,7 +1379,8 @@ class Select {
       if (report) {
         this.#emit?.("report", report);
         this.#log.publish(report);
-        this.#hook?.(report);
+        const parked = this.#hook?.(report);
+        if (parked) await parked; // A parked drive holds the next pulls (JX-083)
       }
       if (this.#terminal) return;
       if (publish && !this.#nonYielding) {

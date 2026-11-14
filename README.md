@@ -103,6 +103,8 @@ for await (const { users } of state) if (users?.length) break;
 - `catching(source, onError)` wraps a source so a failure ends it quietly.
 - `derive(source, map)` maps each value of an async iterable, so a dynamic prop or child follows a computed value.
   When `map` reads one key of a `select`, use `derive(state, key, map)`, so `map` runs only when that key changes.
+- `iff(source, then, otherwise?)` gives one of two values for a truthy or falsy source, and calls a function branch at each change, so a `Channel<boolean>` gates a view or picks a prop value.
+  `derive` and `iff` stop the views that their map built, when the next output replaces them. A view that other code built is parked while it is out of the tree, and stops with the `mount` or the `each` entry above it.
 - `spread` turns `Val` fields into `kLoading`, `kError` and `kDone`, for `mapSnapshot: spread`.
 - `isVal(value)` tests for a `Val`, across copies of the library.
 - `applyOps(target, ops, map?, { eager })` replays operations onto a mirror, and `map` derives each entry.

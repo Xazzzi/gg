@@ -9,6 +9,7 @@ import {
   watch,
 } from "./select.ts";
 import {
+  building,
   checkOptions,
   detectStream,
   open,
@@ -123,22 +124,33 @@ export function catching<T>(
   };
 }
 
+export interface Derived<T>
+  extends AsyncIterableIterator<T, void, void>,
+    AsyncDisposable {
+  return(): Promise<IteratorResult<T, void>>;
+}
+
+/** Calls each stop function of a list. */
+const drop = (stops: (() => void)[]) => {
+  for (const stop of stops) stop();
+};
+
 /** Maps each output of one slot of a select, from `watch`, so the map runs only when that slot changes (HE-054). */
 export function derive<O, K extends Keys<O>, R>(
   state: Reads<O>,
   key: K,
   map: (value: SlotOutput<O, K>) => R,
-): AsyncGenerator<Awaited<R>, void, void>;
+): Derived<Awaited<R>>;
 /** Maps each value of an async iterable, so a dynamic prop or child follows a derived value. */
 export function derive<T, R>(
   source: AsyncIterable<T>,
   map: (value: T) => R,
-): AsyncGenerator<Awaited<R>, void, void>;
+): Derived<Awaited<R>>;
 export function derive(
   source: any,
   keyOrMap: unknown,
   mapper?: (value: unknown) => unknown,
-): AsyncGenerator<unknown, void, void> {
+): Derived<unknown> {
   const keyed = typeof keyOrMap !== "function",
     map = keyed ? mapper : (keyOrMap as (value: unknown) => unknown);
   if (typeof source?.[Symbol.asyncIterator] !== "function")
@@ -147,28 +159,131 @@ export function derive(
     throw new TypeError("derive map must be a function");
   if (keyed) source = watch(source, keyOrMap as PropertyKey); // SE-160 checks the state and the key
   const box: { emit?: Emit } = {},
-    generator = mapped(source, map, box);
-  box.emit = register("derive", generator, { source, map }); // Here, so the hook finds the caller at its fixed depth (DV-003)
-  return generator;
+    derived = mapped(source, map, box);
+  box.emit = register("derive", derived, { source, map }); // Here, so the hook finds the caller at its fixed depth (DV-003)
+  return derived;
 }
 
-/** Yields map(value) for each value of source, and opens source at the first next() (HE-051). */
-async function* mapped<T, R>(
-  source: AsyncIterable<T>,
-  map: (value: T) => R,
-  box: { emit?: Emit },
-) {
-  box.emit?.("start");
-  try {
-    for await (const value of source) {
-      const output = await map(value);
-      box.emit?.("value", output); // DV-061
-      yield output;
-    }
-  } finally {
-    box.emit?.("end");
-  }
+/** Gives `then` while the values of source are truthy and `otherwise` while they are not, and calls a function branch at each change to its side (HE-060). */
+export function iff<A, B = undefined>(
+  source: AsyncIterable<unknown>,
+  then: A | (() => A),
+  otherwise?: B | (() => B),
+): Derived<Awaited<A | B>> {
+  if (typeof source?.[Symbol.asyncIterator] !== "function")
+    throw new TypeError("iff source is not an async iterable");
+  let last: boolean | undefined;
+  const map = (value: unknown) => {
+      const branch = value ? then : otherwise;
+      return typeof branch === "function"
+        ? (branch as () => unknown)()
+        : branch;
+    },
+    box: { emit?: Emit } = {},
+    derived = mapped(source, map, box, value => last !== (last = !!value));
+  box.emit = register("derive", derived, { source, map }); // DV-003
+  return derived as Derived<Awaited<A | B>>;
 }
+
+/**
+ * Maps each value of source that pass takes, as an iterator whose `return()` acts at once.
+ * HE-053 and HE-055 rule out a plain async generator here, as for catching. */
+const mapped = (
+  source: AsyncIterable<unknown>,
+  map: (value: unknown) => unknown,
+  box: { emit?: Emit },
+  pass?: (value: unknown) => boolean,
+): Derived<unknown> => {
+  const pending: PromiseWithResolvers<IteratorResult<unknown, void>>[] = [];
+  let iterator: any,
+    started = false,
+    finished = false,
+    last: unknown,
+    made: (() => void)[] = []; // What stops the elements that map built for the last output (HE-059)
+
+  const over = () => end() as IteratorReturnResult<void>;
+
+  /** Ends the derive, and tells devtools if it had started (DV-062). */
+  const finish = () => {
+    finished = true;
+    if (started) box.emit?.("end");
+  };
+
+  /** Reads one value from the source and maps it, and opens the source at the first call (HE-051). */
+  const step = async (): Promise<IteratorResult<unknown, void>> => {
+    if (finished) return over();
+    let mapping = false;
+    try {
+      if (!started) {
+        started = true;
+        box.emit?.("start");
+        iterator = source[Symbol.asyncIterator]();
+      }
+      let result: IteratorResult<unknown>;
+      do {
+        result = await iterator.next();
+        if (finished) return over(); // return() arrived first, so map does not run
+        if (result.done) {
+          finish();
+          return over();
+        }
+      } while (pass && !pass(result.value));
+      mapping = true;
+      const [output, fresh] = building(() => map(result.value)),
+        settled = await output;
+      // A repeat of the last output keeps its elements, and a discarded output keeps none.
+      if (finished || Object.is(settled, last)) drop(fresh);
+      else {
+        drop(made);
+        made = fresh;
+      }
+      if (finished) return over();
+      last = settled;
+      box.emit?.("value", settled); // DV-061
+      return { done: false, value: settled };
+    } catch (error) {
+      if (finished) return over(); // return() arrived first, so the late failure is discarded
+      finish();
+      if (mapping) void quietReturn(iterator); // HE-057
+      throw error;
+    }
+  };
+
+  /** Serves the queued `next()` calls one at a time, in order. */
+  const pump = () => {
+    const request = pending[0];
+    step()
+      .then(request.resolve, request.reject)
+      .then(() => {
+        pending.shift();
+        if (pending.length) pump();
+      });
+  };
+
+  const derived: Derived<unknown> = {
+    next() {
+      const request = Promise.withResolvers<IteratorResult<unknown, void>>();
+      if (pending.push(request) === 1) pump();
+      return request.promise;
+    },
+    async return() {
+      if (!finished) {
+        finish();
+        drop(made);
+        for (const request of pending.splice(0)) request.resolve(over());
+        if (typeof iterator?.return === "function") await iterator.return();
+      }
+      return over();
+    },
+    async [Symbol.asyncDispose]() {
+      await derived.return();
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+  return derived;
+};
 
 /** Tells if a value is a `Val` that select made. */
 export function isVal(value: unknown): value is Val<unknown> {

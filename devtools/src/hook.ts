@@ -781,11 +781,17 @@
   };
 
   const hook = (
-    kind: GG.Kind | "item" | "reader",
+    kind: GG.Kind | "item" | "reader" | "part",
     target: object,
     detail: any,
   ) => {
     if (kind === "item") return void link(target, detail.channel); // DV-044
+    // A host reads a dynamic child of an output through a part, so the slot of the part links to the child (DV-047).
+    if (kind === "part") {
+      const e = byTarget.get(detail.source);
+      if (e) byTarget.set(target, e);
+      return undefined;
+    }
     if (kind === "reader")
       try {
         return readerHook(target, detail);

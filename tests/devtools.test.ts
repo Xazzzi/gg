@@ -572,13 +572,14 @@ test("DV-003 DV-046 an item registers once at its first iteration, owned by its 
   }
 });
 
-test("DV-044 the library ignores what the hook returns for mount, each and item", async () => {
+test("DV-044 the library ignores what the hook returns for mount, each, item and part", async () => {
   g[HOOK] = (kind: string) =>
-    ["mount", "each", "item"].includes(kind)
+    ["mount", "each", "item", "part"].includes(kind)
       ? () => assert.fail("emitted")
       : undefined;
   try {
     mount(el(), Promise.resolve("x"));
+    mount(el(), Promise.resolve([new Channel()]) as any);
     const state = select(["a"], open);
     const it = each(state, item => Promise.resolve(`${item}`));
     await it.next();
@@ -592,6 +593,32 @@ test("DV-044 the library ignores what the hook returns for mount, each and item"
     await setImmediate();
   } finally {
     delete g[HOOK];
+  }
+});
+
+test("DV-047 DV-052 a host registers a part for a dynamic child of an output, and pulls the child as the source", async () => {
+  const { log, details, off } = install();
+  try {
+    const ch = new Channel<number>(),
+      settled = Promise.resolve("p");
+    async function* Reads() {
+      void ch[Symbol.asyncIterator]().next();
+      yield "x";
+    }
+    const result = jsx(Reads, {}) as object;
+    mount(el(), Promise.resolve([result, settled]) as any);
+    await setImmediate();
+    const parts = [...details].filter(([, d]) => "source" in d && !d.map);
+    assert.equal(parts.length, 1);
+    assert.equal(parts[0][1].source, result);
+    assert.notEqual(parts[0][0], result);
+    assert.equal(log.filter(([kind]) => kind === "part").length, 1);
+    const attach = log.find(
+      ([kind, event]) => kind === "channel" && event === "attach",
+    );
+    assert.equal(attach?.[3], result);
+  } finally {
+    off();
   }
 });
 
@@ -836,13 +863,47 @@ test("DV-002 DV-060 DV-061 DV-062 derive registers its source and map, and emits
       ["derive", "value", 2],
       ["derive", "end"],
     ]);
-    const early = derive(new Channel<number>(), map);
-    await early.return(undefined);
-    assert.equal(
+    const ends = () =>
       log.filter(([kind, event]) => kind === "derive" && event === "end")
+        .length;
+    const early = derive(new Channel<number>(), map);
+    await early.return();
+    assert.equal(ends(), 1);
+    // A return during a pending read ends one time, also when the source or map settles later.
+    const late = Promise.withResolvers<IteratorResult<number>>(),
+      slow = { [Symbol.asyncIterator]: () => ({ next: () => late.promise }) },
+      stopped = derive(slow, map);
+    const read = stopped.next();
+    await stopped.return();
+    await stopped.return();
+    assert.equal(ends(), 2);
+    late.reject(new Error("late"));
+    await read;
+    const mapped = Promise.withResolvers<number>(),
+      other = new Channel<number>(),
+      slowMap = derive(other, () => mapped.promise);
+    other.send(1);
+    const pending = slowMap.next();
+    await setImmediate();
+    await slowMap.return();
+    mapped.resolve(1);
+    await pending;
+    await setImmediate();
+    assert.equal(ends(), 3);
+    assert.equal(
+      log.filter(([kind, event]) => kind === "derive" && event === "value")
         .length,
       1,
     );
+    // A failure of map ends one time.
+    const thrower = new Channel<number>();
+    thrower.send(1);
+    await assert.rejects(
+      derive(thrower, () => {
+        throw new Error("x");
+      }).next(),
+    );
+    assert.equal(ends(), 4);
   } finally {
     off();
   }

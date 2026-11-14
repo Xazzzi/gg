@@ -6,9 +6,11 @@ import {
   ends,
   isDynamic,
   LIVE,
+  quitSource,
   toNodes,
   unmount,
 } from "./host.ts";
+import { record } from "./source.ts";
 
 export type Static =
   | Node
@@ -97,6 +99,7 @@ export function jsx(
       const emit = register("component", result, { type, props });
       // Stryker disable next-line ConditionalExpression: an undefined emitter only costs a WeakMap entry
       if (emit) ends.set(result, emit);
+      if (isDynamic(result)) record(() => quitSource(result)); // HE-059
     }
     return result;
   }

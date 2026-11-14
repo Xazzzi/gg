@@ -68,6 +68,10 @@ These words have one meaning in all specs:
 - The root exports the JSX runtime too, because it adds little to a bundle, and `sideEffects: false` lets a bundler drop it. The `@xazzzi/gg/jsx-runtime` entry exists for the JSX transform. The runtime has no virtual DOM. A component instance changes its own nodes, `select` drives the instances, and `each` replays a reader of `changes` with `applyOps`.
 - `each` is a dynamic child, so it shares a host with other children and owns only its own nodes.
 - A host tracks dynamic children by key, not by index, because an index write to a `select` replaces the source (SE-088).
+- The code that builds a view owns it. `derive` and `iff` stop what their `map` built, when the next output replaces it. A node that other code built is only parked when it leaves the tree, so a component can keep views and show one of them.
+- Each started element is a scope under the `mount` or the `each` entry above it, so a view that is out of the tree still stops with that scope. The runtime has no public function to stop one node.
+- A parked element does no work, because no code observes a node that is not in the tree.
+- An output can hold dynamic children. The host drives them as parts of the entry.
 
 ## Defaults
 
@@ -114,5 +118,5 @@ The package MUST set `sideEffects: false`, so that a bundler can remove unused h
 | `channel.md` | `Channel`, `latest`, `StopError`                                                                   | `ChannelOptions`, `FirstReceive`, `ThenReceive`, `StopStyle`, `AckStyle`                          |
 | `feed.md`    | `feed`                                                                                             | `Source`, `FeedOptions`                                                                           |
 | `select.md`  | `select`, `changes`, `outputs`, `watch`, `CHAN`                                                    | `SelectShape`, `SelectOptions`, `Snapshot`, `Unwrapped`, `State`, `Val`, `Op`, `Changes`, `Watch` |
-| `helpers.md` | `abortable`, `applyOps`, `catching`, `derive`, `isVal`, `spread`                                   | `Caught`, `Spread`                                                                                |
+| `helpers.md` | `abortable`, `applyOps`, `catching`, `derive`, `iff`, `isVal`, `spread`                            | `Caught`, `Derived`, `Spread`                                                                     |
 | `jsx.md`     | `jsx`, `jsxs`, `jsxDEV`, `Fragment`, `mount`, `each`, `createContext`, `Provide`, `consume`, `use` | `Static`, `Dynamic`, `Child`, `Props`, `Item`, `Context`, `JSX` (also entry `./jsx-runtime`)      |

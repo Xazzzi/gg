@@ -81,6 +81,8 @@ export const replace = <V>(
   count: number,
   items: V[],
 ) => {
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: the pushes give the same list, with more copies
+  if (items.length < 1024) return list.splice(start, count, ...items);
   const rest = list.splice(start),
     removed = rest.splice(0, count);
   for (const item of items.concat(rest)) list.push(item);

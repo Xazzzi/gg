@@ -301,6 +301,10 @@ Without `map`, `applyOps` stores each output unchanged.
   If the output of that entry is the `Object.is` same value, the value MUST reuse that entry, with no `map` call.
   Otherwise that entry is `prev`.
   So a `splice` that keeps values, such as a filter, moves their entries and calls no `map`.
+- HE-04I: Without `eager`, `applyOps` MUST NOT read an array index before the first index that `ops` touch.
+  If the length stays, it MUST NOT read an index after the last one either.
+  A `move` touches every index.
+  With only `set` operations, it MUST read only the indexes that they name.
 
 `applyOps` writes `target` with plain assignment and array methods.
 So a reactive array or object sees each change.

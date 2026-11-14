@@ -1,6 +1,6 @@
 import { Channel } from "./channel.ts";
 import { owned, register } from "./devtools.ts";
-import { applyOps } from "./helpers.ts";
+import { applyOps, untouched } from "./helpers.ts";
 import {
   applyOutput,
   converted,
@@ -19,6 +19,7 @@ type Kept = Entry & {
   item: unknown;
   finished?: boolean;
   sent?: boolean;
+  round?: number; // The last structural read that kept the entry
 };
 
 /** The item that `each` gives `render`, with its current value, its later values and its end. */
@@ -130,6 +131,7 @@ async function* replay<T>(
     stale: Kept[] = [];
   let fresh: Kept[] = [],
     dirty = true,
+    round = 0,
     woke = Promise.withResolvers<void>();
   // A child that ends after a send may have missed it, so it restarts at once.
   const host = drive(
@@ -183,18 +185,22 @@ async function* replay<T>(
    * Replays a read onto the entries, and closes the entries that leave.
    * A read with only set operations sends values, and adds and removes no entry. */
   const apply = (ops: Op[]) => {
-    const before = ops.some(op => op.op !== "set") && [...entries];
+    if (ops.every(op => op.op === "set")) return applyOps(entries, ops, map);
+    // An entry can leave only from between the entries that no operation touches.
+    const [head, tail] = untouched(ops, entries.length),
+      before = entries.slice(head, entries.length - tail);
     applyOps(entries, ops, map);
-    if (before) {
-      const kept = new Set(entries);
-      for (const entry of before)
-        if (!kept.has(entry)) {
-          leave(entry.handle);
-          host.remove(entry);
-          entry.nodes.forEach(release);
-        }
-      dirty = true;
-    }
+    // Stryker disable next-line UpdateOperator: rounds only need to differ
+    round++;
+    for (let i = entries.length - tail; i-- > head; )
+      (entries[i] as Kept).round = round;
+    for (const entry of before)
+      if (entry.round !== round) {
+        leave(entry.handle);
+        host.remove(entry);
+        entry.nodes.forEach(release);
+      }
+    dirty = true;
   };
   const reader = owned(self, () => changes(state)); // DV-043
   signal.addEventListener("abort", () => woke.resolve());
@@ -209,7 +215,9 @@ async function* replay<T>(
       fresh = [];
       if (dirty) {
         dirty = false;
-        const nodes = entries.flatMap(entry => entry.nodes);
+        const nodes: Node[] = [];
+        for (const entry of entries)
+          for (const node of entry.nodes) nodes.push(node);
         // Stryker disable next-line CallExpression: a conversion gives the same nodes
         converted.add(nodes);
         yield nodes;

@@ -1,4 +1,5 @@
 import { latest, select } from "@xazzzi/gg";
+import { pull } from "./fmm.ts";
 
 export type Body = {
   id: number;
@@ -13,11 +14,11 @@ export type Stats = { tick: number; count: number; speed: number };
 export type Sim = ReturnType<typeof createSim>;
 
 // The star sits at the origin, and a body of radius r has mass G * r³.
+// A mass pulls with its mass over the distance, as in two dimensions, so orbits stay bound.
 export const STAR = 18;
-const GM = 5000,
-  G = 0.5,
+const GM = 49,
+  G = 0.0049,
   SOFT = 25,
-  EDGE = 450,
   SUBSTEPS = 4;
 
 let ids = 0;
@@ -25,7 +26,7 @@ let ids = 0;
 const orbit = (): Body => {
   const d = 60 + Math.random() * 200,
     a = Math.random() * 2 * Math.PI,
-    v = Math.sqrt(GM / d) * (0.9 + Math.random() * 0.15);
+    v = Math.sqrt(GM) * (0.9 + Math.random() * 0.15);
   return {
     id: ids++,
     x: d * Math.cos(a),
@@ -38,23 +39,20 @@ const orbit = (): Body => {
 };
 
 /** Advances each body by dt frames under the star and the other bodies. */
-const gravity = (list: Body[], dt = 1 / SUBSTEPS) =>
-  list.map(b => {
-    const k = -GM / (b.x ** 2 + b.y ** 2) ** 1.5;
-    let ax = k * b.x,
-      ay = k * b.y;
-    for (const o of list) {
-      if (o === b) continue;
-      const dx = o.x - b.x,
-        dy = o.y - b.y,
-        f = (G * o.r ** 3) / (dx * dx + dy * dy + SOFT) ** 1.5;
-      ax += f * dx;
-      ay += f * dy;
-    }
-    const vx = b.vx + ax * dt,
-      vy = b.vy + ay * dt;
+const gravity = (list: Body[], dt = 1 / SUBSTEPS) => {
+  const { ax, ay } = pull(
+    list.map(b => b.x),
+    list.map(b => b.y),
+    list.map(b => G * b.r ** 3),
+    SOFT,
+  );
+  return list.map((b, i) => {
+    const k = -GM / (b.x ** 2 + b.y ** 2),
+      vx = b.vx + (ax[i] + k * b.x) * dt,
+      vy = b.vy + (ay[i] + k * b.y) * dt;
     return { ...b, x: b.x + vx * dt, y: b.y + vy * dt, vx, vy };
   });
+};
 
 /** Runs bodies around a star on animation frames, with no knowledge of any view. */
 export const createSim = (count = 12) => {
@@ -64,9 +62,11 @@ export const createSim = (count = 12) => {
     nonYielding: true,
   });
   const running = latest<boolean>(),
-    stats = latest<Stats>();
+    stats = latest<Stats>(),
+    pace = latest<number>();
   let tick = 0,
-    frame = 0;
+    frame = 0,
+    rate = 1;
   const publish = () => {
     const list = [...bodies];
     const speed = list.reduce((sum, b) => sum + Math.hypot(b.vx, b.vy), 0);
@@ -74,14 +74,12 @@ export const createSim = (count = 12) => {
   };
   const advance = () => {
     let next = [...bodies];
-    for (let i = 0; i < SUBSTEPS; i++) next = gravity(next);
+    for (let i = 0; i < SUBSTEPS; i++) next = gravity(next, rate / SUBSTEPS);
     // A write per index gives each row its new value, and keeps the row.
     for (const [i, b] of next.entries()) bodies[i] = b;
-    // Bodies that hit the star or escape leave from the end, so lower indexes stay valid.
-    for (let i = next.length; i--; ) {
-      const d = Math.hypot(next[i].x, next[i].y);
-      if (d < STAR || d > EDGE) bodies.splice(i, 1);
-    }
+    // Bodies that hit the star leave from the end, so lower indexes stay valid.
+    for (let i = next.length; i--; )
+      if (Math.hypot(next[i].x, next[i].y) < STAR) bodies.splice(i, 1);
     tick++;
     publish();
   };
@@ -99,18 +97,38 @@ export const createSim = (count = 12) => {
     frame = 0;
     running.send(false);
   };
+  const add = (n: number) => {
+    bodies.push(...Array.from({ length: n }, orbit));
+    publish();
+  };
   running.send(false);
+  pace.send(rate);
   publish();
   return {
     bodies,
     running,
     stats,
+    pace,
+    /** Sets the frames that one step advances. */
+    setPace: (value: number) => pace.send((rate = value)),
+    /** Adds bodies or removes them from the end, to have n. */
+    resize(n: number) {
+      if (n > bodies.length) add(n - bodies.length);
+      else if (n < bodies.length) {
+        bodies.splice(n, bodies.length - n);
+        publish();
+      }
+    },
     start,
     stop,
     toggle: () => (frame ? stop() : start()),
     step: () => frame || advance(),
-    add(n = 5) {
+    add(n = 50) {
       bodies.push(...Array.from({ length: n }, orbit));
+      publish();
+    },
+    remove(n = 50) {
+      bodies.splice(0, n);
       publish();
     },
   };

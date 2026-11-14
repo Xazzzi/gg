@@ -129,6 +129,7 @@ const arrange = (
   for (const node of leave) node.remove();
   const at: number[] = [],
     seq: number[] = [],
+    // Stryker disable next-line ArrayDeclaration: a value that is not a node wakes nothing
     added: Node[] = [];
   want.forEach((node, i) => {
     const n = old.get(node);

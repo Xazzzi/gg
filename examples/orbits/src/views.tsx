@@ -1,4 +1,4 @@
-import { derive, each, type Item } from "@xazzzi/gg";
+import { derive, each, type Item, latest } from "@xazzzi/gg";
 import { type Body, type Sim, STAR, type Stats } from "./sim.ts";
 
 const TRAIL = 60,
@@ -32,31 +32,49 @@ const Planet = ({ body }: { body: Item<Body> }) => {
 
 // A plain function component, because its children update themselves.
 // title is an HTML tag too, so it needs xmlns to be an SVG title (JX-001).
-export const Orrery = ({ sim }: { sim: Sim }) => (
-  <svg viewBox="-300 -300 600 600">
-    <title xmlns={SVG}>Bodies orbiting a star</title>
-    <defs>
-      <radialGradient id="glow">
-        <stop offset="0" stop-color="#fff6c0" />
-        <stop offset="0.35" stop-color="#ffb000" stop-opacity="0.6" />
-        <stop offset="1" stop-color="#ff6000" stop-opacity="0" />
-      </radialGradient>
-      <filter id="soft">
-        <feGaussianBlur stdDeviation="1.5" />
-      </filter>
-    </defs>
-    <circle r="70" fill="url(#glow)" />
-    <circle r={STAR} fill="#fff2b0" filter="url(#soft)" />
-    <g>
-      {each(sim.bodies, body => (
-        <Planet body={body} />
-      ))}
-    </g>
-    <text x="-290" y="-280">
-      {derive(sim.stats, s => `t ${s.tick}`)}
-    </text>
-  </svg>
-);
+export const Orrery = ({ sim }: { sim: Sim }) => {
+  const zoom = latest<number>();
+  let scale = 1;
+  zoom.send(scale);
+  // The wheel scales the view about the star, within a range.
+  const wheel = (e: WheelEvent) => {
+    e.preventDefault();
+    zoom.send(
+      (scale = Math.min(8, Math.max(0.2, scale * Math.exp(-e.deltaY * 0.001)))),
+    );
+  };
+  return (
+    <svg
+      viewBox={derive(
+        zoom,
+        z => `${-300 / z} ${-300 / z} ${600 / z} ${600 / z}`,
+      )}
+      onwheel={wheel}
+    >
+      <title xmlns={SVG}>Bodies orbiting a star</title>
+      <defs>
+        <radialGradient id="glow">
+          <stop offset="0" stop-color="#fff6c0" />
+          <stop offset="0.35" stop-color="#ffb000" stop-opacity="0.6" />
+          <stop offset="1" stop-color="#ff6000" stop-opacity="0" />
+        </radialGradient>
+        <filter id="soft">
+          <feGaussianBlur stdDeviation="1.5" />
+        </filter>
+      </defs>
+      <circle r="70" fill="url(#glow)" />
+      <circle r={STAR} fill="#fff2b0" filter="url(#soft)" />
+      <g>
+        {each(sim.bodies, body => (
+          <Planet body={body} />
+        ))}
+      </g>
+      <text x="-290" y="-280">
+        {derive(sim.stats, s => `t ${s.tick}`)}
+      </text>
+    </svg>
+  );
+};
 
 // Yields a new line per sample, so an unmount ends it at the next sample (JX-041).
 async function* Speed({ stats }: { stats: AsyncIterable<Stats> }) {

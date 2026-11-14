@@ -307,6 +307,28 @@ const checkFit = (op: Op, array: boolean) => {
 };
 
 /**
+ * Checks that each operation fits an array, and counts the entries at its start and at its end that none touches.
+ * A move touches every entry, and a set past the end grows the array. */
+export const untouched = (ops: readonly Op[], size: number) => {
+  let head = size,
+    tail = size;
+  for (const op of ops) {
+    checkFit(op, true);
+    const [start, count] =
+      op.op === "set"
+        ? [op.key as number, 1]
+        : op.op === "splice"
+          ? [op.start, op.removed.length]
+          : [0, size];
+    size = Math.max(size, start + count);
+    head = Math.min(head, start);
+    tail = Math.min(tail, size - start - count);
+    if (op.op === "splice") size += op.added.length - count;
+  }
+  return [head, tail] as const;
+};
+
+/**
  * Folds ops that are all sets, and reads only the indexes that they name.
  * An index keeps its entry when its last value is the output that it had (HE-04H). */
 const foldSets = (target: any[], ops: readonly Op[], map: any) => {
@@ -340,7 +362,10 @@ const foldSets = (target: any[], ops: readonly Op[], map: any) => {
  * Replays ops onto cells first, so each value that lands takes over a leaving cell by value (HE-04H) or by position.
  * Then reuses the entry of a value that comes back, and maps each other value one time. */
 const foldArray = (target: any[], ops: readonly Op[], map: any) => {
-  const cells: Cell[] = target.map(entry => ({ entry })),
+  // Only the entries between the untouched ones get a cell, so a short change of a long array stays short.
+  const [head, tail] = untouched(ops, target.length),
+    was = target.length - head - tail,
+    cells: Cell[] = target.slice(head, head + was).map(entry => ({ entry })),
     left = new Map<unknown, Cell[]>();
   /** Gives a cell that leaves its index the output it had, which for a fresh cell is its own value. */
   const leave = (cell: Cell | undefined, value: unknown) => {
@@ -359,15 +384,14 @@ const foldArray = (target: any[], ops: readonly Op[], map: any) => {
       if (!cell.taken) return take(cell);
   };
   for (const op of ops) {
-    checkFit(op, true);
-    if (op.op === "set")
-      cells[op.key as number] = incoming(
-        op.value,
-        take(leave(cells[op.key as number], op.prev)),
-      );
-    else if (op.op === "move") relocate(cells, op.order);
+    if (op.op === "set") {
+      const at = (op.key as number) - head;
+      cells[at] = incoming(op.value, take(leave(cells[at], op.prev)));
+    } else if (op.op === "move")
+      relocate(cells, op.order); // A move leaves no entry untouched, so cells hold the whole target
     else {
-      const { start, removed, added } = op as Extract<Op, { op: "splice" }>,
+      const { removed, added } = op as Extract<Op, { op: "splice" }>,
+        start = (op as Extract<Op, { op: "splice" }>).start - head,
         count = removed.length,
         gone = cells.slice(start, start + count);
       gone.forEach((cell, index) => {
@@ -390,19 +414,19 @@ const foldArray = (target: any[], ops: readonly Op[], map: any) => {
   /** Gives the original cell at the start of a chain of fresh cells. */
   const origin = (cell: Cell): Cell | undefined =>
     cell?.fresh ? origin(cell.prev) : cell;
-  // Relocating a hole makes it an undefined cell, which reads as an undefined entry (HE-04G).
-  const items = cells.map(cell => {
+  // A hole in the cells reads as an undefined entry (HE-04G).
+  const items = Array.from(cells, cell => {
     if (!cell?.fresh) return cell?.entry;
     const from = origin(cell.prev);
     return from && Object.is(from.value, cell.value)
       ? from.entry
       : map(cell.value, from?.entry);
   });
-  items.forEach((item, index) => {
-    if (index >= target.length || !Object.is(target[index], item))
-      target[index] = item;
-  });
-  target.length = items.length;
+  const common = Math.min(was, items.length);
+  for (let i = 0; i < common; i++)
+    if (!Object.is(target[head + i], items[i])) target[head + i] = items[i];
+  if (was !== items.length)
+    replace(target, head + common, was - common, items.slice(common));
   return target;
 };
 
@@ -458,8 +482,7 @@ export function applyOps(
     return (
       !array
         ? foldObject
-        : // Stryker disable next-line ConditionalExpression,ArrowFunction: foldArray gives the same target, and walks all of it
-          ops.every(op => op.op === "set")
+        : ops.every(op => op.op === "set")
           ? foldSets
           : foldArray
     )(target, ops, map);

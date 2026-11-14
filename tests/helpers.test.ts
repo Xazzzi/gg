@@ -1072,7 +1072,7 @@ test("HE-04E lazy writes only the indexes that changed", () => {
   assert.equal(grown.length, 1);
   assert.equal(applyOps(["a"] as unknown[], [set(1, undefined)]).length, 2);
   applyOps(target, [set(1, "y"), cut(3, 0)]);
-  assert.deepEqual(writes, ["1", "length"]);
+  assert.deepEqual(writes, ["1"]);
 });
 
 test("HE-04B HE-04C HE-04H lazy sets map in index order, one time for each index that changes", () => {
@@ -1168,6 +1168,35 @@ test("HE-04G lazy treats a hole as an undefined entry, as eager does", () => {
     return value;
   });
   assert.deepEqual(seen, []);
+});
+
+test("HE-04A a splice that shrinks the array moves the end that later operations touch", () => {
+  const ops = [cut(0, 2), set(1, "v")];
+  assert.deepEqual(applyOps(["a", "b", "c", "d"], ops), ["c", "v"]);
+  const grown = [cut(0, 0, "x", "y"), set(5, "v")];
+  assert.deepEqual(applyOps(["a", "b", "c", "d"], grown), "xyabcv".split(""));
+});
+
+test("HE-04I lazy reads only the indexes between the first and the last that operations touch", () => {
+  const reads = new Set<number>();
+  const watched = (list: unknown[]) => {
+    reads.clear();
+    const read = (key: PropertyKey) =>
+      typeof key === "string" && /^\d+$/.test(key) && reads.add(+key);
+    return new Proxy(list, {
+      get: (target, key) => (read(key), Reflect.get(target, key)),
+      has: (target, key) => (read(key), Reflect.has(target, key)),
+      getOwnPropertyDescriptor: (target, key) => (
+        read(key), Reflect.getOwnPropertyDescriptor(target, key)
+      ),
+    });
+  };
+  const list = watched(["a", "b", "c", "d", "e"]);
+  applyOps(list, [cut(1, 1, "x"), set(2, "y")]);
+  assert.deepEqual([...reads].sort(), [1, 2]);
+  assert.deepEqual([...list], ["a", "x", "y", "d", "e"]);
+  applyOps(watched(["a", "b", "c", "d", "e"]), [set(1, "x"), set(3, "y")]);
+  assert.deepEqual([...reads].sort(), [1, 3]);
 });
 
 test("HE-04F an index ends below the maximum array length", () => {

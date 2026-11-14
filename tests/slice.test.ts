@@ -94,6 +94,22 @@ test("SE-151 SE-153 an object slice reads the set and delete operations of its k
   assert.deepEqual(applyOps({ ...r.outputs }, value), { a: 6 });
 });
 
+test("SE-153 a slice of several keys reads their operations in report order", async () => {
+  const reports: Op[][] = [];
+  const s = await started(
+    select({ a: 1, b: 2 } as Record<string, number>, {
+      ...open,
+      onChanges: ops => void reports.push(ops),
+    }),
+  );
+  const next = changes(s, ["a", "b"]).next();
+  s.b = 3;
+  s.a = 4;
+  s.b = 5;
+  const { value = [] } = await next;
+  assert.deepEqual(value, reports.at(-1));
+});
+
 test("SE-152 before start, a slice has empty outputs, and the object description sets its keys", async () => {
   const s = select({ a: 1, b: 2 }, { autoClose: false, nonYielding: true });
   const r = changes(s, ["b"]);

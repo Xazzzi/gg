@@ -30,9 +30,34 @@ mount(
   <button type="button" onclick={() => sim.step()}>
     Step
   </button>,
-  <button type="button" onclick={() => sim.add()}>
-    Add 5
+  <button type="button" onclick={() => sim.add(5)}>
+    +50
   </button>,
+  <button type="button" onclick={() => sim.remove()}>
+    -50
+  </button>,
+  <label>
+    Bodies
+    <input
+      type="range"
+      min="0"
+      max="1000"
+      value={derive(sim.stats, s => s.count)}
+      oninput={e => sim.resize(e.currentTarget.valueAsNumber)}
+    />
+  </label>,
+  <label>
+    Time step
+    <input
+      type="range"
+      min="0.1"
+      max="3"
+      step="0.1"
+      value={sim.pace}
+      oninput={e => sim.setPace(e.currentTarget.valueAsNumber)}
+    />
+    {derive(sim.pace, p => p.toFixed(1))}
+  </label>,
   <button type="button" class="view" onclick={orrery.toggle}>
     {derive(orrery.shown, label)} orrery
   </button>,

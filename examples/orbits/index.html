@@ -7,26 +7,44 @@
     <style>
       body {
         margin: 0;
-        padding: 16px;
-        display: grid;
-        gap: 12px;
-        justify-items: center;
+        height: 100vh;
+        overflow: hidden;
         font: 14px system-ui, sans-serif;
         background: #0b0d17;
         color: #cdd3e0;
       }
+      /* The orrery fills the page, and the rest float over it */
+      .orrery {
+        position: fixed;
+        inset: 0;
+      }
       .controls,
-      .status {
-        width: min(92vw, 600px);
+      .status,
+      .chart {
+        position: fixed;
+        left: 12px;
+        box-sizing: border-box;
+        width: min(calc(100vw - 24px), 420px);
+        padding: 8px;
+        background: rgb(11 13 23 / 0.7);
+        border: 1px solid #262c44;
+        border-radius: 6px;
+        backdrop-filter: blur(4px);
       }
       .controls {
+        top: 12px;
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
       }
       .status {
+        bottom: 124px;
         margin: 0;
         font-variant-numeric: tabular-nums;
+      }
+      .chart {
+        bottom: 12px;
+        height: 100px;
       }
       button {
         font: inherit;
@@ -37,23 +55,18 @@
         border-radius: 4px;
         cursor: pointer;
       }
+      label {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        font-variant-numeric: tabular-nums;
+      }
       /* Fixed widths, so a label that changes moves no other button */
       .run {
         width: 5em;
       }
       .view {
         width: 9em;
-      }
-      .orrery,
-      .chart {
-        width: min(92vw, 600px);
-        border: 1px dashed #262c44;
-      }
-      .orrery {
-        aspect-ratio: 1;
-      }
-      .chart {
-        height: 100px;
       }
       svg {
         display: block;
@@ -63,6 +76,7 @@
       .trail {
         fill: none;
         opacity: 0.45;
+        vector-effect: non-scaling-stroke;
       }
       .line {
         fill: none;
@@ -76,9 +90,9 @@
     </style>
   </head>
   <body>
+    <section class="orrery"></section>
     <div class="controls"></div>
     <p class="status"></p>
-    <section class="orrery"></section>
     <section class="chart"></section>
     <script type="module" src="dist/main.js"></script>
   </body>

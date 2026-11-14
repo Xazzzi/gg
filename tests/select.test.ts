@@ -13,6 +13,7 @@ import {
   spread,
   type Val,
 } from "../src/index.ts";
+import { REPORT } from "../src/select.ts";
 
 const iter = (s: any) => s[Symbol.asyncIterator]();
 const pendingVal = {
@@ -43,10 +44,10 @@ const opLog = () => {
   const ops: Op[] = [];
   // A hidden ops field, so a spread of the log gives only options (SE-008).
   return Object.defineProperty(
-    { onChanges: (list: Op[]) => void ops.push(...list) },
+    { [REPORT]: (list: Op[]) => void ops.push(...list) },
     "ops",
     { value: ops },
-  ) as { ops: Op[]; onChanges: (list: Op[]) => void };
+  ) as { ops: Op[]; [REPORT]: (list: Op[]) => void };
 };
 
 const replay = (ops: Op[], base: any) => {
@@ -182,16 +183,14 @@ test("SE-007 options of the wrong type throw, and undefined selects the default"
   ])
     for (const value of [1, "yes", null, {}])
       assert.throws(() => select({}, { [key]: value } as any), TypeError);
-  for (const key of ["onChanges", "mapSnapshot"])
-    for (const value of [1, "x", null, {}])
-      assert.throws(() => select({}, { [key]: value } as any), TypeError);
+  for (const value of [1, "x", null, {}])
+    assert.throws(() => select({}, { mapSnapshot: value } as any), TypeError);
   const undefineds: any = {
     autoStart: undefined,
     autoClose: undefined,
     backPressure: undefined,
     nonYielding: undefined,
     unwrap: undefined,
-    onChanges: undefined,
     mapSnapshot: undefined,
   };
   assert.deepEqual(
@@ -685,7 +684,7 @@ test("SE-030 SE-031 SE-032 start timing", async () => {
       autoStart: true,
       backPressure: false,
       autoClose: false,
-      onChanges: () => void log.push("flush"),
+      [REPORT]: () => void log.push("flush"),
     },
   );
   log.push("called");
@@ -923,7 +922,7 @@ test("SE-040 changes in one run share one flush", async () => {
   const log: Op[][] = [];
   const s: any = select(
     { a: 1 },
-    { ...open, onChanges: ops => void log.push(ops) },
+    { ...open, [REPORT]: ops => void log.push(ops) },
   );
   await setImmediate();
   log.length = 0;
@@ -938,11 +937,11 @@ test("SE-040 changes in one run share one flush", async () => {
 test("SE-040 no operations means no report", async () => {
   let reports = 0;
   const raw = { next: () => ({ value: 1, done: true }) };
-  const s = select([], { ...open, onChanges: () => void reports++ });
-  const t = select({}, { ...open, onChanges: () => void reports++ });
+  const s = select([], { ...open, [REPORT]: () => void reports++ });
+  const t = select({}, { ...open, [REPORT]: () => void reports++ });
   await setImmediate();
   assert.equal(reports, 0);
-  const u: any = select({ raw }, { ...open, onChanges: () => void reports++ });
+  const u: any = select({ raw }, { ...open, [REPORT]: () => void reports++ });
   await setImmediate();
   assert.equal(reports, 1);
   for (const state of [s, t, u]) state[CHAN].close();
@@ -974,7 +973,7 @@ test("SE-042 SE-043 backPressure holds the next flush until the read", async () 
   const log: Op[][] = [];
   const s: any = select(
     { a: 1 },
-    { autoStart: true, autoClose: false, onChanges: ops => void log.push(ops) },
+    { autoStart: true, autoClose: false, [REPORT]: ops => void log.push(ops) },
   );
   await setImmediate();
   s.a = 2;
@@ -997,7 +996,7 @@ test("SE-043 a change during step 1 belongs to that flush", async () => {
         },
       },
     } as any,
-    { ...open, onChanges: ops => void log.push(ops) },
+    { ...open, [REPORT]: ops => void log.push(ops) },
   );
   await setImmediate();
   assert.equal(log.length, 1);
@@ -1026,7 +1025,7 @@ test("SE-043 a raw iterator assigned during step 1 gets its first pull in that f
         },
       },
     } as any,
-    { ...open, onChanges: ops => void log.push(ops) },
+    { ...open, [REPORT]: ops => void log.push(ops) },
   );
   await setImmediate();
   assert.equal(pulls, 1);
@@ -1080,7 +1079,7 @@ test("SE-043 changes from step 2 onward wait for the next flush", async () => {
     { a: 1 },
     {
       ...open,
-      onChanges(ops) {
+      [REPORT](ops) {
         log.push(ops);
         if (log.length === 1) s.a = 2;
       },
@@ -1204,6 +1203,14 @@ test("SE-050 a __proto__ key stays an own snapshot field", async () => {
   assert.equal(Object.getPrototypeOf(value), Object.prototype);
   assert.ok(Object.hasOwn(value, "__proto__"));
   assert.equal(Object.getPrototypeOf(s), Object.prototype);
+  // A new __proto__ key is a write of a source too, and sets no prototype.
+  const fresh: any = select({}, { autoClose: true });
+  Reflect.set(fresh, "__proto__", { a: 1 });
+  assert.ok(Object.hasOwn(fresh, "__proto__"));
+  assert.equal(Object.getPrototypeOf(fresh), Object.prototype);
+  assert.deepEqual(Reflect.ownKeys((await iter(fresh).next()).value), [
+    "__proto__",
+  ]);
 });
 
 test("SE-052 SE-054 SE-111 a thenable snapshot fails the channel", async () => {
@@ -1275,7 +1282,7 @@ test("SE-062 SE-063 SE-064 SE-065 yielded promises flow, and plain values stop",
       ...open,
       thenReceive: "every",
       firstReceive: "first",
-      onChanges: ops =>
+      [REPORT]: ops =>
         void seen.push(
           ...ops
             .filter(o => o.op === "set" && o.key === "raw")
@@ -2250,7 +2257,7 @@ test("SE-096 SE-105 writing past the end grows with plain slots", async () => {
 
 test("SE-097 a no-op mutator produces no flush", async () => {
   const log: Op[][] = [];
-  const s: any = select([], { ...open, onChanges: ops => void log.push(ops) });
+  const s: any = select([], { ...open, [REPORT]: ops => void log.push(ops) });
   await setImmediate();
   const count = log.length;
   s.pop();
@@ -2377,7 +2384,7 @@ test("SE-107 the first report describes the shape at start", async () => {
 
 test("SE-107 an empty shape gets no operation", async () => {
   const log: Op[][] = [];
-  const s: any = select([], { ...open, onChanges: ops => void log.push(ops) });
+  const s: any = select([], { ...open, [REPORT]: ops => void log.push(ops) });
   await setImmediate();
   assert.deepEqual(log, []);
   s.push(1);
@@ -2400,7 +2407,7 @@ test("SE-108 replay equals the outputs at each report", async () => {
         unwrap: unwrap as any,
         thenReceive: "every",
         firstReceive: "first",
-        onChanges: (ops: Op[]) => void replay(ops, replayed),
+        [REPORT]: (ops: Op[]) => void replay(ops, replayed),
         mapSnapshot: (snap: any) => (
           seen.push(structuredClone(snap)),
           assert.deepEqual([...replayed], [...snap]),
@@ -2421,11 +2428,11 @@ test("SE-108 replay equals the outputs at each report", async () => {
   }
 });
 
-test("SE-109 onChanges runs for every flush, even if snapshots are skipped", async () => {
+test("SE-109 the report hook runs for every flush, even if snapshots are skipped", async () => {
   const log: Op[][] = [];
   const s: any = select(
     { a: 1 },
-    { ...open, onChanges: ops => void log.push(ops) },
+    { ...open, [REPORT]: ops => void log.push(ops) },
   );
   await setImmediate();
   s.a = 2;
@@ -2436,7 +2443,7 @@ test("SE-109 onChanges runs for every flush, even if snapshots are skipped", asy
   s[CHAN].close();
 });
 
-test("SE-10A without onChanges no operation is built", async () => {
+test("SE-10A without the report hook no operation is built", async () => {
   const s: any = select([1, 2], open);
   await setImmediate();
   s.push(3);
@@ -2475,7 +2482,7 @@ test("SE-10B a terminal turn in step 2 stays unreported", async () => {
         },
       },
     },
-    { unwrap: true, autoStart: true, onChanges: ops => void log.push(ops) },
+    { unwrap: true, autoStart: true, [REPORT]: ops => void log.push(ops) },
   );
   await setImmediate();
   assert.deepEqual(log, []);
@@ -2489,7 +2496,7 @@ test("SE-110 callback errors reach channel.throw", async () => {
       select(
         { a: 1 },
         {
-          onChanges() {
+          [REPORT]() {
             throw failure;
           },
         },
@@ -2549,7 +2556,7 @@ test("SE-046 a flush stops before publish", async () => {
         autoStart: true,
         nonYielding,
         mapSnapshot: () => void mapped++,
-        onChanges() {
+        [REPORT]() {
           s[CHAN].close();
         },
       },
@@ -2596,7 +2603,7 @@ test("SE-046 a flush stops between iterators in step 1", async () => {
         },
       },
     },
-    { ...open, onChanges: () => void reports++ },
+    { ...open, [REPORT]: () => void reports++ },
   );
   await setImmediate();
   assert.equal(pulled, 0);
@@ -2879,7 +2886,7 @@ test("SE-043 a snapshot can include a change the next flush reports", async () =
     {
       ...open,
       mapSnapshot: snap => (seen.push({ ...snap }), snap),
-      onChanges(ops) {
+      [REPORT](ops) {
         log.push(ops);
         if (log.length === 1) s.b = 2;
       },
@@ -3084,8 +3091,12 @@ test("SE-034 SE-035 a mutator keeps a Promise whose then throws", async () => {
   p.then = () => {
     throw boom;
   };
-  const { ops, onChanges } = opLog();
-  const s = select([] as unknown[], { ...open, nonYielding: true, onChanges });
+  const { ops, [REPORT]: hook } = opLog();
+  const s = select([] as unknown[], {
+    ...open,
+    nonYielding: true,
+    [REPORT]: hook,
+  });
   await setImmediate();
   s.push(p);
   await setImmediate();
@@ -3124,9 +3135,9 @@ test("SE-017 a write or mutator that throws changes nothing", async () => {
       throw boom;
     },
   };
-  const { ops, onChanges } = opLog();
-  const object = select({ a: 1 } as any, { ...open, onChanges });
-  const array = select([1] as unknown[], { ...open, onChanges });
+  const { ops, [REPORT]: hook } = opLog();
+  const object = select({ a: 1 } as any, { ...open, [REPORT]: hook });
+  const array = select([1] as unknown[], { ...open, [REPORT]: hook });
   await setImmediate();
   const before = ops.length;
   assert.throws(() => (object.a = hostile), boom);
@@ -3159,7 +3170,7 @@ test("SE-135 a consumer that stops its next calls blocks the flush at step 4", a
     { a: 1 },
     {
       autoClose: false,
-      onChanges: () => {
+      [REPORT]: () => {
         reports++;
       },
     },
@@ -3348,6 +3359,31 @@ test("SE-049 a removed source is not retained", async () => {
       assert.ok(await collected(value => ((s.a = make(value)), (s.a = 0))));
     s[CHAN].close();
   }
+});
+
+test("SE-049 a removed source whose pull settles after the report is not retained", async () => {
+  const s: any = select({ keep: new Promise(() => {}) }, open);
+  await setImmediate();
+  for (const result of [
+    { done: false, value: 1 },
+    { done: false, value: Promise.resolve(1) },
+    { done: true, value: 1 },
+  ])
+    assert.ok(
+      await collected(value => {
+        const pull = Promise.withResolvers<unknown>();
+        s.a = Object.assign(value, {
+          [Symbol.asyncIterator]: () => ({ next: () => pull.promise }),
+        });
+        void (async () => {
+          await setImmediate(); // The pull is in progress
+          s.a = 0;
+          await setImmediate(); // The flush reported the removal
+          pull.resolve(result);
+        })();
+      }),
+    );
+  s[CHAN].close();
 });
 
 test("SE-070 a removed source does not keep the channel open", async () => {

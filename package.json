@@ -31,6 +31,7 @@
     "test": "node --expose-gc --test --test-timeout=250 --test-reporter=dot tests/index.test.ts",
     "test:human": "node --expose-gc --test --test-timeout=250 --experimental-test-coverage tests/index.test.ts",
     "test:branches": "node find-uncovered-branches.ts",
+    "test:browser": "playwright test",
     "test:perf": "node tests/perf.ts",
     "bench": "node tests/bench.ts",
     "test:mutations": "npm run pretest && stryker run; node generate-surviving-mutants.ts",
@@ -70,6 +71,7 @@
   "type": "module",
   "devDependencies": {
     "@biomejs/biome": "2.6.4",
+    "@playwright/test": "1.65.1",
     "@stryker-mutator/core": "10.1.1",
     "@types/node": "26.6.6",
     "esbuild": "0.28.2",

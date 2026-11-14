@@ -15,6 +15,7 @@ import {
   select,
   spread,
 } from "../src/index.ts";
+import { REPORT } from "../src/select.ts";
 
 const end = (value?: unknown) => ({ value, done: true });
 const val = (value: unknown) => ({ value, done: false });
@@ -685,7 +686,7 @@ test("HE-040 a mirror equals the outputs of a real select", async () => {
     autoStart: true,
     autoClose: false,
     nonYielding: true,
-    onChanges: ops => applyOps(mirror, ops),
+    [REPORT]: ops => applyOps(mirror, ops),
   });
   await setImmediate();
   state.push(2);

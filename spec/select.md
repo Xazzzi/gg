@@ -39,7 +39,6 @@ export type SelectOptions<S, R> = ChannelOptions & {
   backPressure?: boolean;
   nonYielding?: boolean;
   unwrap?: boolean;
-  onChanges?: (ops: Op[]) => void;
   mapSnapshot?: (snapshot: S) => R;
 };
 
@@ -134,6 +133,9 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 - **Position**: the last operation of the log that a reader read.
 - **Slice reader**: a reader that `changes` returns for `keys`.
 - **Selected slot**: a slot that a slice reader follows.
+- **Report hook**: an internal callback that gets the operations of each report, synchronously.
+  The JSX host sets it for its drives (JX-022).
+  It is not public API, and no option sets it.
 - **Reserved key**: `Symbol.asyncIterator`, `Symbol.dispose` or `CHAN`.
 - **Terminal**: the state of a channel after its first `close` or `throw` call.
 
@@ -253,7 +255,7 @@ All changes in one synchronous run MUST share one flush.
 A flush runs these steps in order.
 
 1. Advance idle sync iterators, and make the first pull on each new raw iterator.
-2. Report to readers and to `onChanges`.
+2. Report to readers and to the report hook.
 3. Publish.
 4. With `backPressure`, wait until a consumer reads that publish, or a reader reads (SE-04A).
 5. Advance each sync iterator due under SE-064.
@@ -261,8 +263,8 @@ A flush runs these steps in order.
 7. Apply the auto close rule.
 8. If changes collected during this flush, schedule the next flush.
 
-- SE-040: Report MUST call `onChanges` with the operations since the last report, if `onChanges` exists and there are operations.
-  It MUST make those operations readable to readers before it calls `onChanges`.
+- SE-040: Report MUST call the report hook with the operations since the last report, if the hook exists and there are operations.
+  It MUST make those operations readable to readers before it calls the hook.
 - SE-041: Without `nonYielding`, publish MUST build a snapshot.
   It MUST then apply `mapSnapshot` and send the result.
   SE-02B skips steps 3 and 4 for a flush with no other change.
@@ -291,7 +293,7 @@ A flush runs these steps in order.
   A slice reader whose slots did not change has no operation to read, so it does not stall the select.
   Under `ackStyle: "all"`, only the channel ends the wait.
   So a select with only readers does not stall, and its sources still wait until a reader reads or waits.
-  `onChanges` does not end the wait.
+  The report hook does not end the wait.
 
 ## Snapshots
 
@@ -427,8 +429,8 @@ A flush runs these steps in order.
   An empty shape gets no operation.
   Changes before start MUST NOT produce their own operations.
 - SE-108: After each report, replaying all operations reported so far onto an empty object or array MUST equal the outputs at that report.
-- SE-109: `onChanges` MUST run on each flush with changes, even if consumers skip snapshots.
-- SE-10A: Without `onChanges` and with no attached reader, the library MUST NOT build operations.
+- SE-109: The report hook MUST run on each flush with changes, even if consumers skip snapshots.
+- SE-10A: Without the report hook and with no attached reader, the library MUST NOT build operations.
   DV-030 in `devtools.md` is the exception.
 - SE-10B: `select` MUST discard the operations that no report contains when the channel becomes terminal.
 
@@ -466,7 +468,7 @@ A proxy read returns sources (SE-080), so a reader carries the `outputs` that it
   After `throw(error)`, the read that finds no more operations MUST reject with the unchanged `error`, as CH-067 does.
   A reader made on a terminal channel MUST act the same, with no operations to read.
 - SE-14B: The log MUST NOT retain an operation that each attached reader has read.
-- SE-14C: When no reader stays attached and `onChanges` does not exist, the log MUST drop its operations and build no more (SE-10A).
+- SE-14C: When no reader stays attached and the report hook does not exist, the log MUST drop its operations and build no more (SE-10A).
 - SE-14D: `outputs(state)` MUST return what `outputs` of a new reader holds at that call (SE-142), and MUST NOT make a reader.
   So code reads the current outputs with no reader to finish (SE-14B).
   It MUST throw a `TypeError` if `state` is not a proxy that `select` returned, as `changes` does (SE-140).
@@ -529,7 +531,7 @@ It is a slice reader of one key that gives values, not operations.
 
 ## Errors
 
-- SE-110: If `onChanges` or `mapSnapshot` throws, `select` MUST call `channel.throw` with that error.
+- SE-110: If the report hook or `mapSnapshot` throws, `select` MUST call `channel.throw` with that error.
 - SE-111: A failed send of a thenable snapshot MUST do the same.
 - SE-112: After a `StopError` from its own channel during publish, the flush MUST do no more steps.
   That error MUST have no other effect.
@@ -570,7 +572,7 @@ These behaviours come from the rules above and are intentional.
   The flush blocks at step 4 until the channel becomes terminal.
 - SE-134: With `stopStyle: "stop"` and `backPressure: false`, auto close can discard the final snapshot (CH-065).
 - SE-135: With `backPressure`, a flush blocks at step 4 while a consumer makes no `next()` call.
-  `select` does not call `onChanges` during that time.
+  `select` does not call the report hook during that time.
   Operations collect with no limit.
 - SE-136: `select` discards a value that it pulled for a removed slot or a terminal channel.
   If the source is a `thenReceive: "unread"` channel, no other consumer gets that value.
@@ -584,7 +586,7 @@ These behaviours come from the rules above and are intentional.
 - SE-13A: The library does not support objects that inherit from the proxy.
 - SE-13B: A reader that makes no more `next()` calls and does not finish retains each later operation.
   So finish a reader with `return()`, `[Symbol.dispose]()` or `using` when its observer ends.
-- SE-13C: Readers and `onChanges` can get the same operation objects.
+- SE-13C: Readers and the report hook can get the same operation objects.
   So an observer that changes an operation changes it for the others.
   This spec does not define a write through such an object.
 
@@ -628,20 +630,14 @@ for await (const snapshot of s) console.log(snapshot); // => { user: 'ann', ads:
 Replay array changes onto DOM nodes:
 
 ```ts
-import { setImmediate } from "node:timers/promises";
-const s = select([] as string[], {
-  nonYielding: true,
-  autoStart: true,
-  onChanges: ops => console.log(...ops),
-});
-await null; // Start has run
-s.push("a", "b");
-await setImmediate(); // => { op: 'splice', start: 0, removed: [], added: [ 'a', 'b' ] }
+const s = select(["a", "b"], { nonYielding: true });
+const reader = changes(s);
+(await reader.next()).value; // => [ { op: 'splice', start: 0, removed: [], added: [ 'a', 'b' ] } ]
 s.shift();
-await setImmediate(); // => { op: 'splice', start: 0, removed: [ 'a' ], added: [] }
+(await reader.next()).value; // => [ { op: 'splice', start: 0, removed: [ 'a' ], added: [] } ]
 s.push("c");
 s.reverse();
-await setImmediate(); // => { op: 'splice', start: 1, removed: [], added: [ 'c' ] } { op: 'move', order: [ 1, 0 ] }
+(await reader.next()).value; // => [ { op: 'splice', start: 1, removed: [], added: [ 'c' ] }, { op: 'move', order: [ 1, 0 ] } ]
 ```
 
 Read the changes of one row, which the reader follows when the array moves it:

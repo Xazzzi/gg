@@ -27,6 +27,8 @@ import {
 } from "./source.ts";
 
 export const CHAN: unique symbol = Symbol.for("gg.CHAN") as any;
+/** The option key of the report hook, which the JSX host sets. Not exported from the package. */
+export const REPORT: unique symbol = Symbol() as any;
 declare const OUTPUTS: unique symbol; // Type only, so changes infers the outputs
 
 export type SelectShape = Record<string | symbol, unknown> | readonly unknown[];
@@ -48,8 +50,8 @@ export type SelectOptions<S, R> = ChannelOptions & {
   backPressure?: boolean;
   nonYielding?: boolean;
   unwrap?: boolean;
-  onChanges?: (ops: Op[]) => void;
   mapSnapshot?: (snapshot: S) => R;
+  [REPORT]?: (ops: Op[]) => void;
 };
 
 type Returned<R> = 0 extends 1 & R
@@ -274,7 +276,6 @@ const OPTION_TYPES = {
   backPressure: "boolean",
   nonYielding: "boolean",
   unwrap: "boolean",
-  onChanges: "function",
   mapSnapshot: "function",
 };
 
@@ -364,7 +365,7 @@ class Log {
   readers = new Set<Reader>(); // The readers that each publish wakes
   named?: Map<PropertyKey, Set<Reader>>; // The readers of key slices, which a publish wakes by key
   parked?: Set<Reader>; // The readers with a read that waits, which observe each report (SE-04A)
-  kept?: boolean; // onChanges or devtools read each report, which connect sets
+  kept?: boolean; // The report hook or devtools read each report, which connect sets
   read?: boolean; // A reader read or waited since the flush cleared it, so the flush was observed (SE-04A)
   #seen?: PromiseWithResolvers<void>;
   #last?: Op[]; // The report that publish gives the readers now
@@ -846,7 +847,7 @@ class Select {
   #anyAck: boolean; // Under "all", only snapshot consumers release a flush (SE-04A)
   #nonYielding: boolean;
   #unwrap: boolean;
-  #onChanges?: (ops: Op[]) => void;
+  #hook?: (ops: Op[]) => void; // The report hook, which is no observer
   #mapSnapshot?: (snapshot: unknown) => unknown;
   // A flush walks only these worklists, so one change costs no walk of the shape (SE-048).
   // Each worklist exists from its first slot on, so a select of plain values makes none.
@@ -936,21 +937,21 @@ class Select {
       backPressure = true,
       nonYielding = false,
       unwrap = false,
-      onChanges,
       mapSnapshot,
+      [REPORT]: hook,
     } = options;
     if (autoClose) this.#watched = new Set();
     this.#backPressure = backPressure;
     this.#anyAck = options.ackStyle !== "all";
     this.#nonYielding = nonYielding;
     this.#unwrap = unwrap;
-    this.#onChanges = onChanges;
+    this.#hook = hook;
     this.#mapSnapshot = mapSnapshot;
     this.#channel = channel;
     this.#isArray = Array.isArray(shape);
     const target = this.#isArray ? Array.from(shape) : { ...shape };
     this.#target = target;
-    this.#log = new Log(onChanges && []);
+    this.#log = new Log(hook && []);
     if (this.#isArray)
       for (const source of target)
         this.#array.push(
@@ -975,7 +976,7 @@ class Select {
     this.#emit = emit;
     // Stryker disable next-line ConditionalExpression: a log that no one reads only records operations that the next flush drops
     if (emit) this.#log.pending ??= [];
-    this.#log.kept = !!this.#onChanges || !!emit;
+    this.#log.kept = !!this.#hook || !!emit;
   }
 
   /** Describes the slots for devtools. */
@@ -1165,6 +1166,7 @@ class Select {
   /** Sets a fulfilled state from an iterator result, and keeps the last value for an empty final result. */
   #commit(slot: Slot, value: unknown, done: boolean, awaited: boolean) {
     slot.status = done ? FINISHED : OPEN;
+    if (slot.dead) return; // No flush follows, so a worklist would retain the slot (SE-049)
     (this.#results ??= new Map()).set(slot, awaited);
     (this.#ready ??= new Set()).add(slot);
     const kept = value === undefined && done;
@@ -1377,7 +1379,7 @@ class Select {
       if (report) {
         this.#emit?.("report", report);
         this.#log.publish(report);
-        this.#onChanges?.(report);
+        this.#hook?.(report);
       }
       if (this.#terminal) return;
       if (publish && !this.#nonYielding) {

@@ -50,15 +50,18 @@
     nextNode = 1,
     timer: ReturnType<typeof setTimeout> | undefined;
 
-  const gone = new FinalizationRegistry<number>(id => {
+  /** Removes an entry one time, so the panel forgets it. */
+  const drop = (id: number) => {
     const e = entries.get(id),
       owner = e?.kind === "channel" && e.owner && entries.get(e.owner);
+    if (!e) return;
     if (owner) (owner.items as number)--, touch(owner);
     entries.delete(id);
     removed.push([id, ++seq]);
     schedule();
     if (removed.length > 1000) removed.shift();
-  });
+  };
+  const gone = new FinalizationRegistry<number>(drop);
   const readerGone = new FinalizationRegistry<[number, number]>(([id, r]) =>
     entries.get(id)?.readers.delete(r),
   );
@@ -364,8 +367,11 @@
       e.options = detail.map.name ? `map ${detail.map.name}` : "";
       return (event: string, value?: unknown) => {
         if (event === "start") e.state = "running";
-        else if (event === "end") e.state = "ended";
-        else (e.sent as number)++;
+        // An ended derive does no more work, so it leaves now and not at a later collection, unless the panel shows it.
+        else if (event === "end") {
+          if (e.id !== inspect) return drop(e.id);
+          e.state = "ended";
+        } else (e.sent as number)++;
         record(e, event, event === "value" ? preview(value) : "");
       };
     }
@@ -957,6 +963,8 @@
     } else if (command.type === "disconnect") (connected = false), stopPick?.();
     else if (command.type === "pick") command.value ? pick() : stopPick?.();
     else if (command.type === "inspect") {
+      const last = entries.get(inspect);
+      if (last?.kind === "derive" && last.state === "ended") drop(last.id);
       inspect = command.id;
       detailSince = 0;
     } else if (command.type === "pause") paused = command.value;

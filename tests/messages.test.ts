@@ -156,8 +156,8 @@ const cases: [string, () => unknown, RegExp][] = [
   ],
   [
     "select option",
-    () => select({}, { onChanges: 1 as any }),
-    /Option onChanges must be a function/,
+    () => select({}, { mapSnapshot: 1 as any }),
+    /Option mapSnapshot must be a function/,
   ],
   [
     "proxy define",

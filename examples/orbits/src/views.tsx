@@ -1,4 +1,12 @@
-import { derive, each, type Item, latest } from "@xazzzi/gg";
+import {
+  Channel,
+  derive,
+  each,
+  type Item,
+  latest,
+  select,
+  watch,
+} from "@xazzzi/gg";
 import { type Body, type Sim, STAR, type Stats } from "./sim.ts";
 
 const TRAIL = 60,

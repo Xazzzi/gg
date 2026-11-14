@@ -59,9 +59,9 @@ So this spec defines only the contract with that extension.
 
 ## Select events
 
-- DV-030: With an emitter, `select` MUST build operations as if `onChanges` exists.
+- DV-030: With an emitter, `select` MUST build operations as if the report hook exists (`select.md`).
 - DV-031: Start MUST emit `("start")`, before the first operation.
-- DV-032: Each report MUST emit `("report", ops)` before it calls `onChanges`.
+- DV-032: Each report MUST emit `("report", ops)` before it calls the report hook.
 - DV-033: `detail.slots()` MUST return one entry per slot, in slot order.
   An entry is `{ key, kind, sync, source, state, busy, finished }`.
   `kind` is `"plain"`, `"promise"`, `"async"` or `"raw"`.

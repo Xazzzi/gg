@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import { Channel, each, jsx, mount, select, watch } from "../src/index.ts";
+import { REPORT } from "../src/select.ts";
 import { fakeDocument } from "./dom.ts";
 
 setFlagsFromString("--expose-gc");
@@ -51,7 +52,7 @@ await within("SE-048 single writes in a large array", 1000, async () => {
     autoStart: true,
     autoClose: false,
     nonYielding: true,
-    onChanges: () => {},
+    [REPORT]: () => {},
   });
   await new Promise(resolve => setTimeout(resolve));
   for (let i = 1; i <= 1000; i++) {
@@ -71,7 +72,7 @@ await within("SE-048 settles in a large array", 1000, async () => {
     {
       autoStart: true,
       nonYielding: true,
-      onChanges: ops => {
+      [REPORT]: ops => {
         if (ops.length === gates.length) resolve();
       },
     },

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
 import { applyOps, CHAN, changes, type Op, select } from "../src/index.ts";
+import { REPORT } from "../src/select.ts";
 
 const open = { autoStart: true, autoClose: false, nonYielding: true } as const;
 const done = { done: true, value: undefined };
@@ -80,7 +81,7 @@ test("SE-142 SE-107 before start, outputs is empty and the first read describes 
 test("SE-143 a reader skips the operations that the log holds at the call", async () => {
   const reports: Op[][] = [];
   const s = await started(
-    select(["a"], { ...open, onChanges: ops => void reports.push(ops) }),
+    select(["a"], { ...open, [REPORT]: ops => void reports.push(ops) }),
   );
   s.push("b");
   const a = changes(s);
@@ -203,11 +204,11 @@ test("SE-148 SE-149 return() and dispose finish a reader, and settle pending rea
   assert.deepEqual(await b.return(), done);
 });
 
-test("SE-040 report makes operations readable before it calls onChanges", async () => {
+test("SE-040 report makes operations readable before it calls the report hook", async () => {
   let read: Promise<IteratorResult<Op[]>> | undefined,
     a: ReturnType<typeof changes> | undefined;
   const s = await started(
-    select(["a"], { ...open, onChanges: () => void (read ??= a?.next()) }),
+    select(["a"], { ...open, [REPORT]: () => void (read ??= a?.next()) }),
   );
   a = changes(s);
   s.push("b");
@@ -285,7 +286,7 @@ test("SE-14B the log drops operations that each attached reader read", async () 
 
 test("SE-14B with no attached reader, the log keeps no operation", async () => {
   const s = await started(
-    select([] as object[], { ...open, onChanges: () => {} }),
+    select([] as object[], { ...open, [REPORT]: () => {} }),
   );
   const dropped = collected(value => s.push(value));
   await setImmediate();
@@ -306,10 +307,10 @@ test("SE-14C SE-14A the last reader to finish on close drops the operations that
   assert.ok(await dropped);
 });
 
-test("SE-14C onChanges keeps the log after the last reader finishes", async () => {
+test("SE-14C the report hook keeps the log after the last reader finishes", async () => {
   const reports: Op[][] = [];
   const s = await started(
-    select(["a"], { ...open, onChanges: ops => void reports.push(ops) }),
+    select(["a"], { ...open, [REPORT]: ops => void reports.push(ops) }),
   );
   changes(s).return();
   const t = await started(select(["a"], open));
@@ -324,7 +325,7 @@ test("SE-14C onChanges keeps the log after the last reader finishes", async () =
   assert.deepEqual((await late.next()).value?.length, 1);
 });
 
-test("SE-14C without onChanges, the log drops its operations when the last reader finishes", async () => {
+test("SE-14C without the report hook, the log drops its operations when the last reader finishes", async () => {
   const registry = new FinalizationRegistry<() => void>(done => done());
   let collected = false;
   const s = select({ a: 0 as unknown }, { autoStart: true, autoClose: false });

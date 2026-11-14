@@ -21,6 +21,7 @@ jobs:
       - run: npm run test:perf
       - run: npm run build
       - run: npm run learn
+      - run: npm run test:browser
 
   # Tests need no install.
   compat:

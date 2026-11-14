@@ -426,22 +426,18 @@ topic("watch reads one slot", "- ");
   form.name = "Ada";
   console.log((await name.next()).value); // => Ada
 }
-topic("onChanges", "- ");
+topic("Operations", "- ");
 {
-  // onChanges gets ordered operations, so a UI can replay them without diffing.
-  // onChanges is not an observer, so it cannot start or slow the select.
-  // So it needs autoStart, and nonYielding, which builds no snapshots and so never waits.
-  const seen: Op[] = [];
-  using rows = select(["a"], {
-    autoStart: true,
-    nonYielding: true,
-    onChanges: ops => seen.push(...ops),
-  });
-  await tick();
+  // Operations are ordered, so a UI can replay them without diffing.
+  // nonYielding builds no snapshots, for a select that only readers read.
+  using rows = select(["a"], { nonYielding: true });
+  using reader = changes(rows);
+  const read = async () => (await reader.next()).value ?? [];
+  const seen: Op[] = await read();
 
   rows.push("b");
   rows.shift();
-  await tick();
+  seen.push(...(await read()));
 
   for (const op of seen) console.log(op);
   // => { op: 'splice', start: 0, removed: [], added: [ 'a' ] }
@@ -449,16 +445,13 @@ topic("onChanges", "- ");
   // => { op: 'splice', start: 0, removed: [ 'a' ], added: [] }
 
   // sort and reverse move slots without restarting sources.
-  seen.length = 0;
   rows.push("a");
   rows.sort();
-  await tick();
-  console.log(seen.at(-1)); // => { op: 'move', order: [ 1, 0 ] }
+  console.log((await read()).at(-1)); // => { op: 'move', order: [ 1, 0 ] }
 
   // fill and copyWithin replace a range with one splice.
   rows.fill("z");
-  await tick();
-  console.log(seen.at(-1));
+  console.log((await read()).at(-1));
   // => { op: 'splice', start: 0, removed: [ 'a', 'b' ], added: [ 'z', 'z' ] }
 }
 topic("sort comparators", "- ");
@@ -538,17 +531,19 @@ topic("applyOps", "- ");
   // applyOps replays ops onto a mirror, and map derives each entry.
   // prev is the entry being replaced, so it can be reused.
   const labels: string[] = [];
-  using rows = select(["a"], {
-    autoStart: true,
-    nonYielding: true,
-    onChanges: ops =>
-      applyOps(labels, ops, (value, prev) => `${value} (was ${prev})`),
-  });
-  await tick();
+  using rows = select(["a"], { nonYielding: true });
+  using reader = changes(rows);
+  const replay = async () =>
+    applyOps(
+      labels,
+      (await reader.next()).value ?? [],
+      (value, prev) => `${value} (was ${prev})`,
+    );
+  await replay();
 
   rows[0] = "b";
   rows.push("c");
-  await tick();
+  await replay();
   console.log(labels); // => [ 'b (was a (was undefined))', 'c (was undefined)' ]
 }
 {
@@ -733,7 +728,6 @@ topic("Context");
 // A select stays open by default, so close it with `using` or state[CHAN].close().
 // break does not stop select, because it detaches only one consumer.
 // With backPressure, a flush waits until a consumer reads, or a reader reads or waits.
-// onChanges is not an observer, so a select with only onChanges needs autoStart and nonYielding.
 // Under ackStyle: "all", only snapshot consumers release a flush, so readers alone stall it.
 // With autoClose: true, a shape of plain values closes after its first flush.
 // After the close, writes change the proxy with no tracking and no error.

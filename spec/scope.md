@@ -47,12 +47,18 @@ These words have one meaning in all specs:
 
 - Array shapes stay in `select`.
 - Consumers can replay array changes onto a derived structure, such as DOM nodes. Consumers then need no array diff and no keyed nodes.
-- `onChanges` gets an operation log. It replaces `changeValues` and `RelocatedProxy`.
+- `select` records an operation log. It replaces `changeValues` and `RelocatedProxy`.
 - With `unwrap`, consumers read values and do not extract `.value`. `unwrap` replaces `simple`. A rejection under `unwrap` fails the channel.
 - `spread` is a snapshot projection. Use it as `mapSnapshot: spread`.
 - `applyOps` is the only replay of operations. Its optional `map` makes derived entries.
 - `changes` gives readers of one shared operation log for each `select`. A read takes all reported operations since the previous read, so a busy observer skips intermediate states. A reader carries `outputs`, because a proxy read returns sources.
-- State does not depend on the UI. Code can read the changes of any `select` after construction, so `onChanges` is only the synchronous path.
+- State does not depend on the UI. Code can read the changes of any `select` after construction with `changes`.
+- `select` has no change callback. A callback is not an observer, so it needed `autoStart` and `nonYielding`, and its throw failed the channel. A reader of `changes` gets the same operations. The JSX host keeps an internal report hook for its drives.
+- `Channel` has no buffer limit. A limit is not a concern of the producer, and a producer MUST NOT see a different behaviour because of one. A producer that must not run ahead awaits `asend`.
+- `break` detaches one consumer and leaves the sources open, because a channel cannot know that no other consumer attaches later. `using` or `close` ends them. The library gives no warning for a state that code abandons.
+- One failure ends a state: a rejection under `unwrap` and a throw of `mapSnapshot` fail the channel. Code that must continue reads `Val`s without `unwrap`, or wraps the source with `catching`.
+- The JSX runtime has no error boundary. A component uses `try` around the source that it reads, or `catching`.
+- The package has one entry for the primitives and the JSX runtime, while a bundler can drop the runtime. The runtime adds about 3.3 kB gzipped. A separate entry is due only if it adds more than 4 kB.
 - A proxy read returns a source, because `State` keeps the input types.
 - `sort` compares sources, because all proxy methods operate on sources. `sortOutputs` is the explicit method that compares outputs.
 - `select` does not call `return()` on a removed source, because the source returns to the caller.
@@ -67,7 +73,7 @@ These words have one meaning in all specs:
 
 Each default follows from the purpose: the library does no work if no code observes the result.
 An observer of a `select` is a consumer of its channel, or a reader from `changes` that reads.
-`onChanges` is not an observer, because it cannot start or slow the select.
+The internal report hook is not an observer, because it cannot start or slow the select.
 
 - `Channel` defaults to `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"` and `ackStyle: "any"` (CH-001).
   So a channel is a queue that discards no value, and the first read of a value settles its `asend`.
@@ -77,18 +83,24 @@ An observer of a `select` is a consumer of its channel, or a reader from `change
   A select is state, so it stays open until code closes it, and later writes stay tracked.
   A join of sources sets `autoClose: true`, so that `for await` ends when the sources finish.
 - `autoStart: false` makes the sources of a `feed` or a `select` start at the first observer (FE-001, SE-030, SE-037).
-  So a select with only `onChanges` needs `autoStart`.
 - `backPressure: true` makes a producer wait until an observer reads its last value (FE-001, SE-042).
   For a `select`, a reader that reads, or that waits with nothing to read, counts under `ackStyle: "any"` (SE-04A).
-  So a select with only `onChanges` needs `nonYielding` or `backPressure: false`.
 - `nonYielding: false` makes a select publish snapshots, because `for await` is the main way to read it.
-  Set `nonYielding: true` when only readers or `onChanges` read the state, so that no flush builds a snapshot.
+  Set `nonYielding: true` when only readers read the state, so that no flush builds a snapshot.
 - `unwrap: false` keeps the `status` of each source visible in a `Val`.
   Under `unwrap`, a pending slot reads as `undefined`, and a rejection fails the channel.
 - `select` defaults to `thenReceive: "latest"` (SE-002).
   A consumer of state needs the newest snapshot, so a slow consumer skips the snapshots between its reads.
 - A write to a terminal select changes the proxy, and does not throw (SE-08A).
   The proxy acts as a plain object, so code that only assigns does not expect an error.
+
+## Review
+
+A review MUST read this file first.
+The entries of Decided and Defaults are intended behaviour.
+A review MUST NOT report one of them as a defect, unless it names a rule that the entry breaks.
+The project is experimental.
+So its age, its commit sizes and its Node 24 floor are not subjects of a review.
 
 ## Package exports
 

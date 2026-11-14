@@ -7,3 +7,5 @@ surviving-mutants.md
 .DS_Store
 devtools/build/
 /js-framework-benchmark/
+test-results/
+playwright-report/

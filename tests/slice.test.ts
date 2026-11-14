@@ -11,6 +11,7 @@ import {
   select,
   watch,
 } from "../src/index.ts";
+import { REPORT } from "../src/select.ts";
 
 const open = { autoStart: true, autoClose: false, nonYielding: true } as const;
 const done = { done: true, value: undefined };
@@ -76,7 +77,7 @@ test("SE-151 SE-153 an object slice reads the set and delete operations of its k
   const s = await started(
     select({ a: 1, b: 2 } as Record<string, number>, {
       ...open,
-      onChanges: ops => void reports.push(ops),
+      [REPORT]: ops => void reports.push(ops),
     }),
   );
   const r = changes(s, ["a"]);
@@ -100,7 +101,7 @@ test("SE-153 a slice of several keys reads their operations in report order", as
   const s = await started(
     select({ a: 1, b: 2 } as Record<string, number>, {
       ...open,
-      onChanges: ops => void reports.push(ops),
+      [REPORT]: ops => void reports.push(ops),
     }),
   );
   const next = changes(s, ["a", "b"]).next();
@@ -262,7 +263,7 @@ test("SE-142 SE-151 a slice of one slot skips the operations before its call in 
     [{ a: 1 }, "a"],
     [[1], 0],
   ] as [any, PropertyKey][]) {
-    const s = select(shape, { ...open, onChanges: () => {} }); // Keeps the log (SE-14C)
+    const s = select(shape, { ...open, [REPORT]: () => {} }); // Keeps the log (SE-14C)
     await setImmediate();
     s[key] = 2;
     const reader = changes(s, [key as never]);
@@ -462,7 +463,7 @@ test("SE-165 return() and dispose finish watch, and settle pending calls", async
 test("SE-165 return() during a report settles the pending call that the report woke", async () => {
   let w: ReturnType<typeof watch<string[], number>> | undefined;
   const s = await started(
-    select(["a"], { ...open, onChanges: () => void w?.return() }),
+    select(["a"], { ...open, [REPORT]: () => void w?.return() }),
   );
   w = watch(s, 0);
   await w.next();
@@ -517,10 +518,7 @@ test("SE-04A a slice reader that waits later releases a flush", async () => {
 
 test("SE-04A a slice reader that read and does not wait releases no flush", async () => {
   const reports: Op[][] = [];
-  const s = select(
-    { a: 1, b: 1 },
-    { onChanges: ops => void reports.push(ops) },
-  );
+  const s = select({ a: 1, b: 1 }, { [REPORT]: ops => void reports.push(ops) });
   const r = changes(s, ["a"]);
   await r.next();
   s.b = 2; // The flush of this write waits, because the reader does not
@@ -536,10 +534,7 @@ test("SE-04A a slice reader that read and does not wait releases no flush", asyn
 
 test("SE-04A SE-148 a slice reader that finished while it waited releases no flush", async () => {
   const reports: Op[][] = [];
-  const s = select(
-    { a: 1, b: 1 },
-    { onChanges: ops => void reports.push(ops) },
-  );
+  const s = select({ a: 1, b: 1 }, { [REPORT]: ops => void reports.push(ops) });
   const r = changes(s, ["a"]);
   changes(s, ["b"]); // Stays attached, so each report reaches the readers
   await r.next();

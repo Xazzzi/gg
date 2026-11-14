@@ -10,6 +10,7 @@ import {
   select,
   watch,
 } from "../src/index.ts";
+import { REPORT } from "../src/select.ts";
 
 const seeds = Number(process.env.FUZZ_SEEDS ?? 8);
 const steps = 40;
@@ -169,11 +170,11 @@ const sources = (roll: (limit: number) => number) => {
   return { make, settle };
 };
 
-// mapSnapshot runs right after onChanges, so it sees the outputs at each report.
+// mapSnapshot runs right after the report hook, so it sees the outputs at each report.
 const replayed = (base: () => unknown, seen?: (snapshot: any) => void) => {
   const ops: Op[] = [];
   return {
-    onChanges: (list: Op[]) => void ops.push(...list),
+    [REPORT]: (list: Op[]) => void ops.push(...list),
     mapSnapshot: (snapshot: unknown) => {
       assert.deepEqual(replay(ops, base()), snapshot);
       seen?.(snapshot);

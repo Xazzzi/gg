@@ -19,7 +19,7 @@ When this file and the spec do not agree, the spec is correct.
 - A `select` is a mutable proxy over an object or array shape.
   Each key is a slot with a source: a plain value, a promise or an async iterable.
   A change publishes a snapshot of the whole shape to the channel of the select.
-  It also reports ordered operations to `onChanges` and to readers from `changes`.
+  It also reports ordered operations to readers from `changes`.
 - A read through the proxy gives the source, not its value (SE-080).
   Read values from a snapshot, from `for await`, or from `outputs(state)`.
 - `select` tracks only the top level of the shape.
@@ -27,7 +27,6 @@ When this file and the spec do not agree, the spec is correct.
 - No work occurs when no code observes the result.
   An observer of a select is a `for await` consumer, or a reader from `changes` that reads.
   `watch` and `each` read through `changes`, so they observe too.
-  `onChanges` is not an observer, because it cannot start or slow the select.
 
 We recommend that state does not import UI code.
 The UI then reads state through `for await`, `changes` and `each`, and state stays testable without a DOM.
@@ -39,7 +38,7 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 | `autoStart`    | `false` | Without it, a select starts at its first observer (SE-030, SE-037).         |
 | `autoClose`    | `false` | Set `true` to close the select when its sources finish, as a join.          |
 | `backPressure` | `true`  | A flush waits until a consumer reads, or a reader reads or waits (SE-04A).  |
-| `nonYielding`  | `false` | Set `true` when only `changes`, `each` or `onChanges` read, to skip snapshots. |
+| `nonYielding`  | `false` | Set `true` when only `changes` or `each` read, to skip snapshots.           |
 | `unwrap`       | `false` | Gives values, not `Val` objects. A rejection then fails the channel.        |
 
 `feed` has the same `autoStart` and `backPressure` defaults, but `autoClose: true` (FE-001).
@@ -49,8 +48,6 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 
 - With `autoClose: true`, a select of plain values closes after its first flush (SE-074).
   After that, writes change the proxy with no tracking and no error (SE-08A).
-- A select with only `onChanges` needs `autoStart: true`, and `nonYielding: true` or `backPressure: false`.
-  Otherwise it does not start, or it stops at its first publish.
 - Under `ackStyle: "all"`, only snapshot consumers release a flush, so a select with only readers stops at its first publish (SE-04A).
 - `state.items[0].done = true` changes nothing that `select` sees.
   Write `state.items[0] = { ...state.items[0], done: true }`.

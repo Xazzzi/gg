@@ -18,5 +18,12 @@
     },
     "noEmit": true
   },
-  "include": ["src", "tests", "examples", "learn-gg.tsx"]
+  "include": [
+    "src",
+    "tests",
+    "browser",
+    "examples",
+    "learn-gg.tsx",
+    "playwright.config.ts"
+  ]
 }

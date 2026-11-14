@@ -73,12 +73,13 @@ The shape stays mutable, so sources can be added, replaced and removed.
 ```ts
 import { select } from "@xazzzi/gg";
 
-const state = select({ title: "Users", users: fetchUsers() }, { unwrap: true });
+// `using` closes the state at the end of the block, which stops its sources.
+using state = select({ title: "Users", users: fetchUsers() }, { unwrap: true });
 for await (const { title, users } of state) render(title, users);
 ```
 
 Without `unwrap`, each source appears as a `Val` with `status`, `value`, `reason` and `done`.
-`onChanges` receives each change as an ordered operation, so arrays can be replayed without diffing.
+A select records each change as an ordered operation, so arrays can be replayed without diffing.
 `changes(state)` gives a reader of those operations at any time, and each read takes all of them since the last read.
 `outputs(state)` gives the current outputs, with no reader to finish.
 `changes(state, keys)` reads only some slots, and `watch(state, key)` gives the values of one slot, so a reader of one field wakes only when that field changes.

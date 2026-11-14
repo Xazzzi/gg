@@ -1,4 +1,4 @@
-import { latest, select } from "@xazzzi/gg";
+import { latest, outputs, select } from "@xazzzi/gg";
 import { pull } from "./fmm.ts";
 
 export type Body = {
@@ -62,15 +62,22 @@ export const createSim = (count = 12) => {
     nonYielding: true,
   });
   const running = latest<boolean>(),
+    trail = latest<boolean>(),
     stats = latest<Stats>(),
     pace = latest<number>();
   let tick = 0,
     frame = 0,
     rate = 1;
   const publish = () => {
-    const list = [...bodies];
-    const speed = list.reduce((sum, b) => sum + Math.hypot(b.vx, b.vy), 0);
-    stats.send({ tick, count: list.length, speed: speed / (list.length || 1) });
+    const speed = outputs(bodies).reduce(
+      (sum, b) => sum + Math.hypot(b.vx, b.vy),
+      0,
+    );
+    stats.send({
+      tick,
+      count: bodies.length,
+      speed: speed / (bodies.length || 1),
+    });
   };
   const advance = () => {
     let next = [...bodies];
@@ -106,6 +113,7 @@ export const createSim = (count = 12) => {
   publish();
   return {
     bodies,
+    trail,
     running,
     stats,
     pace,
@@ -130,6 +138,9 @@ export const createSim = (count = 12) => {
     remove(n = 50) {
       bodies.splice(0, n);
       publish();
+    },
+    setTrail(set: boolean) {
+      trail.send(set);
     },
   };
 };

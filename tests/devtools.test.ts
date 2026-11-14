@@ -20,6 +20,7 @@ import {
   Provide,
   use,
 } from "../src/jsx.ts";
+import { REPORT } from "../src/select.ts";
 import { fakeDocument } from "./dom.ts";
 
 const HOOK = Symbol.for("gg.devtools");
@@ -264,7 +265,7 @@ test("DV-020 the end of a run emits end before auto close", async () => {
   }
 });
 
-test("DV-030 DV-031 DV-032 select reports operations without onChanges", async () => {
+test("DV-030 DV-031 DV-032 select reports operations without the report hook", async () => {
   const order: string[] = [];
   const { log, off } = install();
   try {
@@ -274,7 +275,7 @@ test("DV-030 DV-031 DV-032 select reports operations without onChanges", async (
         autoStart: true,
         autoClose: false,
         nonYielding: true,
-        onChanges: () => order.push("onChanges"),
+        [REPORT]: () => order.push("hook"),
       },
     );
     const bare = select([1], {
@@ -309,7 +310,7 @@ test("DV-030 DV-031 DV-032 select reports operations without onChanges", async (
         [{ op: "splice", start: 1, removed: [], added: [2] }],
       ],
     ]);
-    assert.deepEqual(order, ["onChanges", "onChanges"]);
+    assert.deepEqual(order, ["hook", "hook"]);
     s[CHAN].close();
     bare[CHAN].close();
   } finally {
@@ -317,7 +318,7 @@ test("DV-030 DV-031 DV-032 select reports operations without onChanges", async (
   }
 });
 
-test("DV-032 report emits before onChanges", async () => {
+test("DV-032 report emits before the report hook", async () => {
   const order: string[] = [];
   g[HOOK] = () => (event: string) => order.push(event);
   try {
@@ -327,13 +328,13 @@ test("DV-032 report emits before onChanges", async () => {
         autoClose: true,
         autoStart: true,
         nonYielding: true,
-        onChanges: () => order.push("onChanges"),
+        [REPORT]: () => order.push("hook"),
       },
     );
     await setImmediate();
     assert.deepEqual(
       order.filter(event => event !== "end"),
-      ["start", "report", "onChanges"],
+      ["start", "report", "hook"],
     );
     assert.ok(s[CHAN].signal.aborted);
   } finally {
@@ -407,7 +408,7 @@ test("DV-033 slots describe each slot in order", async () => {
   }
 });
 
-test("SE-10A DV-030 without onChanges or an emitter, operations retain no replaced source", async () => {
+test("SE-10A DV-030 without the report hook or an emitter, operations retain no replaced source", async () => {
   const registry = new FinalizationRegistry<() => void>(done => done());
   let collected = false;
   const s: any = select({ a: 0 }, { autoStart: true, autoClose: false });

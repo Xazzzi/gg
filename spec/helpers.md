@@ -236,7 +236,7 @@ resolve(42);
 
 ## applyOps
 
-`applyOps` replays the operations from `onChanges` or from a reader of `changes` onto a mirror.
+`applyOps` replays the operations from a reader of `changes` onto a mirror.
 A **mirror** is an object or array that holds one entry for each output of the shape.
 By default, it is lazy.
 One call first computes the combined result of its operations.
@@ -313,16 +313,15 @@ Lazy replay covers one call, which is one report or one read.
 It costs one pass over an array target.
 
 ```ts
-import { setImmediate } from "node:timers/promises";
 const rows: { user: unknown }[] = [];
-const users = select(["ann", "bob"], {
-  autoStart: true,
-  nonYielding: true,
-  onChanges: ops =>
-    applyOps(rows, ops, (user, row) => Object.assign(row ?? {}, { user })),
-});
-await setImmediate();
+const users = select(["ann", "bob"], { nonYielding: true });
+const reader = changes(users);
+const replay = async () =>
+  applyOps(rows, (await reader.next()).value ?? [], (user, row) =>
+    Object.assign(row ?? {}, { user }),
+  );
+await replay();
 users.reverse();
-await setImmediate();
+await replay();
 rows; // => [ { user: 'bob' }, { user: 'ann' } ]
 ```

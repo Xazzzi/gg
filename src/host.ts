@@ -1,7 +1,7 @@
 // The host machinery of the JSX runtime: conversion, placement, drives, placement waits and dynamic props.
 import { type Emit, owned, register } from "./devtools.ts";
 import type { Child } from "./jsx.ts";
-import { select, type Val } from "./select.ts";
+import { REPORT, select, type Val } from "./select.ts";
 import { noop } from "./source.ts";
 
 // An entry that a drive keys, with its source and its last applied output.
@@ -172,9 +172,9 @@ const place = (parent: Element, entries: Entry[]): Node[] => {
     (some && arrange(parent, want.slice(from, to), first, after, false)) ||
     (arrange(parent, want, parent.firstChild, null, true) as Node[])
   );
-  // Stryker restore all
 };
 
+// Stryker restore all
 // The node arrays that each yields hold converted nodes, so a host takes them as they are.
 export const converted = new WeakSet<Node[]>();
 
@@ -230,7 +230,7 @@ export const drive = <E extends Driven>(
       autoStart: true,
       autoClose,
       nonYielding: true,
-      onChanges: ops => {
+      [REPORT]: ops => {
         let moved = false;
         for (const op of ops) {
           const entry = keyed.get((op as { key: string }).key),

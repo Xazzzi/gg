@@ -58,6 +58,14 @@ mount(
     />
     {derive(sim.pace, p => p.toFixed(1))}
   </label>,
+  <label>
+    Trails
+    <input
+      type="checkbox"
+      checked={sim.trail}
+      onchange={e => sim.setTrail(e.currentTarget.checked)}
+    />
+  </label>,
   <button type="button" class="view" onclick={orrery.toggle}>
     {derive(orrery.shown, label)} orrery
   </button>,

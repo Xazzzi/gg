@@ -131,8 +131,15 @@ export function jsx(
 export const jsxs = jsx,
   jsxDEV = jsx;
 
-/** Groups static children into a `DocumentFragment`. */
-export function Fragment({ children }: { children?: Child }) {
+/** Tells if a child holds a dynamic child, at any depth of its arrays. */
+const live = (child: unknown): boolean =>
+  Array.isArray(child) ? child.some(live) : isDynamic(child);
+
+/** Groups static children into a `DocumentFragment`, and gives children with a dynamic child unchanged, for a host to drive. */
+export function Fragment(props: { children?: Static }): DocumentFragment;
+export function Fragment(props: { children?: Child }): Child;
+export function Fragment({ children }: { children?: Child }): Child {
+  if (live(children)) return children;
   const fragment = document.createDocumentFragment();
   fragment.append(...toNodes(children));
   return fragment;

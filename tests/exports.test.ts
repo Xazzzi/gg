@@ -25,6 +25,7 @@ test("Package exports the root exports the public names", () => {
     "jsxs",
     "latest",
     "mount",
+    "outputs",
     "select",
     "spread",
     "use",

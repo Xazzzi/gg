@@ -65,6 +65,7 @@ export function changes<O, const K extends Keys<O>>(
   state: State<any, any, O>,
   keys: readonly K[],
 ): Changes<Slice<O, K>>;
+export function outputs<O>(state: State<any, any, O>): O;
 
 export type Watch<V> = Disposable & {
   next(): Promise<IteratorResult<V, undefined>>;
@@ -284,6 +285,8 @@ A flush runs these steps in order.
   Publish builds a snapshot of all slots, so `nonYielding` and readers of operations get this cost.
 - SE-049: After the flush that reports its removal, `select` MUST NOT retain the source of a slot that left the shape.
 - SE-04A: Under `ackStyle: "any"`, a reader that reads operations, or that waits with no operation to read, MUST also end the wait of step 4.
+- SE-04B: A wait of step 4 that ended MUST NOT retain an object.
+  So a `select` that only consumers read grows no memory with each flush.
   A reader that does so in step 2 ends the wait before it starts.
   A slice reader whose slots did not change has no operation to read, so it does not stall the select.
   Under `ackStyle: "all"`, only the channel ends the wait.
@@ -464,6 +467,9 @@ A proxy read returns sources (SE-080), so a reader carries the `outputs` that it
   A reader made on a terminal channel MUST act the same, with no operations to read.
 - SE-14B: The log MUST NOT retain an operation that each attached reader has read.
 - SE-14C: When no reader stays attached and `onChanges` does not exist, the log MUST drop its operations and build no more (SE-10A).
+- SE-14D: `outputs(state)` MUST return what `outputs` of a new reader holds at that call (SE-142), and MUST NOT make a reader.
+  So code reads the current outputs with no reader to finish (SE-14B).
+  It MUST throw a `TypeError` if `state` is not a proxy that `select` returned, as `changes` does (SE-140).
 
 ## Slice readers
 
@@ -497,6 +503,8 @@ So a slice reader of an array observes rows, not positions.
   A reader that names no slot finishes at the call, or at start.
 - SE-157: A slice reader MUST take its slice operations at each report.
   So the log retains no operation for it, and the reader retains only its own slice operations (SE-13B).
+- SE-158: A report with no operation of the keys of an object slice reader SHOULD cost that reader no time.
+  SE-04A still applies to that reader, if it waits.
 
 ## Watch
 

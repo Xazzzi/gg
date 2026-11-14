@@ -225,7 +225,7 @@ const follow = (rows: GG.Item[], items: GG.Item[]) => {
 async function* part(feed: AsyncIterable<unknown>, draw: () => Child) {
   let text: string | undefined;
   for await (const _ of feed) {
-    const node = Fragment({ children: draw() });
+    const node = Fragment({ children: draw() }) as DocumentFragment; // draw gives static children
     if (node.textContent !== text) yield ((text = node.textContent), node);
   }
 }

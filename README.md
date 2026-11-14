@@ -3,9 +3,9 @@
 Zero-dependency concurrent primitives for JavaScript and TypeScript.
 `Channel` moves values, `feed` fills channels from sources, and `select` combines sources into one state.
 
-13kB gzipped, tree-shakeable.
+14kB gzipped, tree-shakeable.
 Features 100% coverage, including Stryker mutation tests.
-Requires Node 22 or later, or a browser with `Promise.withResolvers`. ESM only.
+Requires Node 24 or later, or a browser with `Promise.withResolvers`. ESM only, and `require` loads it too.
 The examples use `using`, which needs a transpiler in most browsers.
 
 WARNING: Experimental project coded by Opus 5.5. No warranty, use at own risk.
@@ -80,6 +80,7 @@ for await (const { title, users } of state) render(title, users);
 Without `unwrap`, each source appears as a `Val` with `status`, `value`, `reason` and `done`.
 `onChanges` receives each change as an ordered operation, so arrays can be replayed without diffing.
 `changes(state)` gives a reader of those operations at any time, and each read takes all of them since the last read.
+`outputs(state)` gives the current outputs, with no reader to finish.
 `changes(state, keys)` reads only some slots, and `watch(state, key)` gives the values of one slot, so a reader of one field wakes only when that field changes.
 `sort` and `reverse` move slots without restarting sources, and `sort` compares sources.
 `sortOutputs` moves slots the same way, and compares outputs once.
@@ -117,6 +118,7 @@ A component is an async generator function, and each use gives one instance.
 The instance yields its node, then changes the nodes it owns.
 It yields again only to replace its node, or to wake its host with the same node.
 A promise or an async iterable is a child, so a channel of strings is live text.
+A fragment takes such children too, and its host drives them.
 Props set attributes, and `value`, `checked`, `selected`, `indeterminate` and `muted` set properties.
 Each HTML and SVG tag has typed listeners and live properties, and takes any other attribute.
 A promise or an async iterable prop is live, and sets its attribute or property with each value.

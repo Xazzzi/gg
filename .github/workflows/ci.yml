@@ -22,13 +22,13 @@ jobs:
       - run: npm run build
       - run: npm run learn
 
-  # Tests need no install, and Node 22 applies the test timeout to the whole file.
+  # Tests need no install.
   compat:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       matrix:
-        node-version: [22, 24, 26]
+        node-version: [24, 26]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

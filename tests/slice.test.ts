@@ -7,6 +7,7 @@ import {
   CHAN,
   changes,
   type Op,
+  outputs,
   select,
   watch,
 } from "../src/index.ts";
@@ -512,4 +513,127 @@ test("SE-04A a slice reader that waits later releases a flush", async () => {
     value: [{ op: "set", key: "a", value: 2, prev: 1 }],
   });
   s[CHAN].close();
+});
+
+test("SE-04A a slice reader that read and does not wait releases no flush", async () => {
+  const reports: Op[][] = [];
+  const s = select(
+    { a: 1, b: 1 },
+    { onChanges: ops => void reports.push(ops) },
+  );
+  const r = changes(s, ["a"]);
+  await r.next();
+  s.b = 2; // The flush of this write waits, because the reader does not
+  await setImmediate();
+  s.a = 2;
+  await setImmediate();
+  assert.equal(reports.length, 2);
+  assert.deepEqual((await r.next()).value, [
+    { op: "set", key: "a", value: 2, prev: 1 },
+  ]);
+  s[CHAN].close();
+});
+
+test("SE-04A SE-148 a slice reader that finished while it waited releases no flush", async () => {
+  const reports: Op[][] = [];
+  const s = select(
+    { a: 1, b: 1 },
+    { onChanges: ops => void reports.push(ops) },
+  );
+  const r = changes(s, ["a"]);
+  changes(s, ["b"]); // Stays attached, so each report reaches the readers
+  await r.next();
+  const read = r.next();
+  await r.return();
+  assert.deepEqual(await read, done);
+  s.b = 2;
+  await setImmediate();
+  s.b = 3;
+  await setImmediate();
+  assert.equal(reports.length, 2);
+  s[CHAN].close();
+});
+
+test("SE-158 SE-153 a key slice reads its keys from each report that has them, after reports that do not", async () => {
+  const s = await started(
+    select({ a: 1, b: 1, c: 1 } as Record<string, number>, open),
+  );
+  const whole = changes(s), // Never reads, so the log keeps all operations
+    r = changes(s, ["a", "c", "d"]);
+  for (const value of [2, 3]) {
+    s.b = value;
+    await setImmediate();
+  }
+  s.c = 2;
+  s.b = 4;
+  s.a = 2;
+  await setImmediate();
+  s.b = 5;
+  await setImmediate();
+  assert.deepEqual((await r.next()).value, [
+    { op: "set", key: "c", value: 2, prev: 1 },
+    { op: "set", key: "a", value: 2, prev: 1 },
+  ]);
+  s.b = 6;
+  s.a = 3; // A report with fewer keys than the slice names
+  assert.deepEqual((await r.next()).value, [
+    { op: "set", key: "a", value: 3, prev: 2 },
+  ]);
+  assert.equal((await whole.next()).value?.length, 8);
+  assert.deepEqual(await whole.return(), done);
+});
+
+test("SE-158 SE-14C key slices that share a key leave the log one by one", async () => {
+  const s = select({ a: 0 as unknown, b: 0 }, { autoStart: true });
+  await s[Symbol.asyncIterator]().next(); // The next flush blocks at publish, so operations would collect
+  s.b = 1;
+  await setImmediate();
+  const a = changes(s, ["a"]),
+    both = changes(s, ["a", "b"]);
+  await a.return();
+  assert.ok(!(await collected(value => ((s.a = value), (s.a = 0)))));
+  await both.return();
+  assert.ok(await collected(value => ((s.a = value), (s.a = 0))));
+});
+
+test("SE-158 SE-14A a waiting key slice finishes when the channel closes", async () => {
+  const s = await started(select({ a: 1, b: 1 }, open));
+  const reads = [changes(s, ["a"]).next(), changes(s, ["a", "b"]).next()];
+  s[CHAN].close();
+  assert.deepEqual(await Promise.all(reads), [done, done]);
+  assert.deepEqual(await changes(s, ["a"]).next(), done); // After the key slices left
+});
+
+test("SE-158 SE-14A a key slice of a terminal select that had no key slice finishes", async () => {
+  const s = await started(select({ a: 1 }, open));
+  s[CHAN].close();
+  assert.deepEqual(await changes(s, ["a"]).next(), done);
+});
+
+test("SE-158 a key slice that leaves keeps the other readers of its key", async () => {
+  const s = await started(select({ a: 1, b: 1 }, open));
+  const both = changes(s, ["a", "b"]);
+  await changes(s, ["a"]).return();
+  s.a = 2;
+  assert.deepEqual((await both.next()).value, [
+    { op: "set", key: "a", value: 2, prev: 1 },
+  ]);
+});
+
+test("SE-14D outputs gives the current outputs, and makes no reader", async () => {
+  const o = select({ a: 1, p: Promise.resolve(2) }, { ...open, unwrap: true }),
+    a = select(["x"] as unknown[], open);
+  assert.deepEqual(outputs(o), {});
+  assert.deepEqual(outputs(a), []);
+  await setImmediate();
+  const first = outputs(o);
+  assert.deepEqual(first, { a: 1, p: 2 });
+  assert.notEqual(outputs(o), first);
+  a.push("y");
+  assert.deepEqual(outputs(a), ["x", "y"]);
+  assert.ok(await collected(value => (a.push(value), a.pop()))); // SE-14C
+  assert.throws(() => outputs({} as any), {
+    name: "TypeError",
+    message: "outputs needs a select proxy",
+  });
 });

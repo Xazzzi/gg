@@ -53,6 +53,12 @@ export let attached: (channel: Channel<any, any>) => Promise<void>;
 export let isChannel: (value: unknown) => boolean;
 /** Tells if the channel ended with `throw`. */
 export let failed: (channel: Channel<any, any>) => boolean;
+/** Tells if the channel is terminal, with no signal to make. */
+export let terminal: (channel: Channel<any, any>) => boolean;
+/** Gives the value that `close` or `throw` ended the channel with. */
+export let resultOf: (channel: Channel<any, any>) => unknown;
+/** Calls ended when the channel turns terminal, before its signal aborts, for the one select of the channel. */
+export let onEnd: (channel: Channel<any, any>, ended: () => void) => void;
 
 let silent: boolean | undefined, // Set while latest makes its channel, which it registers itself
   connect: (channel: Channel<any, any>, emit: Emit | undefined) => void;
@@ -98,6 +104,7 @@ export class Channel<T, TReturn = undefined>
   #consumer?: PromiseWithResolvers<void>;
   #failed?: boolean;
   #result: unknown;
+  #ended?: () => void;
   #emit?: Emit;
 
   static {
@@ -112,6 +119,11 @@ export class Channel<T, TReturn = undefined>
       channel.#emit = emit;
     };
     failed = channel => !!channel.#failed;
+    terminal = channel => channel.#terminal;
+    resultOf = channel => channel.#result;
+    onEnd = (channel, ended) => {
+      channel.#ended = ended;
+    };
   }
 
   /** Aborts when the channel is terminal, with the stop error as its reason. */
@@ -357,6 +369,7 @@ export class Channel<T, TReturn = undefined>
     }
     this.#emit?.("end", failed, result);
     this.#terminal = true;
+    this.#ended?.();
     this.#control?.abort(this.#stopError());
   }
 }

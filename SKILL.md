@@ -21,7 +21,7 @@ When this file and the spec do not agree, the spec is correct.
   A change publishes a snapshot of the whole shape to the channel of the select.
   It also reports ordered operations to `onChanges` and to readers from `changes`.
 - A read through the proxy gives the source, not its value (SE-080).
-  Read values from a snapshot, from `for await`, or from `changes(state).outputs`.
+  Read values from a snapshot, from `for await`, or from `outputs(state)`.
 - `select` tracks only the top level of the shape.
   A nested object needs its own `select`, or a replacement of the whole item.
 - No work occurs when no code observes the result.
@@ -63,6 +63,7 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 - `break` in `for await` detaches one consumer, and the sources keep running.
   Bind the select with `using`, or call `state[Symbol.dispose]()`.
 - A `changes` reader that you do not finish keeps the log in memory (SE-14B).
+  To read the current outputs one time, call `outputs(state)`, which makes no reader (SE-14D).
   Call `return()`, call `[Symbol.dispose]()`, or bind the reader with `using`.
 - A default `Channel` keeps each value until a consumer reads it, because a later consumer can read the head.
   Use `latest()` for a current value, which sets `firstReceive: "latest"` and `thenReceive: "latest"` (CH-006).

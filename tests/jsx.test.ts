@@ -170,19 +170,20 @@ test("JX-006 jsxs and jsxDEV are jsx", () => {
   assert.equal(jsxDEV, jsx);
 });
 
-test("JX-007 JX-011 a Fragment holds static nodes, and rejects a dynamic child", () => {
+test("JX-007 a Fragment holds static nodes, and gives children with a dynamic child to a host", async () => {
   const fragment = Fragment({ children: ["a", el("b")] }) as any;
   assert.equal(fragment.nodeType, 11);
   assert.equal(html(fragment), "a<b></b>");
   assert.equal(html(Fragment({}) as any), "");
-  assert.throws(
-    () => Fragment({ children: [Promise.resolve("x")] }),
-    /not permitted/,
-  );
-  assert.throws(
-    () => Fragment({ children: { [Symbol.asyncIterator]() {} } as any }),
-    TypeError,
-  );
+  const count = latest<number>();
+  count.send(1);
+  for (const children of [count, ["a", [el("b"), Promise.resolve("p")], "c"]])
+    assert.equal(Fragment({ children }), children);
+  const parent = el();
+  mount(parent, "x", h(Fragment, { children: ["a", [count], "c"] }), "y");
+  assert.equal(html(parent), "<div>xacy</div>");
+  await setImmediate();
+  assert.equal(html(parent), "<div>xa1cy</div>");
 });
 
 test("JX-015 JX-016 rejects other values, and changes nothing", () => {
@@ -328,7 +329,7 @@ test("JX-026 a text output changes the data of the runtime Text node", async () 
   values.close();
 });
 
-test("JX-028 a rejection or a bad output reports an error, and the entry keeps its nodes", async () => {
+test("JX-028 JX-027 JX-011 a rejection or a bad output reports an error, and the entry keeps its nodes", async () => {
   reported.length = 0;
   const parent = el(),
     failure = new Error("x"),
@@ -344,6 +345,10 @@ test("JX-028 a rejection or a bad output reports an error, and the entry keeps i
   assert.equal(reported[0], failure);
   assert.ok(reported[1] instanceof TypeError);
   assert.ok(reported[2] instanceof TypeError);
+  assert.equal(
+    (reported[2] as Error).message,
+    "A dynamic child is not permitted here",
+  );
   assert.equal(reported.length, 3);
   values.send("w");
   await setImmediate();

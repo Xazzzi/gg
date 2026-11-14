@@ -7,15 +7,15 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "default": "./dist/index.js"
     },
     "./jsx-runtime": {
       "types": "./dist/jsx.d.ts",
-      "import": "./dist/jsx.js"
+      "default": "./dist/jsx.js"
     },
     "./jsx-dev-runtime": {
       "types": "./dist/jsx.d.ts",
-      "import": "./dist/jsx.js"
+      "default": "./dist/jsx.js"
     }
   },
   "sideEffects": false,
@@ -65,7 +65,7 @@
     "url": "git+https://github.com/Xazzzi/gg.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "type": "module",
   "devDependencies": {

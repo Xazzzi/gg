@@ -4,6 +4,9 @@ import {
   Channel,
   type ChannelOptions,
   failed,
+  onEnd,
+  resultOf,
+  terminal,
 } from "./channel.ts";
 import { type Emit, pulledSource, pulling, register } from "./devtools.ts";
 import {
@@ -149,6 +152,14 @@ export function changes(state: any, keys?: readonly PropertyKey[]) {
   if (!opener) throw new TypeError("changes needs a select proxy");
   if (keys !== undefined) opener.check(keys);
   return opener.open(keys);
+}
+
+/** Gives the outputs of a select now, as a new reader holds them, with no reader to finish (SE-14D). */
+export function outputs<O>(state: Reads<O>): O;
+export function outputs(state: any) {
+  const opener = openers.get(state);
+  if (!opener) throw new TypeError("outputs needs a select proxy");
+  return opener.outputs();
 }
 
 const finished = { done: true, value: undefined } as const;
@@ -350,7 +361,9 @@ class Log {
   // Stryker disable next-line ArrayDeclaration: a reader starts after all that the log holds
   reported: Op[] = []; // From the absolute index base
   base = 0;
-  readers = new Set<Reader>();
+  readers = new Set<Reader>(); // The readers that each publish wakes
+  named?: Map<PropertyKey, Set<Reader>>; // The readers of key slices, which a publish wakes by key
+  parked?: Set<Reader>; // The readers with a read that waits, which observe each report (SE-04A)
   kept?: boolean; // onChanges or devtools read each report, which connect sets
   read?: boolean; // A reader read or waited since the flush cleared it, so the flush was observed (SE-04A)
   #seen?: PromiseWithResolvers<void>;
@@ -368,14 +381,56 @@ class Log {
     this.#seen = undefined;
   }
 
-  /** Resolves at the next read that takes operations. */
+  /** Gives a promise that the next observing reader resolves, and one for each wait, so no wait retains an earlier one. */
   seen() {
-    return (this.#seen ??= Promise.withResolvers()).promise;
+    return (this.#seen = Promise.withResolvers());
   }
 
   /** The absolute index after the last reported operation. */
   get end() {
     return this.base + this.reported.length;
+  }
+
+  /** The absolute index of the report that publish gives the readers now, or the end outside a publish. */
+  get start() {
+    return this.end - (this.#last?.length ?? 0);
+  }
+
+  /** Tells if no reader is attached. */
+  get empty() {
+    return !this.readers.size && !this.named?.size;
+  }
+
+  /** Attaches a reader, by name when it reads a key slice. */
+  add(reader: Reader, names?: Set<PropertyKey>) {
+    // Stryker disable next-line ConditionalExpression: a key slice among the readers that each publish wakes reads the same operations
+    if (!names?.size) this.readers.add(reader);
+    else {
+      const named = (this.named ??= new Map());
+      for (const name of names)
+        named.get(name)?.add(reader) ?? named.set(name, new Set([reader]));
+    }
+  }
+
+  /** Detaches a reader, and tells if it was attached. */
+  remove(reader: Reader, names?: Set<PropertyKey>) {
+    const named = this.named;
+    if (!names?.size || !named) return this.readers.delete(reader);
+    let had: boolean | undefined; // Each name has the reader, or none has
+    for (const name of names) {
+      const readers = named.get(name);
+      had = readers?.delete(reader);
+      if (readers?.size === 0) named.delete(name);
+    }
+    return had;
+  }
+
+  /** Gives each attached reader one time. */
+  all() {
+    const all = new Set(this.readers);
+    for (const readers of this.named?.values() ?? [])
+      for (const reader of readers) all.add(reader);
+    return all;
   }
 
   /** Gives the reported operations from an absolute index on. */
@@ -394,10 +449,20 @@ class Log {
   /** Makes a report readable to the readers, and wakes them. */
   publish(report: Op[]) {
     // Stryker disable next-line ConditionalExpression: a log with no reader drops the report in trim
-    if (!this.readers.size) return;
+    if (this.empty) return;
     for (const op of report) this.reported.push(op); // A spread overflows the stack on a large report
     this.#last = report;
     for (const reader of this.readers) wakeReader(reader);
+    // A key slice reads only its keys, so a report wakes no reader of other keys (SE-153).
+    const due = new Set<Reader>();
+    // Stryker disable next-line ConditionalExpression: with no key slice, no operation names a reader
+    if (this.named?.size)
+      for (const op of report)
+        for (const reader of this.named.get((op as { key: PropertyKey }).key) ??
+          [])
+          due.add(reader);
+    for (const reader of due) wakeReader(reader);
+    if (this.parked?.size) this.observe(); // A reader that no key woke has nothing to read
     this.#last = this.#keyed = undefined; // SE-14B
     this.trim();
   }
@@ -448,7 +513,7 @@ class Log {
       this.reported.splice(0, low - this.base);
       this.base = low;
     }
-    if (!this.readers.size && !this.kept) this.pending = undefined;
+    if (this.empty && !this.kept) this.pending = undefined;
   }
 }
 
@@ -461,17 +526,18 @@ type View = {
   begin(length: number): void;
   project(list: Op[]): Op[];
   pick(keyed: Keyed): Op[] | undefined; // The same as project, for a slice of fewer slots than the report has keys
+  readonly names?: Set<PropertyKey>; // The keys of a key slice, which the log wakes its reader by
   spent?(): boolean; // A key slice always has its slots
 };
 
 /** A slice of an object shape, which follows its keys, so it never runs out. */
 class KeySlice implements View {
   readonly outputs: object;
-  #names: Set<PropertyKey>;
+  readonly names: Set<PropertyKey>;
 
   constructor(outputs: object, names: Set<PropertyKey>) {
     this.outputs = outputs;
-    this.#names = names;
+    this.names = names;
   }
 
   begin() {}
@@ -479,16 +545,16 @@ class KeySlice implements View {
   // Stryker disable next-line BlockStatement: project gives the same operations
   pick({ report, places }: Keyed) {
     // Stryker disable next-line ConditionalExpression,EqualityOperator: project gives the same operations
-    if (this.#names.size > places.size) return undefined;
+    if (this.names.size > places.size) return undefined;
     const found: number[] = [];
-    for (const name of this.#names)
+    for (const name of this.names)
       for (const place of places.get(name) ?? []) found.push(place);
     return found.sort((a, b) => a - b).map(place => report[place] as Op);
   }
 
   // An object shape logs only set and delete
   project(list: Op[]) {
-    return list.filter(op => this.#names.has((op as { key: PropertyKey }).key));
+    return list.filter(op => this.names.has((op as { key: PropertyKey }).key));
   }
 }
 
@@ -625,10 +691,10 @@ class Reader implements Changes<unknown> {
     });
     if (slice?.spent?.())
       this.#end(); // SE-156 finishes a reader that names no slot
-    else if (!channel.signal.aborted) {
+    else if (!terminal(channel)) {
       this.#at += log.pending?.length ?? 0;
       log.pending ??= [];
-      log.readers.add(this);
+      log.add(this, slice?.names);
     }
   }
 
@@ -675,16 +741,17 @@ class Reader implements Changes<unknown> {
 
   /** Moves the reported operations after the position into the slice operations. */
   #take(slice: View) {
+    // A key slice that earlier reports did not wake starts at this report.
     const log = this.#log,
-      keyed = log.keyed(this.#at);
+      at = Math.max(this.#at, log.start),
+      keyed = log.keyed(at);
     // Stryker disable next-line ConditionalExpression,LogicalOperator: project gives the same operations, and reads the whole report
-    const ops =
-      (keyed && slice.pick(keyed)) ?? slice.project(log.from(this.#at));
+    const ops = (keyed && slice.pick(keyed)) ?? slice.project(log.from(at));
     for (const op of ops) this.#taken.push(op);
     this.#at = log.end;
     if (slice.spent?.()) {
       // Stryker disable next-line BlockStatement,CallExpression: a spent reader reads past each later report, so this only stops the log sooner
-      log.readers.delete(this);
+      log.remove(this);
       this.#end();
     }
   }
@@ -705,23 +772,30 @@ class Reader implements Changes<unknown> {
 
   /** Resolves waiting reads with new operations, or ends them when the reader closes. */
   #settle() {
-    const { signal } = this.#channel;
+    const channel = this.#channel;
     while (this.#waiting.length) {
       // biome-ignore lint/style/noNonNullAssertion: the loop runs while a read waits
       const next = this.#waiting[0]!,
         value = this.#read();
       if (value) {
         next.resolve({ done: false, value });
+        this.#log.parked?.delete(this);
         this.#log.observe();
         this.#emit?.("read", value);
-      } else if (!signal.aborted && !this.#closed && !this.#slice?.spent?.()) {
+      } else if (
+        !terminal(channel) &&
+        !this.#closed &&
+        !this.#slice?.spent?.()
+      ) {
+        // Stryker disable next-line ConditionalExpression: a reader that each publish wakes observes the report there
+        if (this.#slice?.names) (this.#log.parked ??= new Set()).add(this);
         this.#log.observe(); // SE-04A: a reader with nothing to read observed all that concerns it
         return;
       } else {
-        this.#log.readers.delete(this);
+        this.#log.parked?.delete(this);
+        this.#log.remove(this, this.#slice?.names);
         this.#log.trim();
-        if (!this.#closed && failed(this.#channel))
-          next.reject(signal.reason.reason);
+        if (!this.#closed && failed(channel)) next.reject(resultOf(channel));
         else next.resolve({ done: true, value: undefined });
         this.#closed = true;
         this.#end();
@@ -735,7 +809,7 @@ class Reader implements Changes<unknown> {
     this.#closed = true;
     this.#end();
     this.#taken.length = 0;
-    if (this.#log.readers.delete(this)) this.#log.trim();
+    if (this.#log.remove(this, this.#slice?.names)) this.#log.trim();
     this.#settle();
   }
 }
@@ -764,12 +838,10 @@ type Method = (select: Select, ...args: any[]) => unknown;
 class Select {
   readonly state: any;
   #channel: Channel<any>;
-  #signal: AbortSignal;
   #isArray: boolean;
   #target: any;
   #array: Slot[] = [];
-  #map = new Map<PropertyKey, Slot>();
-  #autoClose: boolean;
+  #map!: Map<PropertyKey, Slot>; // The slots of an object shape
   #backPressure: boolean;
   #anyAck: boolean; // Under "all", only snapshot consumers release a flush (SE-04A)
   #nonYielding: boolean;
@@ -777,10 +849,11 @@ class Select {
   #onChanges?: (ops: Op[]) => void;
   #mapSnapshot?: (snapshot: unknown) => unknown;
   // A flush walks only these worklists, so one change costs no walk of the shape (SE-048).
-  #raws = new Set<Slot>(); // Raw iterators, which step 1 advances
-  #ready = new Set<Slot>(); // Async iterators that step 6 pulls
-  #results = new Map<Slot, boolean>(); // Slots with a result since the last step 2 (SE-061), and if it came from a yielded promise
-  #watched = new Set<Slot>(); // Slots that may keep an autoClose select open, which step 7 prunes
+  // Each worklist exists from its first slot on, so a select of plain values makes none.
+  #raws?: Set<Slot>; // Raw iterators, which step 1 advances
+  #ready?: Set<Slot>; // Async iterators that step 6 pulls
+  #results?: Map<Slot, boolean>; // Slots with a result since the last step 2 (SE-061), and if it came from a yielded promise
+  #watched?: Set<Slot>; // Slots that may keep an autoClose select open, which step 7 prunes, and undefined with no autoClose
   #keyOrder = 0; // The order of the next new object key
   #log: Log;
   #phase = NEW;
@@ -830,8 +903,7 @@ class Select {
     },
     sortOutputs: (s: Select, compare?: (a: any, b: any) => number) => {
       s.#checkCompare(compare);
-      if (s.#signal.aborted)
-        throw new TypeError("sortOutputs needs a live channel");
+      if (s.#terminal) throw new TypeError("sortOutputs needs a live channel");
       return s.#arrange(
         s.#array.map(slot => s.#out(slot)),
         compare,
@@ -867,7 +939,7 @@ class Select {
       onChanges,
       mapSnapshot,
     } = options;
-    this.#autoClose = autoClose;
+    if (autoClose) this.#watched = new Set();
     this.#backPressure = backPressure;
     this.#anyAck = options.ackStyle !== "all";
     this.#nonYielding = nonYielding;
@@ -875,7 +947,6 @@ class Select {
     this.#onChanges = onChanges;
     this.#mapSnapshot = mapSnapshot;
     this.#channel = channel;
-    this.#signal = channel.signal;
     this.#isArray = Array.isArray(shape);
     const target = this.#isArray ? Array.from(shape) : { ...shape };
     this.#target = target;
@@ -885,13 +956,15 @@ class Select {
         this.#array.push(
           this.#make(source, undefined, this.#array.length, detect(source)),
         );
-    else
+    else {
+      this.#map = new Map();
       for (const key of Reflect.ownKeys(target))
         this.#map.set(
           key,
           this.#make(target[key], key, this.#keyOrder++, detect(target[key])),
         );
-    this.#signal.addEventListener("abort", () => this.#abort());
+    }
+    onEnd(channel, () => this.#abort());
     if (autoStart) queueMicrotask(() => this.#start());
     else attached(channel).then(() => this.#start(), noop);
     this.state = new Proxy(target, this);
@@ -939,22 +1012,20 @@ class Select {
   /** Opens a reader of the log, or of a slice of it. */
   open(keys?: readonly PropertyKey[]): Changes<unknown> {
     const slice = keys && this.#view(keys);
-    const outputs = slice
-      ? slice.outputs
-      : this.#started
-        ? this.#snapshot()
-        : this.#isArray
-          ? []
-          : {};
     return new Reader(
       this.#log,
       this.#channel,
       this.state,
       keys,
       slice,
-      outputs,
+      slice ? slice.outputs : this.outputs(),
       this.#request,
     );
+  }
+
+  /** Gives a copy of the outputs, which is empty before start (SE-142). */
+  outputs() {
+    return this.#started ? this.#snapshot() : this.#isArray ? [] : {};
   }
 
   /** Starts the select in a microtask at the first read of a reader, as a consumer does (SE-037). */
@@ -1010,6 +1081,11 @@ class Select {
       (Select.#methods[key] as Method)(this, ...args));
   }
 
+  /** Tells if the channel is terminal. */
+  get #terminal() {
+    return terminal(this.#channel);
+  }
+
   /** Tells if the select started. */
   get #started() {
     return this.#phase !== NEW;
@@ -1037,7 +1113,7 @@ class Select {
 
   /** Lets step 7 check a slot, with autoClose. */
   #watch(slot: Slot) {
-    if (this.#autoClose) this.#watched.add(slot);
+    this.#watched?.add(slot);
   }
 
   /** Marks a slot busy, or busy with its final result, so autoClose waits for it. */
@@ -1048,7 +1124,7 @@ class Select {
 
   /** Queues one flush in a microtask, unless one is queued or running. */
   #schedule() {
-    if (this.#phase !== IDLE || !this.#started || this.#signal.aborted) return;
+    if (this.#phase !== IDLE || !this.#started || this.#terminal) return;
     this.#phase = QUEUED;
     queueMicrotask(() => this.#flush());
   }
@@ -1089,8 +1165,8 @@ class Select {
   /** Sets a fulfilled state from an iterator result, and keeps the last value for an empty final result. */
   #commit(slot: Slot, value: unknown, done: boolean, awaited: boolean) {
     slot.status = done ? FINISHED : OPEN;
-    this.#results.set(slot, awaited);
-    this.#ready.add(slot);
+    (this.#results ??= new Map()).set(slot, awaited);
+    (this.#ready ??= new Set()).add(slot);
     const kept = value === undefined && done;
     this.#update(
       slot,
@@ -1182,7 +1258,7 @@ class Select {
       state: kind ? val("pending", undefined, undefined, false) : source,
       status: OPEN,
     };
-    if (kind === RAW) this.#raws.add(slot);
+    if (kind === RAW) (this.#raws ??= new Set()).add(slot);
     // Stryker disable next-line ConditionalExpression: step 7 prunes a watched slot that is not live
     if (kind === PROMISE) this.#watch(slot);
     if (kind === PROMISE && source instanceof Promise) this.#listen(slot);
@@ -1201,7 +1277,7 @@ class Select {
       try {
         slot.iterator = slot.method.call(slot.source);
         slot.next = slot.iterator.next;
-        this.#ready.add(slot);
+        (this.#ready ??= new Set()).add(slot);
       } catch (error) {
         this.#fail(slot, error);
       }
@@ -1247,7 +1323,7 @@ class Select {
       if (slot.kind >= ASYNC && slot.status < FINAL)
         void quietReturn(slot.iterator ?? slot.source);
     }
-    for (const reader of this.#log.readers) wakeReader(reader); // SE-14A
+    for (const reader of this.#log.all()) wakeReader(reader); // SE-14A
   }
 
   /** Gives the outputs of all slots, in the shape of the target. */
@@ -1262,38 +1338,40 @@ class Select {
    * Gives the raw iterators that step 1 advances, in shape order, and forgets the ones that cannot change.
    * An idle async raw iterator is always fresh here, because step 6 pulls it right after each report. */
   #due() {
-    const list: Slot[] = [];
-    for (const slot of this.#raws) {
-      // Stryker disable next-line ConditionalExpression,EqualityOperator: the shape keeps a finished slot anyway, so forgetting it only saves walks
-      if (slot.dead || slot.status >= FINAL) this.#raws.delete(slot);
-      else if (this.#advancing(slot)) list.push(slot);
-    }
+    const list: Slot[] = [],
+      raws = this.#raws;
+    if (raws)
+      for (const slot of raws) {
+        // Stryker disable next-line ConditionalExpression,EqualityOperator: the shape keeps a finished slot anyway, so forgetting it only saves walks
+        if (slot.dead || slot.status >= FINAL) raws.delete(slot);
+        else if (this.#advancing(slot)) list.push(slot);
+      }
     return list.sort(byIndex);
   }
 
   /** Tells if step 1 of a flush pulls a raw iterator before the report, which SE-061 skips after a result. */
   #advancing(slot: Slot) {
-    return idle(slot) && !this.#results.has(slot);
+    return idle(slot) && !this.#results?.has(slot);
   }
 
   /** Advances sources, reports operations, publishes a snapshot, pulls the next values, and closes with autoClose. */
   async #flush() {
     this.#phase = RUNNING;
-    const channel = this.#channel,
-      signal = this.#signal;
+    const channel = this.#channel;
     try {
       // SE-046: terminal marks every slot dead, so idle() checks steps 1, 5 and 6, and steps 7 and 8 do nothing.
       // SE-043: a step 1 change belongs to this flush, so repeat for slots it added, and fresh stops a second advance.
       for (let list: Slot[]; (list = this.#due()).length; )
         for (const slot of list) if (this.#advancing(slot)) this.#pull(slot);
-      if (signal.aborted) return;
+      if (this.#terminal) return;
       const publish = this.#changed;
       this.#changed = false;
       // SE-064 applies to these in step 5
-      const settled = [...this.#results]
-        .filter(([, awaited]) => awaited)
-        .map(([slot]) => slot);
-      this.#results = new Map();
+      const results = this.#results,
+        settled =
+          results &&
+          [...results].filter(([, awaited]) => awaited).map(([slot]) => slot);
+      this.#results = undefined;
       this.#log.read = false;
       const report = this.#log.take();
       if (report) {
@@ -1301,7 +1379,7 @@ class Select {
         this.#log.publish(report);
         this.#onChanges?.(report);
       }
-      if (signal.aborted) return;
+      if (this.#terminal) return;
       if (publish && !this.#nonYielding) {
         const snap = this.#snapshot();
         const value = this.#mapSnapshot ? this.#mapSnapshot(snap) : snap;
@@ -1310,18 +1388,25 @@ class Select {
           const sent = channel.asend(value);
           // SE-04A: a reader that reads the report observes this flush too
           if (!this.#anyAck) await sent;
-          else if (!this.#log.read)
-            await Promise.race([sent, this.#log.seen()]);
+          else if (!this.#log.read) {
+            const seen = this.#log.seen();
+            sent.then(seen.resolve, seen.reject);
+            await seen.promise;
+          }
         }
       }
-      for (const slot of settled.sort(byIndex))
-        if (slot.kind === SYNC_RAW && idle(slot)) this.#pull(slot);
-      for (const slot of drain(this.#ready))
-        if (slot.kind !== SYNC_RAW && idle(slot)) this.#pull(slot); // Only iterators with a known kind reach ready
-      if (this.#autoClose && !this.#changed) {
-        for (const slot of this.#watched)
-          if (slot.dead || !live(slot)) this.#watched.delete(slot);
-        if (!this.#watched.size) channel.close();
+      if (settled)
+        for (const slot of settled.sort(byIndex))
+          if (slot.kind === SYNC_RAW && idle(slot)) this.#pull(slot);
+      const ready = this.#ready;
+      if (ready)
+        for (const slot of drain(ready))
+          if (slot.kind !== SYNC_RAW && idle(slot)) this.#pull(slot); // Only iterators with a known kind reach ready
+      const watched = this.#watched;
+      if (watched && !this.#changed) {
+        for (const slot of watched)
+          if (slot.dead || !live(slot)) watched.delete(slot);
+        if (!watched.size) channel.close();
       }
     } catch (error) {
       channel.throw(error); // A no-op for this channel's own stop error
@@ -1353,7 +1438,7 @@ class Select {
   /** Replaces the source at a key with a new slot, and logs a set. */
   #write(key: any, source: unknown) {
     this.#unlocked();
-    if (this.#signal.aborted) {
+    if (this.#terminal) {
       this.#define(key, source);
       return quiet(source);
     }
@@ -1385,7 +1470,7 @@ class Select {
   #splice(start: number, count: number, items: unknown[]) {
     if (!count && !items.length) return [];
     this.#unlocked();
-    if (this.#signal.aborted) {
+    if (this.#terminal) {
       items.forEach(quiet);
       return replace(this.#target, start, count, items);
     }
@@ -1414,7 +1499,7 @@ class Select {
     if (order.every((from, to) => from === to)) return this.state; // SE-097
     relocate(this.#target, order);
     // Stryker disable next-line ConditionalExpression: slots and operations are unobservable on a terminal channel
-    if (this.#signal.aborted) return this.state;
+    if (this.#terminal) return this.state;
     relocate(this.#array, order);
     this.#renumber(0);
     this.#record(() => ({ op: "move", order }));
@@ -1483,7 +1568,7 @@ class Select {
     }
     if (!Object.hasOwn(target, key)) return true;
     delete target[key];
-    if (this.#signal.aborted) return true;
+    if (this.#terminal) return true;
     // biome-ignore lint/style/noNonNullAssertion: an own key has a slot until the channel ends
     const slot = this.#map.get(key)!;
     this.#record(() => ({

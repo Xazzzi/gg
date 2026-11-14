@@ -12,6 +12,7 @@ import {
 } from "./host.ts";
 import type { Child } from "./jsx.ts";
 import { changes, isState, type Op, type State } from "./select.ts";
+import { noop } from "./source.ts";
 
 // `finished` marks a finished child, and `sent` a value sent after the last render (JX-03C).
 type Kept = Entry & {
@@ -132,21 +133,29 @@ async function* replay<T>(
   let fresh: Kept[] = [],
     dirty = true,
     round = 0,
-    woke = Promise.withResolvers<void>();
+    reading = false,
+    woken: boolean | undefined, // A wake since the last wait
+    wait = noop,
+    take: (() => IteratorResult<Op[], undefined>) | undefined; // Set by the read that settled
+  /** Ends the wait of the loop, or its next wait when it does not wait now. */
+  const wake = () => {
+    woken = true;
+    wait();
+  };
   // A child that ends after a send may have missed it, so it restarts at once.
   const host = drive(
     self,
     applyOutput,
     () => {
       dirty = true;
-      woke.resolve();
+      wake();
     },
     false,
     (entry: Kept) => {
       if (!entry.sent) entry.finished = true;
       else {
         stale.push(entry);
-        woke.resolve();
+        wake();
       }
     },
   );
@@ -203,11 +212,11 @@ async function* replay<T>(
     dirty = true;
   };
   const reader = owned(self, () => changes(state)); // DV-043
-  signal.addEventListener("abort", () => woke.resolve());
+  signal.addEventListener("abort", wake);
   try {
     for (const value of reader.outputs) entries.push(map(value));
     // A read starts only to wait, so reports during a yield join one read (JX-037).
-    for (let read: ReturnType<typeof reader.next> | undefined; ; ) {
+    for (;;) {
       // A removed entry has a handle that left, and stays removed.
       for (const entry of stale.splice(0))
         if (!left(entry.handle)) restart(entry);
@@ -222,17 +231,34 @@ async function* replay<T>(
         converted.add(nodes);
         yield nodes;
       }
-      const result = await Promise.race([
-        (read ??= reader.next()),
-        woke.promise,
-      ]);
-      if (signal.aborted) return;
-      if (!result) woke = Promise.withResolvers();
-      else if (result.done) return;
-      else {
-        read = undefined;
-        apply(result.value);
+      if (!reading) {
+        reading = true;
+        reader.next().then(
+          result => {
+            take = () => result;
+            wait();
+          },
+          error => {
+            take = () => {
+              throw error;
+            };
+            wait();
+          },
+        );
       }
+      // One promise for each wait, so a read retains no wake, and a wake retains no read.
+      await new Promise<void>(resolve => {
+        wait = resolve;
+        if (woken || take) resolve();
+      });
+      woken = false;
+      if (signal.aborted) return;
+      if (!take) continue;
+      const result = take();
+      take = undefined;
+      reading = false;
+      if (result.done) return;
+      apply(result.value);
     }
   } finally {
     reader[Symbol.dispose]();

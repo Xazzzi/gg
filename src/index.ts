@@ -49,4 +49,4 @@ export type {
   Val,
   Watch,
 } from "./select.ts";
-export { CHAN, changes, select, watch } from "./select.ts";
+export { CHAN, changes, outputs, select, watch } from "./select.ts";

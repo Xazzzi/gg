@@ -42,7 +42,8 @@ export function jsx(
 ): Child;
 export const jsxs: typeof jsx;
 export const jsxDEV: typeof jsx;
-export function Fragment(props: { children?: Child }): DocumentFragment;
+export function Fragment(props: { children?: Static }): DocumentFragment;
+export function Fragment(props: { children?: Child }): Child;
 export function mount(parent: Element, ...children: Child[]): () => void;
 export type Item<T> = AsyncIterable<T> & {
   readonly value: T;
@@ -124,8 +125,9 @@ The runtime uses the global `document` when it creates nodes.
 - JX-005: `jsx` with a function `type` MUST return `type(props)` unchanged.
   So a call of an async generator function gives one instance for each use.
 - JX-006: `jsxs` and `jsxDEV` MUST be `jsx`.
-- JX-007: `Fragment` MUST return a new `DocumentFragment` with the nodes of its children.
-  A dynamic child in a `Fragment` MUST throw a `TypeError`.
+- JX-007: `Fragment` MUST return a new `DocumentFragment` with the nodes of its children, if no child is dynamic.
+  With a dynamic child, at any depth of its arrays, `Fragment` MUST return `props.children` unchanged.
+  So the host that gets those children drives them (JX-020).
 
 ## Children
 
@@ -233,6 +235,8 @@ A component instance that finishes renders again with the next value of its item
   If the reader rejects, `each` MUST do the same, and then reject with the unchanged error.
 - JX-03A: An error from `render` or from `applyOps` MUST end `each` as a rejection of the reader does.
   `each` MUST finish its reader first.
+- JX-070: A wait of `each` for a read or for its drive MUST NOT retain an object after it ends.
+  So an `each` that lives long grows no memory with each read.
 - JX-03B: `return()` on the generator MUST finish the reader, end the `Item` of each entry and stop the drive.
   It MUST do so also while a `next()` is pending, which then resolves with `{ done: true, value: undefined }`.
   So a host that stops ends its `each` children at once.

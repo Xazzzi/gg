@@ -307,6 +307,36 @@ const checkFit = (op: Op, array: boolean) => {
 };
 
 /**
+ * Folds ops that are all sets, and reads only the indexes that they name.
+ * An index keeps its entry when its last value is the output that it had (HE-04H). */
+const foldSets = (target: any[], ops: readonly Op[], map: any) => {
+  const had = new Map<number, unknown>(),
+    values = new Map<number, unknown>();
+  for (const op of ops as Extract<Op, { op: "set" }>[]) {
+    checkFit(op, true);
+    const index = op.key as number;
+    if (!values.has(index)) had.set(index, op.prev);
+    values.set(index, op.value);
+  }
+  const items = [...values.keys()]
+    .sort((a, b) => a - b)
+    .map(index => {
+      const value = values.get(index),
+        prev = own(target, index);
+      return Object.hasOwn(target, index) && Object.is(had.get(index), value)
+        ? prev
+        : map(value, prev);
+    });
+  [...values.keys()]
+    .sort((a, b) => a - b)
+    .forEach((index, i) => {
+      if (index >= target.length || !Object.is(target[index], items[i]))
+        target[index] = items[i];
+    });
+  return target;
+};
+
+/**
  * Replays ops onto cells first, so each value that lands takes over a leaving cell by value (HE-04H) or by position.
  * Then reuses the entry of a value that comes back, and maps each other value one time. */
 const foldArray = (target: any[], ops: readonly Op[], map: any) => {
@@ -423,9 +453,16 @@ export function applyOps(
   if (typeof map !== "function")
     throw new TypeError("applyOps map must be a function");
   checkOptions(options, { eager: "boolean" });
-  if (!options.eager)
-    return (Array.isArray(target) ? foldArray : foldObject)(target, ops, map);
   const array = Array.isArray(target);
+  if (!options.eager)
+    return (
+      !array
+        ? foldObject
+        : // Stryker disable next-line ConditionalExpression,ArrowFunction: foldArray gives the same target, and walks all of it
+          ops.every(op => op.op === "set")
+          ? foldSets
+          : foldArray
+    )(target, ops, map);
   for (const op of ops) {
     checkFit(op, array);
     if (op.op === "set")

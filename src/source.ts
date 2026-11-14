@@ -95,8 +95,20 @@ export const relocate = <V>(list: V[], order: number[]) => {
   });
 };
 
-/** Throws a `TypeError` for an option that is defined and not of its type. */
-export const checkOptions = (options: any, types: Record<string, string>) => {
+/** Throws a `TypeError` for an own enumerable string key of options that names no option. */
+export const checkKeys = (options: any, ...known: object[]) => {
+  for (const key of Object.keys(options))
+    if (!known.some(names => Object.hasOwn(names, key)))
+      throw new TypeError(`Unknown option ${key}`);
+};
+
+/** Throws a `TypeError` for an unknown option, and for an option that is defined and not of its type. */
+export const checkOptions = (
+  options: any,
+  types: Record<string, string>,
+  others: object = types,
+) => {
+  checkKeys(options, types, others);
   for (const key in types) {
     const value = options[key];
     if (value !== undefined && typeof value !== types[key])

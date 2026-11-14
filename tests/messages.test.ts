@@ -71,7 +71,32 @@ const cases: [string, () => unknown, RegExp][] = [
   [
     "option value",
     () => new Channel({ firstReceive: "x" as any }),
-    /Invalid channel option/,
+    /Option firstReceive must be one of first, unread, latest, next/,
+  ],
+  [
+    "stop style value",
+    () => new Channel({ stopStyle: "x" as any }),
+    /Option stopStyle must be one of drain, stop/,
+  ],
+  [
+    "channel option name",
+    () => new Channel({ firstRecieve: "latest" } as any),
+    /Unknown option firstRecieve/,
+  ],
+  [
+    "select option name",
+    () => select({}, { autostart: true } as any),
+    /Unknown option autostart/,
+  ],
+  [
+    "feed option name",
+    () => feed([1], ch(), { toString: 1 } as any),
+    /Unknown option toString/,
+  ],
+  [
+    "applyOps option name",
+    () => applyOps([], [], undefined, { lazy: true } as any),
+    /Unknown option lazy/,
   ],
   [
     "unread pairing",
@@ -137,7 +162,17 @@ const cases: [string, () => unknown, RegExp][] = [
   [
     "proxy define",
     () => Object.defineProperty(list(), "x", { value: 1 }),
-    /not supported on a select proxy/,
+    /: defineProperty is not supported on a select proxy/,
+  ],
+  [
+    "proxy freeze",
+    () => Object.preventExtensions(list()),
+    /: preventExtensions is not supported on a select proxy/,
+  ],
+  [
+    "proxy prototype",
+    () => Object.setPrototypeOf(list(), null),
+    /: setPrototypeOf is not supported on a select proxy/,
   ],
   ["length", () => (list().length = -1), /Invalid array length/],
   ["reserved write", () => (list()[CHAN] = 1), /Reserved select key/],

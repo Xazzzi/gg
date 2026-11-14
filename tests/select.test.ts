@@ -41,7 +41,12 @@ const open = {
 
 const opLog = () => {
   const ops: Op[] = [];
-  return { ops, onChanges: (list: Op[]) => void ops.push(...list) };
+  // A hidden ops field, so a spread of the log gives only options (SE-008).
+  return Object.defineProperty(
+    { onChanges: (list: Op[]) => void ops.push(...list) },
+    "ops",
+    { value: ops },
+  ) as { ops: Op[]; onChanges: (list: Op[]) => void };
 };
 
 const replay = (ops: Op[], base: any) => {
@@ -151,6 +156,20 @@ test("SE-002 thenReceive defaults to latest", async () => {
   await setImmediate();
   assert.deepEqual((await it.next()).value, { a: 3 });
   s[Symbol.dispose]();
+});
+
+test("SE-008 an unlisted option key throws, and channel option keys pass", () => {
+  assert.throws(() => select({}, { autostart: true } as any), TypeError);
+  assert.throws(() => select({}, { sendReturn: true } as any), TypeError);
+  select(
+    {},
+    {
+      firstReceive: "latest",
+      thenReceive: "latest",
+      stopStyle: "drain",
+      ackStyle: "any",
+    },
+  );
 });
 
 test("SE-007 options of the wrong type throw, and undefined selects the default", async () => {

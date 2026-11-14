@@ -11,9 +11,16 @@ export class FakeNode {
   get firstChild() {
     return this.childNodes[0] ?? null;
   }
+  get lastChild(): FakeNode | null {
+    return this.childNodes.at(-1) ?? null;
+  }
   get nextSibling(): FakeNode | null {
     const siblings = (this.parentNode as FakeNode).childNodes;
     return siblings[siblings.indexOf(this) + 1] ?? null;
+  }
+  get previousSibling(): FakeNode | null {
+    const siblings = (this.parentNode as FakeNode).childNodes;
+    return siblings[siblings.indexOf(this) - 1] ?? null;
   }
   insertBefore(node: FakeNode, ref: FakeNode | null) {
     this.counts.insert++;

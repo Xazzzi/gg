@@ -65,7 +65,8 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 - A `changes` reader that you do not finish keeps the log in memory (SE-14B).
   Call `return()`, call `[Symbol.dispose]()`, or bind the reader with `using`.
 - A default `Channel` keeps each value until a consumer reads it, because a later consumer can read the head.
-  Use `{ firstReceive: "latest", thenReceive: "latest" }` for a current value.
+  Use `latest()` for a current value, which sets `firstReceive: "latest"` and `thenReceive: "latest"` (CH-006).
+- A misspelled option key throws a `TypeError` (CH-005, SE-008, FE-004).
 - `send`, `close` and `mapSnapshot` results cannot be thenables (CH-013, SE-052).
 - `send` on a closed channel throws a `StopError` (CH-014).
 
@@ -117,7 +118,7 @@ async function* Title({ title }: { title: Channel<string> }) {
 - A write to an item gives the new value to the same `Item`, so the instance stays (JX-034).
 - `for await (const value of item)` reads a `"latest"` channel that the `Item` makes at the first iteration (JX-03F).
   To combine an item with other sources, put it in a `select`.
-- An item that leaves ends its `Item` (JX-035).
+- An item that leaves ends its `Item`, and stops the dynamic children and dynamic props inside its nodes (JX-035).
   Its `signal` aborts, and a `for await` on it ends.
 - An instance that finishes while its item stays renders again with the next value (JX-03C).
   So a component can read its item once and return.
@@ -132,7 +133,7 @@ async function* Title({ title }: { title: Channel<string> }) {
 
 ## Limits of the runtime
 
-- A dynamic child ends only when its source finishes, or when its host stops (JX-040).
+- A dynamic child ends only when its source finishes, when its host stops, or when its row leaves `each` (JX-040, JX-035).
   Removal of its nodes does not end it.
   Close the channel that a component reads to end the component.
 - `mount` returns an unmount function (JX-02A).

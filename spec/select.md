@@ -150,6 +150,7 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 - SE-006: If `shape` is not a non-null object, `select` MUST throw a `TypeError` synchronously.
 - SE-007: For an option value of the wrong type, `select` MUST throw a `TypeError` synchronously.
   `undefined` selects the default.
+- SE-008: For an own enumerable string key of the options that is not a `SelectOptions` key, `select` MUST throw a `TypeError` synchronously.
 
 ## Source kinds
 

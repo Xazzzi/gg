@@ -1,5 +1,5 @@
-import { type Child, derive, mount } from "@xazzzi/gg";
-import { createSim, latest } from "./sim.ts";
+import { type Child, derive, latest, mount } from "@xazzzi/gg";
+import { createSim } from "./sim.ts";
 import { Chart, Orrery } from "./views.tsx";
 
 const $ = (selector: string) => document.querySelector(selector) as Element;

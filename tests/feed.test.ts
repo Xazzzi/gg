@@ -664,6 +664,15 @@ test("FE-046 no return after a source failure or a failed return value", async (
   assert.equal(returned, 0);
 });
 
+test("FE-004 an unlisted option key throws", () => {
+  const ch = new Channel<number>();
+  assert.throws(() => feed([1], ch, { autostart: true } as any), TypeError);
+  assert.throws(
+    () => feed([1], ch, { firstReceive: "latest" } as any),
+    TypeError,
+  );
+});
+
 test("FE-003 options of the wrong type throw, and undefined selects the default", async () => {
   for (const key of ["autoStart", "autoClose", "backPressure", "sendReturn"])
     for (const value of [1, "yes", null, {}]) {

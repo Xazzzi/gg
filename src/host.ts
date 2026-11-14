@@ -17,6 +17,14 @@ export const LIVE = new Set([
   "muted",
 ]);
 
+/** Gives the attribute text of a value, and throws for an object with no text of its own (JX-002). */
+export const attribute = (name: string, value: any): string => {
+  if (value === true) return "";
+  if (value.toString === Object.prototype.toString)
+    throw new TypeError(`${name} does not take a plain object`);
+  return `${value}`;
+};
+
 /** Tells if a value renders as a `Text` node. */
 const isText = (value: unknown) =>
   typeof value === "string" ||
@@ -84,10 +92,16 @@ const longest = (seq: number[]) => {
 };
 
 /**
- * Puts the nodes of all entries into parent in order, removes other children, and gives the nodes that were not children.
+ * Puts want into parent in order between the children first and after, and removes the other children between them.
+ * Gives the nodes that were not children, or undefined when a child outside that range is in want.
  * Moves only the nodes outside a longest run that keeps its order, so a swap moves two nodes. */
-const place = (parent: Element, entries: Entry[]): Node[] => {
-  let want = entries.flatMap(entry => entry.nodes);
+const arrange = (
+  parent: Element,
+  want: Node[],
+  first: ChildNode | null,
+  after: ChildNode | null,
+  whole: boolean,
+): Node[] | undefined => {
   const keep = new Set(want);
   // A node that appears twice lands at its last place.
   // Stryker disable next-line ConditionalExpression,EqualityOperator: a filter of distinct nodes keeps all
@@ -95,11 +109,19 @@ const place = (parent: Element, entries: Entry[]): Node[] => {
     want = want.filter((node, i) => want.lastIndexOf(node) === i);
   const old = new Map<Node, number>(),
     leave: ChildNode[] = [];
-  for (let at = parent.firstChild; at; at = at.nextSibling)
-    if (keep.has(at)) old.set(at, old.size);
-    else leave.push(at);
+  for (let at = first; at !== after; at = (at as ChildNode).nextSibling)
+    if (keep.has(at as ChildNode)) old.set(at as ChildNode, old.size);
+    else leave.push(at as ChildNode);
+  // Stryker disable next-line ConditionalExpression: the whole range holds each child of parent
+  if (!whole) {
+    let inside = 0;
+    // Stryker disable next-line ConditionalExpression: a count that is too high arranges the whole range
+    for (const node of keep) if (node.parentNode === parent) inside++;
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: the whole range gives the same nodes
+    if (inside > old.size) return undefined;
+  }
   // Stryker disable next-line ConditionalExpression,BlockStatement: the general path gives the same nodes, with one removal for each
-  if (!old.size) {
+  if (!old.size && whole) {
     parent.replaceChildren();
     for (const node of want) parent.insertBefore(node, null);
     return want;
@@ -118,10 +140,38 @@ const place = (parent: Element, entries: Entry[]): Node[] => {
   });
   const fixed = new Uint8Array(want.length);
   for (const i of longest(seq)) fixed[at[i]] = 1;
-  let anchor: Node | null = null;
+  let anchor: Node | null = after;
   for (let i = want.length; i--; anchor = want[i])
     if (!fixed[i]) parent.insertBefore(want[i], anchor);
   return added;
+};
+
+/**
+ * Puts the nodes of all entries into parent in order, removes other children, and gives the nodes that were not children.
+ * Arranges only the nodes between the first and the last children that stay in place, so a change costs no walk of the rest. */
+const place = (parent: Element, entries: Entry[]): Node[] => {
+  const want = entries.flatMap(entry => entry.nodes);
+  let from = 0,
+    to = want.length,
+    first = parent.firstChild,
+    after: ChildNode | null = null;
+  // Stryker disable all: a range that is too wide gives the same nodes, and one that holds a child from outside it falls back to the whole range
+  for (; want[from] === first; first = (first as ChildNode).nextSibling) from++;
+  // A child after first exists while after is not first, and no child before first is at the end of want.
+  for (
+    let last = parent.lastChild;
+    after !== first && want[to - 1] === last;
+    last = (last as ChildNode).previousSibling
+  ) {
+    after = last;
+    to--;
+  }
+  const some = from || after;
+  return (
+    (some && arrange(parent, want.slice(from, to), first, after, false)) ||
+    (arrange(parent, want, parent.firstChild, null, true) as Node[])
+  );
+  // Stryker restore all
 };
 
 // The node arrays that each yields hold converted nodes, so a host takes them as they are.
@@ -220,17 +270,67 @@ const hosts = new WeakMap<Node, () => void>(),
 // What starts when a runtime placement first reaches a node: a host (JX-02B), or the wait of use (JX-054).
 export const waiting = new WeakMap<Node, () => void>(),
   binding = new WeakMap<Node, () => void>(); // The dynamic props, which start after the host (JX-061)
+type Wait = (() => void) & { ref: WeakRef<Node> };
+// The nodes of the waits that are not started, so a placement walks no node when there is none.
+const unstarted = new Set<WeakRef<Node>>();
+// The ancestors that an element had when its drive started, so a stop of a subtree walks only to drives.
+const holds = new WeakSet<Node>();
+
+/** Makes start wait in map until a runtime placement reaches node. */
+export const defer = (
+  map: WeakMap<Node, () => void>,
+  node: Node,
+  start: () => void,
+) => {
+  const ref = new WeakRef(node),
+    wait = () => {
+      settle(map, node);
+      start();
+    };
+  unstarted.add(ref);
+  map.set(node, Object.assign(wait, { ref }));
+};
+/** Ends the wait of node in map, if it has one. */
+const settle = (map: WeakMap<Node, () => void>, node: Node) => {
+  const wait = map.get(node) as Wait | undefined;
+  if (wait) unstarted.delete(wait.ref);
+  map.delete(node);
+};
+/** Tells if a wait can still start, and forgets the waits of collected nodes. */
+const waits = () => {
+  for (const ref of unstarted) if (!ref.deref()) unstarted.delete(ref);
+  return unstarted.size > 0;
+};
+/** Marks the ancestors of an element whose drive starts. */
+const hold = (node: Node) => {
+  for (let at = node.parentNode; at && !holds.has(at); at = at.parentNode)
+    holds.add(at);
+};
 /** Starts the waiting hosts and dynamic props in node and its descendants, in tree order. */
 const wake = (node: Node) => {
   waiting.get(node)?.();
   binding.get(node)?.();
-  for (const child of node.childNodes) wake(child);
+  for (let child = node.firstChild; child; child = child.nextSibling)
+    wake(child);
+};
+/** Places the entries of a started host, and wakes the nodes that were not its children (JX-02B). */
+const settleIn = (parent: Element, entries: Entry[]) => {
+  const added = place(parent, entries);
+  if (waits()) added.forEach(wake);
 };
 /** Stops the drives of node and its descendants, and the dynamic props of the descendants. */
 export const unmount = (node: Node, props = false) => {
   hosts.get(node)?.();
   if (props) bound.get(node)?.();
   for (const child of node.childNodes) unmount(child, true);
+};
+/** Stops the drives and the dynamic props that started in node and its descendants (JX-035). */
+export const release = (node: Node) => {
+  hosts.get(node)?.();
+  bound.get(node)?.();
+  if (holds.has(node))
+    for (let child = node.firstChild; child; child = child.nextSibling)
+      release(child);
 };
 
 /** Applies an output of a dynamic prop to its element, and changes no node (JX-062 to JX-065). */
@@ -242,7 +342,7 @@ const applyProp = (element: Element, entry: Prop, state: Val<unknown>) => {
     try {
       if (LIVE.has(name)) (element as any)[name] = value;
       else if (value == null || value === false) element.removeAttribute(name);
-      else element.setAttribute(name, value === true ? "" : `${value}`);
+      else element.setAttribute(name, attribute(name, value));
       entry.value = value;
     } catch (error) {
       reportError(error);
@@ -251,8 +351,8 @@ const applyProp = (element: Element, entry: Prop, state: Val<unknown>) => {
 
 /** Makes the dynamic props of an element wait until the runtime places it, and then drives them (JX-061). */
 export const bind = (element: Element, props: [string, unknown][]) =>
-  binding.set(element, () => {
-    binding.delete(element);
+  defer(binding, element, () => {
+    hold(element);
     const host = drive(
       element,
       (entry: Prop, state) => applyProp(element, entry, state),
@@ -280,23 +380,28 @@ export const attach = (parent: Element, children: Child, placed: boolean) => {
       entries.push(entry, run);
     },
   );
-  hosts.get(parent)?.();
-  waiting.delete(parent);
-  const added = place(parent, entries);
-  if (placed) added.forEach(wake);
+  if (placed) {
+    hosts.get(parent)?.();
+    settle(waiting, parent);
+    settleIn(parent, entries);
+  }
+  // A new element has no child and no host, so its nodes land in order with no placement.
+  else
+    for (const entry of entries)
+      for (const node of entry.nodes) parent.insertBefore(node, null);
   if (!dynamic.length) return;
   register("mount", parent, {});
   const start = () => {
-    waiting.delete(parent);
+    hold(parent);
     const host = drive(
       parent,
       applyOutput,
-      () => place(parent, entries).forEach(wake),
+      () => settleIn(parent, entries),
       true,
     );
     hosts.set(parent, host.stop);
     for (const entry of dynamic) host.add(entry);
   };
   if (placed) start();
-  else waiting.set(parent, start);
+  else defer(waiting, parent, start);
 };

@@ -22,7 +22,7 @@ So this spec defines only the contract with that extension.
   If the value is not a function, the library does no devtools work for that object.
 - DV-002: The library MUST call the hook as `hook(kind, target, detail)`.
   The hook returns an emitter or `undefined`.
-- DV-003: The call stack of the hook MUST be the hook, an internal function, the `Channel` constructor, the `feed`, `select`, `derive`, `jsx` or `each` function or the `[Symbol.asyncIterator]` method of an `Item`, and then the caller.
+- DV-003: The call stack of the hook MUST be the hook, an internal function, the `Channel` constructor, the `latest`, `feed`, `select`, `derive`, `jsx` or `each` function or the `[Symbol.asyncIterator]` method of an `Item`, and then the caller.
   For `"mount"`, it MUST be the hook, two internal functions, `mount` or `jsx`, and then the caller.
   So the hook can find the caller in `new Error().stack`.
   A `"reader"` registration has no fixed depth, because `watch` opens its reader inside `next()`.

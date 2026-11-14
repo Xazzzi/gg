@@ -78,6 +78,19 @@ test("JX-002 applies props in key order", () => {
   assert.equal(html(h("a", { href: "x", children: "t" })), '<a href="x">t</a>');
 });
 
+test("JX-002 an object with no text of its own throws at an attribute", () => {
+  assert.throws(
+    () => h("p", { style: { color: "red" } }),
+    /TypeError: style does not take a plain object/,
+  );
+  assert.throws(() => h("p", { style: Object.create(null) }), TypeError);
+  const url = { toString: () => "/x" };
+  assert.equal(
+    html(h("a", { href: url, rel: ["a", "b"], value: {} })),
+    '<a href="/x" rel="a,b"></a>',
+  );
+});
+
 test("JX-001 takes the namespace from xmlns, then from an SVG tag", () => {
   const SVG = "http://www.w3.org/2000/svg",
     XHTML = "http://www.w3.org/1999/xhtml",
@@ -452,6 +465,21 @@ test("JX-063 an output at a live property is assigned as it is", async () => {
   checked.close();
 });
 
+test("JX-064 JX-065 a plain object output at an attribute reports a TypeError", async () => {
+  reported.length = 0;
+  const style = latest<unknown>(),
+    node = h("p", { style });
+  mount(el(), node);
+  style.send("a");
+  await setImmediate();
+  style.send({ color: "red" });
+  await setImmediate();
+  assert.equal(reported.length, 1);
+  assert.ok(reported[0] instanceof TypeError);
+  assert.equal(html(node), '<p style="a"></p>');
+  style.close();
+});
+
 test("JX-065 a rejection and a failed output report, and the other props continue", async () => {
   reported.length = 0;
   const error = new Error("bad"),
@@ -589,6 +617,56 @@ test("JX-02B a host starts an element that it places, one time", async () => {
   await setImmediate();
   assert.equal(channels.length, 2);
   assert.equal(html(parent), "<div><p>b</p></div>");
+});
+
+test("JX-02B a placement walks no node while no element waits", async () => {
+  const spy = () => {
+    const node = el("b");
+    let reads = 0;
+    Object.defineProperty(node, "firstChild", { get: () => (reads++, null) });
+    return { node, reads: () => reads };
+  };
+  // Waits of collected elements from other tests count until a collection.
+  let idle = spy();
+  for (let i = 0; i < 20; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+    mount(el(), (idle = spy()).node);
+    if (!idle.reads()) break;
+  }
+  assert.equal(idle.reads(), 0);
+  const child = h("p", { children: latest() }),
+    prop = h("p", { title: latest() });
+  const walked = spy();
+  mount(el(), walked.node);
+  assert.equal(walked.reads(), 1);
+  mount(child, "x");
+  mount(el(), prop);
+  await setImmediate();
+  const after = spy();
+  mount(el(), after.node);
+  assert.equal(after.reads(), 0);
+});
+
+test("JX-02B a later placement starts no element again, and none whose wait ended", async () => {
+  const parent = el(),
+    output = latest<any>(),
+    text = latest<string>(),
+    idle = h("p", { children: text }),
+    node = h("p", { title: text, children: text }),
+    ended = h("p", { children: text });
+  text.send("t");
+  mount(ended, "x");
+  const channels = await selects(async () => {
+    mount(parent, output);
+    for (const value of [node, null, [node, ended]]) {
+      output.send(value);
+      await setImmediate();
+    }
+  });
+  assert.equal(channels.length, 3);
+  assert.equal(html(parent), '<div><p title="t">t</p><p>x</p></div>');
+  assert.equal(html(idle), "<p></p>");
 });
 
 test("JX-02B a mount into a waiting element ends its wait", async () => {
@@ -801,6 +879,99 @@ test("JX-035 JX-029 a removed item ends, and other nodes stay", async () => {
   assert.equal(html(s.parent), rows("b", "c"));
   assert.deepEqual(s.parent.counts, { insert: 0, remove: 1 });
   assert.deepEqual(s.log, ["a", "b", "c", "end"]);
+});
+
+test("JX-035 an entry that leaves stops the hosts and the dynamic props that started in its nodes", async () => {
+  const parent = el("ul"),
+    text = latest<string>(),
+    title = latest<string>();
+  text.send("t");
+  title.send("p");
+  const items = select(["a", "b"], {
+    autoStart: true,
+    autoClose: false,
+    nonYielding: true,
+  });
+  const row = () =>
+    h("li", {
+      title,
+      children: [
+        h("span", { children: h("i", { title }) }),
+        h("b", { title, children: text }),
+      ],
+    });
+  const channels = await selects(async () => {
+    mount(parent, each(items, row));
+    await setImmediate();
+  });
+  const li =
+    '<li title="p"><span><i title="p"></i></span><b title="p">t</b></li>';
+  assert.equal(html(parent), `<ul>${li}${li}</ul>`);
+  assert.equal(channels.length, 10);
+  items.shift();
+  await setImmediate();
+  assert.equal(html(parent), `<ul>${li}</ul>`);
+  assert.deepEqual(
+    channels.map(channel => channel.signal.aborted),
+    [false, false, true, true, true, true, false, false, false, false],
+  );
+});
+
+test("JX-046 a started element that code moves under a new ancestor stays driven", async () => {
+  const parent = el("ul"),
+    text = latest<string>(),
+    moved = h("b", { children: text }),
+    li = h("li", { children: [moved, h("i", { children: text })] });
+  text.send("t");
+  const items = select(["a"], {
+    autoStart: true,
+    autoClose: false,
+    nonYielding: true,
+  });
+  const channels = await selects(async () => {
+    mount(
+      parent,
+      each(items, () => li),
+    );
+    await setImmediate();
+  });
+  const span = el("span");
+  span.append(moved);
+  li.append(span);
+  items.pop();
+  await setImmediate();
+  assert.equal(html(parent), "<ul></ul>");
+  assert.deepEqual(
+    channels.map(channel => channel.signal.aborted),
+    [false, false, false, true],
+  );
+});
+
+test("JX-029 a place arranges only the children between the ones that stay at both ends", async () => {
+  const parent = el(),
+    output = latest<any>(),
+    [a, b, c, d, e] = ["a", "b", "c", "d", "e"].map(el);
+  mount(parent, output);
+  const step = async (nodes: any[], insert: number, remove: number) => {
+    reset(parent);
+    output.send(nodes);
+    await setImmediate();
+    assert.equal(
+      html(parent),
+      `<div>${[...new Set(nodes.toReversed())].toReversed().map(html).join("")}</div>`,
+    );
+    assert.deepEqual(parent.counts, { insert, remove });
+  };
+  await step([a, b, c], 3, 0);
+  await step([a, b, c, d], 1, 0);
+  await step([e, a, b, c, d], 1, 0);
+  await step([e, a, c, d], 0, 1);
+  await step([e, c, a, d], 1, 0);
+  await step([e, b, d], 1, 2);
+  await step([e, d], 0, 1);
+  await step([e, d, e], 1, 0);
+  await step([d, d, e], 0, 0);
+  await step([], 0, 2);
 });
 
 test("JX-029 JX-038 a move reorders the nodes, keeps the instances and the siblings", async () => {

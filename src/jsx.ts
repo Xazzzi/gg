@@ -1,6 +1,7 @@
 import { register } from "./devtools.ts";
 import {
   attach,
+  attribute,
   bind,
   ends,
   isDynamic,
@@ -24,9 +25,40 @@ export type Props = {
   [name: `on${string}`]: ((event: any) => void) | undefined;
 } & { [name: string]: unknown; children?: Child };
 
+/** A prop value, or a promise or an async iterable of it, which makes a dynamic prop. */
+type Live<V> = V | PromiseLike<V> | AsyncIterable<V>;
+type Text = string | number | bigint | boolean | null | undefined;
+type Handlers<E> = {
+  [K in keyof HTMLElementEventMap as `on${K}`]?: (
+    event: HTMLElementEventMap[K] & { currentTarget: E },
+  ) => void;
+};
+type LiveProp<E, K extends string> =
+  E extends Record<K, infer V> ? Live<V | number | null | undefined> : unknown;
+/** The props of an element of type E, with typed listeners and live properties, and any other attribute. */
+interface ElementProps<E> extends Handlers<E> {
+  children?: Child;
+  value?: LiveProp<E, "value">;
+  checked?: LiveProp<E, "checked">;
+  selected?: LiveProp<E, "selected">;
+  indeterminate?: LiveProp<E, "indeterminate">;
+  muted?: LiveProp<E, "muted">;
+  class?: Live<Text>;
+  id?: Live<Text>;
+  style?: Live<string | false | null | undefined>;
+  title?: Live<Text>;
+  hidden?: Live<Text>;
+  xmlns?: string;
+  [name: `on${string}`]: ((event: any) => void) | undefined;
+  [name: string]: unknown;
+}
+type Tags = HTMLElementTagNameMap &
+  Omit<SVGElementTagNameMap, keyof HTMLElementTagNameMap>;
+type Known = { [K in keyof Tags]: ElementProps<Tags[K]> };
+
 export declare namespace JSX {
   type Element = Child;
-  interface IntrinsicElements {
+  interface IntrinsicElements extends Known {
     [tag: string]: Props;
   }
   interface ElementChildrenAttribute {
@@ -87,7 +119,7 @@ export function jsx(
     } else if (typeof value === "function" && name.startsWith("on"))
       element.addEventListener(name.slice(2).toLowerCase(), value as any);
     else if (LIVE.has(name)) live.push([name, value]);
-    else element.setAttribute(name, value === true ? "" : `${value}`);
+    else element.setAttribute(name, attribute(name, value));
   }
   attach(element, props.children, false);
   // After the children, so a select finds the option that its value names.

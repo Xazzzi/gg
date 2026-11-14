@@ -1,4 +1,4 @@
-import { waiting } from "./host.ts";
+import { defer, waiting } from "./host.ts";
 import type { Child } from "./jsx.ts";
 
 declare const VALUE: unique symbol;
@@ -50,7 +50,7 @@ export async function* use<T>(
 ): AsyncGenerator<Comment, T, unknown> {
   const anchor = document.createComment(""),
     placed = Promise.withResolvers<void>();
-  waiting.set(anchor, placed.resolve);
+  defer(waiting, anchor, placed.resolve);
   yield anchor;
   await placed.promise;
   return consume(anchor, context);

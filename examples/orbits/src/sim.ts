@@ -1,4 +1,4 @@
-import { Channel, select } from "@xazzzi/gg";
+import { latest, select } from "@xazzzi/gg";
 
 export type Body = {
   id: number;
@@ -19,9 +19,6 @@ const GM = 5000,
   SOFT = 25,
   EDGE = 450,
   SUBSTEPS = 4;
-
-export const latest = <T>() =>
-  new Channel<T>({ firstReceive: "latest", thenReceive: "latest" });
 
 let ids = 0;
 /** Makes a body on a near circular orbit around the star. */

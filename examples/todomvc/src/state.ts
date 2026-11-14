@@ -1,4 +1,4 @@
-import { Channel, feed, select } from "@xazzzi/gg";
+import { Channel, feed, latest, select } from "@xazzzi/gg";
 
 export type Todo = { id: string; title: string; completed: boolean };
 export type Action =
@@ -47,10 +47,7 @@ async function* hashes() {
     );
   }
 }
-const route = new Channel<string>({
-  firstReceive: "latest",
-  thenReceive: "latest",
-});
+const route = latest<string>();
 feed(hashes(), route, { autoStart: true, backPressure: false });
 
 // A read of view.todos gives the todos select itself (SE-080).

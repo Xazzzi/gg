@@ -7,6 +7,7 @@ import {
   drive,
   type Entry,
   isDynamic,
+  release,
   toNodes,
 } from "./host.ts";
 import type { Child } from "./jsx.ts";
@@ -190,6 +191,7 @@ async function* replay<T>(
         if (!kept.has(entry)) {
           leave(entry.handle);
           host.remove(entry);
+          entry.nodes.forEach(release);
         }
       dirty = true;
     }

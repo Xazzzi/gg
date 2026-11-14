@@ -240,6 +240,22 @@ test("SE-157 a slice takes each operation once, while a lagging reader keeps the
   ]);
 });
 
+test("SE-142 SE-151 a slice of one slot skips the operations before its call in the same report", async () => {
+  for (const [shape, key] of [
+    [{ a: 1 }, "a"],
+    [[1], 0],
+  ] as [any, PropertyKey][]) {
+    const s = select(shape, { ...open, onChanges: () => {} }); // Keeps the log (SE-14C)
+    await setImmediate();
+    s[key] = 2;
+    const reader = changes(s, [key as never]);
+    s[key] = 3;
+    const { value } = await reader.next();
+    assert.deepEqual(value, [{ op: "set", key, value: 3, prev: 2 }]);
+    s[Symbol.dispose]();
+  }
+});
+
 test("SE-157 a slice keeps no operation of the log, and only its own operations", async () => {
   const s = await started(
     select({ a: 0, b: 0 } as Record<string, unknown>, open),

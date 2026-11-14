@@ -38,7 +38,7 @@
       }
     },
     {
-      "includes": ["examples/**", "devtools/**"],
+      "includes": ["examples/**", "devtools/**", "tests/jsx-types.tsx"],
       "linter": {
         "rules": {
           "a11y": {

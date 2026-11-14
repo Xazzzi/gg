@@ -860,6 +860,15 @@ const cut = (start: number, count: number, ...values: unknown[]): Op => ({
   added: values,
 });
 
+test("HE-049 another option key throws", () => {
+  const target = ["a"];
+  assert.throws(
+    () => applyOps(target, [set(0, "x")], undefined, { other: 1 } as any),
+    TypeError,
+  );
+  assert.deepEqual(target, ["a"]);
+});
+
 test("HE-049 eager must be a boolean", () => {
   assert.throws(
     () => applyOps([], [], undefined, { eager: 1 as any }),
@@ -1049,7 +1058,76 @@ test("HE-04E lazy writes only the indexes that changed", () => {
     },
   });
   applyOps(target, [set(1, "x")]);
+  assert.deepEqual(writes, ["1"]);
+  const back = (key: number, value: unknown, prev: unknown): Op => ({
+    op: "set",
+    key,
+    value,
+    prev,
+  });
+  applyOps(target, [back(0, "z", "a"), back(0, "a", "z"), back(2, "q", "c")]);
+  assert.deepEqual(writes, ["1", "2"]);
+  writes.length = 0;
+  const grown = applyOps([] as unknown[], [set(0, undefined)]);
+  assert.equal(grown.length, 1);
+  assert.equal(applyOps(["a"] as unknown[], [set(1, undefined)]).length, 2);
+  applyOps(target, [set(1, "y"), cut(3, 0)]);
   assert.deepEqual(writes, ["1", "length"]);
+});
+
+test("HE-04B HE-04C HE-04H lazy sets map in index order, one time for each index that changes", () => {
+  const calls: unknown[][] = [];
+  const map = (value: unknown, prev: unknown) => {
+    calls.push([value, prev]);
+    return `${value}!`;
+  };
+  const was = (key: number, value: unknown, prev: unknown): Op => ({
+    op: "set",
+    key,
+    value,
+    prev,
+  });
+  const target = ["a", "b", "c"];
+  target.length = 5;
+  applyOps(
+    target,
+    [
+      was(6, "g", undefined),
+      was(2, "x", "c"),
+      was(0, "y", "a"),
+      was(2, "z", "x"),
+      was(1, "q", "b"),
+      was(1, "b", "q"),
+      was(3, undefined, undefined),
+    ],
+    map,
+  );
+  assert.deepEqual(calls, [
+    ["y", "a"],
+    ["z", "c"],
+    [undefined, undefined],
+    ["g", undefined],
+  ]);
+  assert.deepEqual(
+    [...target],
+    ["y!", "b", "z!", "undefined!", undefined, undefined, "g!"],
+  );
+  assert.equal(4 in target, false);
+});
+
+test("HE-04D HE-04F lazy sets leave the target unchanged after a misfit or a map error", () => {
+  const target = ["a", "b"];
+  assert.throws(() => applyOps(target, [set(0, "x"), set(-1, "y")]), TypeError);
+  const failure = new Error("map");
+  assert.throws(
+    () =>
+      applyOps(target, [set(0, "x"), set(1, "y")], value => {
+        if (value === "y") throw failure;
+        return value as string;
+      }),
+    e => e === failure,
+  );
+  assert.deepEqual(target, ["a", "b"]);
 });
 
 test("HE-04E lazy stores an undefined entry, and shrinks the target", () => {

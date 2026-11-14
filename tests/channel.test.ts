@@ -3,7 +3,12 @@ import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
 import { attached } from "../src/channel.ts";
-import { Channel, type ChannelOptions, StopError } from "../src/index.ts";
+import {
+  Channel,
+  type ChannelOptions,
+  latest,
+  StopError,
+} from "../src/index.ts";
 
 const collect = globalThis.gc as () => void; // --expose-gc is in the test command
 const iter = <T, R>(ch: Channel<T, R>) => ch[Symbol.asyncIterator]();
@@ -51,6 +56,31 @@ test("CH-002 thenReceive unread requires firstReceive unread", () => {
       TypeError,
     );
   new Channel({ firstReceive: "unread", thenReceive: "unread" });
+});
+
+test("CH-005 an unlisted own enumerable option key throws", () => {
+  assert.throws(() => new Channel({ first: "latest" } as any), TypeError);
+  assert.throws(() => new Channel({ constructor: 1 } as any), TypeError);
+  new Channel(Object.create({ other: 1 }));
+  new Channel({ [Symbol()]: 1 } as any);
+  new Channel(Object.defineProperty({}, "other", { value: 1 }));
+});
+
+test("CH-006 latest gives the current value, then each newer value", async () => {
+  const ch = latest<number>();
+  assert.ok(ch instanceof Channel);
+  ch.send(1);
+  ch.send(2);
+  const a = ch[Symbol.asyncIterator](),
+    b = ch[Symbol.asyncIterator]();
+  assert.equal((await a.next()).value, 2);
+  ch.send(3);
+  ch.send(4);
+  assert.equal((await a.next()).value, 4);
+  assert.equal((await b.next()).value, 4);
+  ch.close();
+  assert.equal((await a.next()).done, true);
+  assert.notEqual(latest(), latest());
 });
 
 test("CH-003 unlisted option values throw", () => {

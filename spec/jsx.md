@@ -64,7 +64,7 @@ export function use<T>(context: Context<T>): AsyncGenerator<Comment, T, unknown>
 
 export declare namespace JSX {
   type Element = Child;
-  interface IntrinsicElements {
+  interface IntrinsicElements extends Known {
     [tag: string]: Props;
   }
   interface ElementChildrenAttribute {
@@ -73,6 +73,12 @@ export declare namespace JSX {
 }
 ```
 
+`Known` gives each HTML and SVG tag name the props of its element type.
+A listener at an `on` key of a DOM event takes that event, with the element as its `currentTarget`.
+A live property takes the type of that property of the element, or a number.
+`class`, `id`, `title` and `hidden` take a text value or a boolean, and `style` takes a string.
+Each of these props also takes `null`, `undefined` and a dynamic value.
+Any other prop, and any prop of another tag, takes any value.
 A JSX expression has the type `Child`.
 An async iterable child can produce any `Child` in its type, so a component yields JSX with no cast.
 A dynamic value in an output still fails at runtime (JX-027, JX-028).
@@ -110,6 +116,8 @@ The runtime uses the global `document` when it creates nodes.
   Another value at a live property MUST be assigned to the property of the element, after JX-003 mounts the children.
   So a `<select value>` finds its options.
   `true` MUST set the attribute to `""`.
+  An object whose `toString` is `Object.prototype.toString` MUST throw a `TypeError`, because it has no text of its own.
+  So `style` takes a string, and not an object.
   Other values MUST set the attribute to `String(value)`.
 - JX-003: `jsx` MUST mount `props.children` into the element, as `mount` does, except that the element waits to drive its dynamic children (JX-02B).
 - JX-004: `jsx` MUST ignore `key`.
@@ -186,7 +194,7 @@ A dynamic prop changes with its source, so a component needs no code to update a
 - JX-065: A rejected state, and an error that applying an output throws, MUST call `globalThis.reportError`.
   The element keeps its attribute or property, and the other dynamic props continue.
 - JX-066: A dynamic prop MUST keep its last output when its source finishes.
-  It stops when the unmount function of a `mount` around the element runs (JX-02A).
+  It stops when the unmount function of a `mount` around the element runs (JX-02A), or when its entry leaves `each` (JX-035).
 
 ## Each
 
@@ -210,6 +218,8 @@ A component instance that finishes renders again with the next value of its item
   It MUST NOT call `render`, unless JX-03C applies.
 - JX-035: For an item that leaves the mirror, `each` MUST end its `Item` and stop the drive of its child.
   To end an `Item`, `each` MUST close its channel if it has one, and abort its `signal`.
+  `each` MUST then stop the drive of each host, and the dynamic props, that started in the nodes of the entry and in their descendants (JX-046).
+  So a row that leaves ends the dynamic children and the dynamic props inside it.
 - JX-036: `each` MUST drive the dynamic children of its entries with one `select`, with `autoStart`, `nonYielding` and no `autoClose`.
   JX-024 to JX-028 apply.
 - JX-037: When the nodes of its entries changed after its last yield, `each` MUST yield a new array of the nodes of all entries in order.
@@ -266,7 +276,7 @@ Provide a `Channel` or a `select` for a value that changes.
 ## Limits
 
 - JX-040: The runtime does not end a dynamic child when its nodes leave the host.
-  A dynamic child ends when its source finishes, or when its host stops (JX-02A).
+  A dynamic child ends when its source finishes, or when its host stops (JX-02A, JX-035).
   So close the channels that a component reads to end the component, as `each` does.
   In `each`, a child that finishes renders again (JX-03C).
 - JX-041: An async generator queues `return()` behind a pending `next()`.
@@ -280,6 +290,9 @@ Provide a `Channel` or a `select` for a value that changes.
   It assigns the value as it is, so a `value` on a file input throws, as the DOM does.
 - JX-045: Other code that inserts a waiting element, for example with `append`, does not start it (JX-02B).
   Yield the element or make it a child, so that a host places it.
+- JX-046: `each` finds a started element through the ancestors that the element had when it started (JX-035).
+  So a started element that other code moves under a new ancestor inside its entry stays driven when the entry leaves.
+  It ends when its sources finish, or when an unmount function stops it (JX-02A).
 
 ## Example
 

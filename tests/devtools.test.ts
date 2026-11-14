@@ -7,6 +7,7 @@ import {
   changes,
   derive,
   feed,
+  latest,
   select,
   watch,
 } from "../src/index.ts";
@@ -120,14 +121,43 @@ test("DV-003 the hook finds the caller at a fixed stack depth", () => {
     feed([1], new Channel());
     select({});
     derive(new Channel(), String);
+    latest();
   } finally {
     delete g[HOOK];
   }
-  assert.equal(frames.length, 7);
+  assert.equal(frames.length, 8);
   frames.splice(5, 1); // The channel of derive
   assert.match(frames[3], /^channel .*select\.ts/); // The channel that select owns
   frames.splice(3, 1);
   for (const frame of frames) assert.match(frame, /devtools\.test\.ts/);
+});
+
+test("DV-003 CH-006 latest registers one channel with its options, and emits its events", () => {
+  const seen: unknown[][] = [];
+  g[HOOK] = (...registration: unknown[]) => {
+    seen.push(registration);
+    return (...event: unknown[]) => seen.push(event);
+  };
+  try {
+    const ch = latest<number>();
+    ch.send(1);
+    assert.deepEqual(seen, [
+      [
+        "channel",
+        ch,
+        {
+          owner: undefined,
+          firstReceive: "latest",
+          thenReceive: "latest",
+          stopStyle: "drain",
+          ackStyle: "any",
+        },
+      ],
+      ["send", 1, 1],
+    ]);
+  } finally {
+    delete g[HOOK];
+  }
 });
 
 test("DV-004 errors from the hook propagate", () => {

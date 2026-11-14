@@ -65,6 +65,7 @@ FE-014 rejects it at runtime.
 - FE-002: `feed` MUST NOT add methods to `Channel`.
 - FE-003: An option value of the wrong type MUST make `feed` throw a `TypeError` synchronously.
   `undefined` selects the default.
+- FE-004: An own enumerable string key of the options that is not a `FeedOptions` key MUST make `feed` throw a `TypeError` synchronously.
 
 ## Source handling
 

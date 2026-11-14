@@ -99,7 +99,7 @@ The package MUST set `sideEffects: false`, so that a bundler can remove unused h
 
 | Spec         | Values                                                                                             | Types                                                                                             |
 | ------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `channel.md` | `Channel`, `StopError`                                                                             | `ChannelOptions`, `FirstReceive`, `ThenReceive`, `StopStyle`, `AckStyle`                          |
+| `channel.md` | `Channel`, `latest`, `StopError`                                                                   | `ChannelOptions`, `FirstReceive`, `ThenReceive`, `StopStyle`, `AckStyle`                          |
 | `feed.md`    | `feed`                                                                                             | `Source`, `FeedOptions`                                                                           |
 | `select.md`  | `select`, `changes`, `watch`, `CHAN`                                                               | `SelectShape`, `SelectOptions`, `Snapshot`, `Unwrapped`, `State`, `Val`, `Op`, `Changes`, `Watch` |
 | `helpers.md` | `abortable`, `applyOps`, `catching`, `derive`, `isVal`, `spread`                                   | `Caught`, `Spread`                                                                                |

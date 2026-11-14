@@ -1,5 +1,5 @@
 import { type Emit, pulledSource, register } from "./devtools.ts";
-import { isThenable, noop } from "./source.ts";
+import { checkKeys, isThenable, noop } from "./source.ts";
 
 export type FirstReceive = "first" | "unread" | "latest" | "next";
 export type ThenReceive = "every" | "latest" | "unread";
@@ -22,10 +22,13 @@ type Reader<T> = { at?: Cell<T>; pos: number; placed?: boolean };
 type Ack = PromiseWithResolvers<void> & { n: number; next?: Ack };
 
 const STOP_BRAND = Symbol.for("gg.StopError");
-const FIRST_RECEIVE = ["first", "unread", "latest", "next"];
-const THEN_RECEIVE = ["every", "latest", "unread"];
-const STOP_STYLE = ["drain", "stop"];
-const ACK_STYLE = ["any", "all"];
+/** The values that each channel option takes. */
+export const CHOICES: Record<keyof ChannelOptions, string[]> = {
+  firstReceive: ["first", "unread", "latest", "next"],
+  thenReceive: ["every", "latest", "unread"],
+  stopStyle: ["drain", "stop"],
+  ackStyle: ["any", "all"],
+};
 
 /** The error that producers and `signal` get after a channel closes or throws. */
 export class StopError extends Error {
@@ -50,6 +53,27 @@ export let attached: (channel: Channel<any, any>) => Promise<void>;
 export let isChannel: (value: unknown) => boolean;
 /** Tells if the channel ended with `throw`. */
 export let failed: (channel: Channel<any, any>) => boolean;
+
+let silent: boolean | undefined, // Set while latest makes its channel, which it registers itself
+  connect: (channel: Channel<any, any>, emit: Emit | undefined) => void;
+const LATEST = { firstReceive: "latest", thenReceive: "latest" } as const;
+
+/** Makes a channel that gives each consumer the newest value, and then each newer value. */
+export function latest<T, TReturn = undefined>(): Channel<T, TReturn> {
+  silent = true;
+  const channel = new Channel<T, TReturn>(LATEST);
+  silent = false;
+  // Here, so the hook finds the caller at its fixed depth (DV-003).
+  connect(
+    channel,
+    register("channel", channel, {
+      ...LATEST,
+      stopStyle: "drain",
+      ackStyle: "any",
+    }),
+  );
+  return channel;
+}
 
 /** An async stream with many producers and consumers, whose options set what each consumer reads. */
 export class Channel<T, TReturn = undefined>
@@ -84,6 +108,9 @@ export class Channel<T, TReturn = undefined>
           ? Promise.resolve()
           : (channel.#consumer ??= Promise.withResolvers()).promise;
     isChannel = value => Object(value) === value && #tail in (value as object);
+    connect = (channel, emit) => {
+      channel.#emit = emit;
+    };
     failed = channel => !!channel.#failed;
   }
 
@@ -97,19 +124,20 @@ export class Channel<T, TReturn = undefined>
   }
 
   /** Checks the options, and registers the channel with devtools. */
-  constructor({
-    firstReceive = "unread",
-    thenReceive = "every",
-    stopStyle = "drain",
-    ackStyle = "any",
-  }: ChannelOptions = {}) {
-    if (
-      !FIRST_RECEIVE.includes(firstReceive) ||
-      !THEN_RECEIVE.includes(thenReceive) ||
-      !STOP_STYLE.includes(stopStyle) ||
-      !ACK_STYLE.includes(ackStyle)
-    )
-      throw new TypeError("Invalid channel option");
+  constructor(options: ChannelOptions = {}) {
+    const {
+      firstReceive = "unread",
+      thenReceive = "every",
+      stopStyle = "drain",
+      ackStyle = "any",
+    } = options;
+    const chosen = { firstReceive, thenReceive, stopStyle, ackStyle };
+    checkKeys(options, CHOICES);
+    for (const name of Object.keys(CHOICES) as (keyof ChannelOptions)[])
+      if (!CHOICES[name].includes(chosen[name]))
+        throw new TypeError(
+          `Option ${name} must be one of ${CHOICES[name].join(", ")}`,
+        );
     if (thenReceive === "unread" && firstReceive !== "unread")
       throw new TypeError(
         'thenReceive "unread" requires firstReceive "unread"',
@@ -124,12 +152,7 @@ export class Channel<T, TReturn = undefined>
     if (ackStyle === "all") this.#readers = new Set();
     if (firstReceive === "first" || firstReceive === "unread")
       this.#anchor = this.#tail;
-    this.#emit = register("channel", this, {
-      firstReceive,
-      thenReceive,
-      stopStyle,
-      ackStyle,
-    });
+    if (!silent) this.#emit = register("channel", this, chosen);
   }
 
   /** Appends a value to the log, and wakes blocked consumers. */

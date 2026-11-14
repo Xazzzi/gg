@@ -1,4 +1,10 @@
-import { attached, Channel, type ChannelOptions, failed } from "./channel.ts";
+import {
+  attached,
+  CHOICES,
+  Channel,
+  type ChannelOptions,
+  failed,
+} from "./channel.ts";
 import { type Emit, pulledSource, pulling, register } from "./devtools.ts";
 import {
   ASYNC,
@@ -282,8 +288,8 @@ const toIndex = (key: PropertyKey) => {
 };
 
 /** A proxy trap for operations that a select proxy does not support. */
-const forbid = () => {
-  throw new TypeError("Operation is not supported on a select proxy");
+const forbid = (name: string) => {
+  throw new TypeError(`${name} is not supported on a select proxy`);
 };
 
 /**
@@ -348,6 +354,8 @@ class Log {
   kept?: boolean; // onChanges or devtools read each report, which connect sets
   read?: boolean; // A reader read or waited since the flush cleared it, so the flush was observed (SE-04A)
   #seen?: PromiseWithResolvers<void>;
+  #last?: Op[]; // The report that publish gives the readers now
+  #keyed?: Map<PropertyKey, Op[]> | null;
 
   constructor(pending?: Op[]) {
     this.pending = pending;
@@ -387,15 +395,46 @@ class Log {
   publish(report: Op[]) {
     if (!this.readers.size) return;
     for (const op of report) this.reported.push(op); // A spread overflows the stack on a large report
+    this.#last = report;
     for (const reader of this.readers) wakeReader(reader);
+    this.#last = this.#keyed = undefined; // SE-14B
+    this.trim();
+  }
+
+  /**
+   * Gives the operations of the report by key, for a reader at its start, so a slice of one slot reads only its own.
+   * Gives undefined outside a publish, and for a report with a splice or a move. */
+  keyed(at: number) {
+    const report = this.#last;
+    // Stryker disable next-line ConditionalExpression: with no report by key, a slice projects the report
+    if (!report) return undefined;
+    // Stryker disable next-line ConditionalExpression,ArithmeticOperator: with no report by key, a slice projects the report
+    if (at !== this.end - report.length) return undefined;
+    // Stryker disable next-line ConditionalExpression,EqualityOperator,BlockStatement: with no report by key, a slice projects the report
+    if (this.#keyed === undefined) {
+      const keyed = new Map<PropertyKey, Op[]>();
+      this.#keyed = keyed;
+      // Stryker disable next-line ConditionalExpression,StringLiteral: with no report by key, a slice projects the report
+      for (const op of report)
+        if (!("key" in op)) {
+          this.#keyed = null;
+          break;
+        } else keyed.get(op.key)?.push(op) ?? keyed.set(op.key, [op]);
+    }
+    // Stryker disable next-line LogicalOperator: with no report by key, a slice projects the report
+    return this.#keyed ?? undefined;
   }
 
   /** Drops reported operations that every reader read. */
   trim() {
-    let low = this.end;
-    for (const reader of this.readers) low = Math.min(low, positionOf(reader));
-    this.reported.splice(0, low - this.base);
-    this.base = low;
+    // Stryker disable next-line ConditionalExpression: an empty log has nothing to drop
+    if (this.reported.length) {
+      let low = this.end;
+      for (const reader of this.readers)
+        low = Math.min(low, positionOf(reader));
+      this.reported.splice(0, low - this.base);
+      this.base = low;
+    }
     if (!this.readers.size && !this.kept) this.pending = undefined;
   }
 }
@@ -405,6 +444,7 @@ type View = {
   readonly outputs: unknown;
   begin(length: number): void;
   project(list: Op[]): Op[];
+  pick(keyed: Map<PropertyKey, Op[]>): Op[] | undefined; // The same as project, for a slice of one slot
   spent?(): boolean; // A key slice always has its slots
 };
 
@@ -419,6 +459,14 @@ class KeySlice implements View {
   }
 
   begin() {}
+
+  // Stryker disable next-line BlockStatement: project gives the same operations
+  pick(keyed: Map<PropertyKey, Op[]>) {
+    // Stryker disable next-line ConditionalExpression: project gives the same operations
+    if (this.#names.size !== 1) return undefined;
+    const [name] = this.#names;
+    return keyed.get(name as PropertyKey) ?? [];
+  }
 
   // An object shape logs only set and delete
   project(list: Op[]) {
@@ -491,6 +539,17 @@ class IndexSlice implements View {
       }
     }
     return result;
+  }
+
+  // A keyed report of an array shape holds only sets, which move no slot
+  // Stryker disable next-line BlockStatement: project gives the same operations
+  pick(keyed: Map<PropertyKey, Op[]>) {
+    const picked = this.#at as number[];
+    // Stryker disable next-line ConditionalExpression: project gives the same operations
+    if (this.#describe || picked.length !== 1) return undefined;
+    return (keyed.get(picked[0] as number) ?? []).map(
+      op => ({ ...op, key: 0 }) as Op,
+    );
   }
 
   spent() {
@@ -594,15 +653,18 @@ class Reader implements Changes<unknown> {
 
   /** Moves the reported operations after the position into the slice operations. */
   #take(slice: View) {
-    const log = this.#log;
-    for (const op of slice.project(log.from(this.#at))) this.#taken.push(op);
+    const log = this.#log,
+      keyed = log.keyed(this.#at);
+    // Stryker disable next-line ConditionalExpression,LogicalOperator: project gives the same operations, and reads the whole report
+    const ops =
+      (keyed && slice.pick(keyed)) ?? slice.project(log.from(this.#at));
+    for (const op of ops) this.#taken.push(op);
     this.#at = log.end;
     if (slice.spent?.()) {
       // Stryker disable next-line BlockStatement,CallExpression: a spent reader reads past each later report, so this only stops the log sooner
       log.readers.delete(this);
       this.#end();
     }
-    log.trim();
   }
 
   /** Gives the operations that a read takes, or undefined if none waits. */
@@ -668,6 +730,14 @@ const position = (value: unknown, size: number) => {
   const relative = integer(value);
   return relative < 0 ? Math.max(size + relative, 0) : Math.min(relative, size);
 };
+/**
+ * Splices items into a dense list, and gives the removed items.
+ * A long list of items goes through replace, because it does not fit in arguments. */
+const splice = <V>(list: V[], start: number, count: number, items: V[]) =>
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: replace gives the same list, with more copies
+  items.length < 1024
+    ? list.splice(start, count, ...items)
+    : replace(list, start, count, items);
 /** Gives an array of count undefined items. */
 const blanks = (count: number) => Array.from({ length: count }) as unknown[];
 
@@ -905,15 +975,15 @@ class Select {
   }
 
   defineProperty(): boolean {
-    return forbid();
+    return forbid("defineProperty");
   }
 
   preventExtensions(): boolean {
-    return forbid();
+    return forbid("preventExtensions");
   }
 
   setPrototypeOf(): boolean {
-    return forbid();
+    return forbid("setPrototypeOf");
   }
 
   /** Gives an array method that works on this select, and makes it one time. */
@@ -1143,6 +1213,8 @@ class Select {
         added: all.map(slot => this.#out(slot)),
       }));
     for (const reader of this.#log.readers) beginReader(reader, all.length);
+    // Stryker disable next-line MethodExpression: a log with no reader left only stops sooner (SE-14C)
+    this.#log.trim();
     const rejected =
       this.#unwrap &&
       all.find(slot => slot.kind !== PLAIN && slot.state.status === "rejected");
@@ -1163,11 +1235,10 @@ class Select {
 
   /** Gives the outputs of all slots, in the shape of the target. */
   #snapshot() {
-    return this.#isArray
-      ? this.#array.map(slot => this.#out(slot))
-      : Object.fromEntries(
-          [...this.#map].map(([key, slot]) => [key, this.#out(slot)]),
-        );
+    if (this.#isArray) return this.#array.map(slot => this.#out(slot));
+    const entries: [PropertyKey, unknown][] = [];
+    for (const [key, slot] of this.#map) entries.push([key, this.#out(slot)]);
+    return Object.fromEntries(entries);
   }
 
   /**
@@ -1245,12 +1316,15 @@ class Select {
 
   /** Writes a source to the target as a plain data property. */
   #define(key: any, source: unknown) {
-    Reflect.defineProperty(this.#target, key, {
-      value: source,
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
+    // Stryker disable next-line ConditionalExpression: an array write has a data property at its index already
+    if (this.#isArray) this.#target[key] = source;
+    else
+      Reflect.defineProperty(this.#target, key, {
+        value: source,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
   }
 
   /** Throws if a sort comparator tries to change the proxy. */
@@ -1296,14 +1370,14 @@ class Select {
     this.#unlocked();
     if (this.#signal.aborted) {
       items.forEach(quiet);
-      return replace(this.#target, start, count, items);
+      return splice(this.#target, start, count, items);
     }
     const detected = items.map(item => detect(item)); // SE-016 throws before anything changes
     const added = items.map((item, index) =>
       this.#make(item, undefined, start + index, detected[index] as Detected),
     );
-    const removed = replace(this.#target, start, count, items);
-    const gone = replace(this.#array, start, count, added);
+    const removed = splice(this.#target, start, count, items);
+    const gone = splice(this.#array, start, count, added);
     this.#renumber(start + items.length);
     this.#record(() => ({
       op: "splice",
@@ -1461,7 +1535,7 @@ export function select(shape: any, options: any = {}): any {
     throw new TypeError("select shape must be an object");
   if (RESERVED.some(key => Object.hasOwn(shape, key)))
     throw new TypeError("select shape holds a reserved key");
-  checkOptions(options, OPTION_TYPES);
+  checkOptions(options, OPTION_TYPES, CHOICES);
   const {
     thenReceive = "latest",
     stopStyle,

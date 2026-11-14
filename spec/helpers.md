@@ -269,6 +269,7 @@ Without `map`, `applyOps` stores each output unchanged.
   The current operation MUST stay unapplied.
   Earlier operations MUST stay applied.
 - HE-049: If `options.eager` is not a boolean and not `undefined`, `applyOps` MUST throw a `TypeError`.
+  It MUST also throw a `TypeError` for another own enumerable string key of `options`.
 - HE-04A: Without `eager`, the final `target` MUST equal an eager replay of the same `ops` with the same `map` results, including key order.
   For a value that reuses an entry (HE-04H), the `map` result is that entry.
 - HE-04B: Without `eager`, `map` MUST run one time for each value that stays in place after all `ops` and reuses no entry, and for no other value.

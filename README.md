@@ -3,9 +3,10 @@
 Zero-dependency concurrent primitives for JavaScript and TypeScript.
 `Channel` moves values, `feed` fills channels from sources, and `select` combines sources into one state.
 
-12kB gzipped, tree-shakeable.
+13kB gzipped, tree-shakeable.
 Features 100% coverage, including Stryker mutation tests.
-Requires Node 22 or later. ESM only.
+Requires Node 22 or later, or a browser with `Promise.withResolvers`. ESM only.
+The examples use `using`, which needs a transpiler in most browsers.
 
 WARNING: Experimental project coded by Opus 5.5. No warranty, use at own risk.
 
@@ -42,6 +43,7 @@ Options select the mode:
 | `next`       | Future values only   | Next, then newest    | Invalid    |
 
 Defaults are `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"` and `ackStyle: "any"`.
+`latest()` makes a channel of a current value, with `firstReceive: "latest"` and `thenReceive: "latest"`.
 `stopStyle: "stop"` discards values not yet read when the channel ends.
 `ackStyle: "all"` makes `asend` wait for every consumer, so a slow consumer holds at most one unread value for each producer that awaits.
 
@@ -116,6 +118,7 @@ The instance yields its node, then changes the nodes it owns.
 It yields again only to replace its node, or to wake its host with the same node.
 A promise or an async iterable is a child, so a channel of strings is live text.
 Props set attributes, and `value`, `checked`, `selected`, `indeterminate` and `muted` set properties.
+Each HTML and SVG tag has typed listeners and live properties, and takes any other attribute.
 A promise or an async iterable prop is live, and sets its attribute or property with each value.
 SVG tags get the SVG namespace, and an `xmlns` prop sets any namespace.
 `mount` returns a function that stops the components and empties the parent.
@@ -146,6 +149,7 @@ mount(
 
 `each` reads the changes of `todos` with `changes`, and replays them onto its rows.
 It gives each item a channel, sends it each new value, and closes it when the item leaves.
+A row that leaves also stops the dynamic children and dynamic props inside it.
 A row that finishes renders again with the next value, so a row can also read its item once.
 So a row updates itself, and the list moves only nodes that change place.
 State needs no UI code, and a busy list renders all changes since its last read in one pass.

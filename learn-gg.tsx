@@ -23,6 +23,7 @@ import {
   each,
   feed,
   isVal,
+  latest,
   mount,
   type Op,
   Provide,
@@ -38,8 +39,6 @@ import { html } from "./tests/dom.ts";
 const topic = (title: string, prefix = "\n") =>
   console.log(styleText(["bold", "cyan"], prefix + title));
 const tick = () => new Promise(resolve => setImmediate(resolve));
-const latest = <T,>() =>
-  new Channel<T>({ firstReceive: "latest", thenReceive: "latest" });
 
 /// ## Channel
 

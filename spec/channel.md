@@ -49,6 +49,8 @@ export class Channel<T, TReturn = undefined>
   [Symbol.dispose](): void;
 }
 
+export function latest<T, TReturn = undefined>(): Channel<T, TReturn>;
+
 export class StopError extends Error {
   constructor(reason?: unknown);
   readonly name: "StopError";
@@ -90,6 +92,10 @@ The implementation MAY use any internal structure that gives the same observable
 - CH-003: The constructor MUST throw a `TypeError` for an option value that the Public API does not list.
 - CH-004: The constructor MUST throw a `TypeError` if `ackStyle` is `"all"` and `thenReceive` is `"unread"`.
   A work queue gives each value to one consumer, so no value reaches all consumers.
+- CH-005: The constructor MUST throw a `TypeError` for an own enumerable string key of the options that the Public API does not list.
+  So a misspelled option does not pass as a default.
+- CH-006: `latest()` MUST return a new `Channel` with `firstReceive: "latest"`, `thenReceive: "latest"` and the other defaults.
+  So a consumer gets the current value, and then each newer value.
 
 CH-002 exists because `thenReceive: "unread"` guarantees that one consumer gets each value.
 This guarantee needs all consumers to take values from the shared head.

@@ -14,6 +14,7 @@ All source needs 100% V8 branch coverage and 100% Stryker mutation coverage.
 - `npm run spec:examples` rewrites `// =>` results in spec blocks of channel, feed, helpers and select.
 - `npm run checks` runs types, Biome, tests and the spec example check.
 - `npm run test:branches` lists uncovered branches, and prints nothing at 100%.
+- `npm run bench` times table and primitive workloads on the linked-list DOM of `tests/bench-dom.ts`; `tests/jsx-types.tsx` holds type checks of JSX props.
 
 ## Rules
 

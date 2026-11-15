@@ -1,6 +1,7 @@
 # JSX
 
-This document uses `Channel` from `channel.md`, `select`, `changes`, `State` and `Val` from `select.md`, and `applyOps` from `helpers.md`.
+This document uses `Channel` from `channel.md`, `select`, `changes`, `State` and `Val` from `select.md`, and `applyOps` and `derive` from `helpers.md`.
+It names rules of `devtools.md` where the devtools hook shares a mechanism.
 The key words MUST, MUST NOT, SHOULD and MAY are normative.
 
 ## Purpose
@@ -109,7 +110,7 @@ The runtime uses the global `document` when it creates nodes.
 - **Part**: a dynamic child in an output, which the host of the entry drives.
 - **Scope**: a `mount`, or a started element, with the elements that started under it.
 - **Boundary**: an element that `Catch` returns, which takes the failures of the scopes under it (JX-090).
-- **Failure**: an error that JX-028, JX-065, JX-087 or JX-088 reports for a drive.
+- **Failure**: an error that JX-028, JX-065, JX-087 or JX-088 reports for a drive, an error of a binding (JX-067), or an error of a held value (JX-0B5).
   The scope of a failure is the scope of that drive.
   The drive of an `each` belongs to the scope of the host that drives the `each`.
 - **Park**: pull a source no more, and not return it.
@@ -175,11 +176,15 @@ A web component takes data through its properties, and an attribute takes only t
 So the runtime assigns the properties that the class of a custom element defines, and JSX needs no syntax for them.
 
 - JX-0B0: At an own property of a custom element, JX-002 and JX-063 MUST assign the value to the property.
-  Another key follows JX-002 and JX-064, so `id`, `class`, `slot`, `style`, `aria-*` and `data-*` stay attributes.
+  Another key follows JX-002 and JX-064.
+  So `id`, `slot` and `style` stay attributes for each class (JX-0B1), and `class`, `aria-*` and `data-*` stay attributes unless the class defines a property of that name.
 - JX-0B1: Each property that `HTMLElement.prototype` has, also from its prototypes, is not an own property.
   So data cannot reach `innerHTML`, `outerHTML`, `textContent` or an `on` property, and JX-008 and JX-009 stay true.
   What a class does with its own properties is the concern of that class.
-- JX-0B2: If the tag of a custom element has no definition when `jsx` creates it, the runtime MUST hold each value of its props other than `children` and the `on` keys.
+- JX-0B2: If the tag of a custom element has no definition when `jsx` creates it, the runtime MUST hold each value of its props other than `children`, the `on` keys and the keys that JX-0B1 names.
+  A key that JX-0B1 names is never an own property, so the runtime MUST write its value at once, as JX-002 and JX-064 say.
+  So an element of a tag that code never defines still gets its `id`, `style` and `title`.
+  `class` is not such a key, because a class can define it, so it waits.
   When `customElements.whenDefined` resolves for the tag, the runtime MUST call `customElements.upgrade` on the element, and then apply the held values in key order.
   A dynamic prop holds its last output, which applies as JX-063 or JX-064 says.
   If `whenDefined` rejects, the runtime MUST apply the held values as for an element that is not a custom element.
@@ -237,6 +242,7 @@ The runtime converts a child to nodes by these rules, in order.
   So a drive that removes an entry calls `return()` on the iterator of its source, and on the iterators of its parts (JX-035, JX-041).
 - JX-089: The select of each drive MUST have a fault hook that calls `globalThis.reportError` (SE-127).
   So a child that fails after its drive removed or stopped it, and a `return()` that fails when a drive stops, report the error.
+  The hook MUST NOT report a `StopError`, because it tells a source that it stopped (JX-054, CH-014).
 - JX-029: To place, the runtime MUST NOT move a node that stays in order.
   It MUST move only the nodes outside one longest run of nodes that keep their order, so a swap moves two nodes.
   It MUST remove a node that leaves the host, and MUST NOT move the nodes after it.
@@ -245,6 +251,7 @@ The runtime converts a child to nodes by these rules, in order.
   Its first call MUST stop the drive of `parent`, and each scope under the scope of `parent` (JX-081), and then remove all children of `parent`.
   So it stops each element that started under `parent`, also one that is not in the tree at the time of the call.
   Its later calls MUST do nothing.
+  After a later `mount` into the same `parent`, it MUST do nothing too, because that `mount` stopped what it mounted (JX-020), and the children belong to the later `mount`.
   To stop a drive, the runtime closes its `select`, so each unfinished child gets `return()` (SE-120).
 - JX-02C: `mount` MUST accept a `ShadowRoot` as `parent`.
   To find the scope above a node (JX-080), the runtime MUST continue from the `host` of a `ShadowRoot`.
@@ -276,7 +283,9 @@ A dynamic prop changes with its source, so a component needs no code to update a
   The runtime MUST bind it to the shared reader instead, under the scope of the element.
   A binding MUST map each value and apply the output as JX-062 to JX-066 say, and hand a failure to the boundary (JX-092).
   A parked binding MUST NOT map, and MUST map the newest value when it resumes (JX-083).
-  A binding MUST stop with its scope, and MUST then stop what its `map` built (HE-059).
+  A binding MUST stop with its scope.
+  A binding owns nothing that its `map` builds, because a prop places no node.
+  So an element that `map` builds for a prop never starts (JX-02B, JX-045), costs no `select`, and needs no stop.
   So each prop costs no `select` slot, and all props of one slot cost one reader.
 
 ## Scopes
@@ -416,6 +425,8 @@ Provide a `Channel` or a `select` for a value that changes.
 - JX-054: `use(context)` MUST return an async generator that yields one new empty `Comment`, waits until the runtime places that comment (JX-02B), and returns `consume(comment, context)`.
   So `const value = yield* use(context)` in a component yields a placeholder, and the next yield of the component replaces it (JX-027).
   A component in an element that the runtime never places waits.
+  If the wait ends with no place, the generator MUST throw a `StopError`, so the component does not continue with no context, and its `finally` blocks run.
+  The wait ends when the drive lets the component go (JX-041), if `use` started in the pull, and when a builder stops the placeholder (HE-059).
 
 ## Boundaries
 
@@ -429,6 +440,8 @@ The scopes give a tree that needs no part of the generator.
   Otherwise it MUST make that element a boundary, and return it.
 - JX-091: A boundary MUST wait as JX-02B says, and its start MUST make it a scope with no drive (JX-080).
   JX-02B starts the nodes in tree order, so the elements inside a boundary bind to it.
+  A `mount` into a boundary that did not start MUST start it first, because `mount` drives its `parent` with no placement of it (JX-020).
+  So the root of an app can be a boundary.
   JX-081 MUST NOT end the binding of a boundary that drives nothing and holds no scope.
   A boundary scope ends when the scope above it stops.
   So an element that starts inside it later still binds to it.
@@ -459,6 +472,8 @@ The scopes give a tree that needs no part of the generator.
   In `each`, a child that finishes renders again (JX-03C).
 - JX-041: When a drive lets a source go, because it stops, removes the entry, or the source finishes, the runtime MUST call `return()` on each `Channel` consumer and each reader of `changes` that code opened while the drive pulled that source.
   A `watch` opens its reader at its first `next()`, so a `for await` on a `watch` in the pull is bound too.
+  A consumer or a reader that ends before the drive lets the source go MUST leave the source, so the source retains none that ended.
+  The shared reader of HE-05A serves each of its derives, so it MUST NOT be bound to a source.
   So a component that waits on an open channel ends at once (CH-073).
   Code after an `await` or a `yield*` resumes outside the pull (DV-052), so what it opens is not bound.
   A plain `yield` of the same node before that code wakes the host and binds it.

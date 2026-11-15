@@ -1,4 +1,4 @@
-import { type Emit, register } from "./devtools.ts";
+import { type Emit, pulling, register } from "./devtools.ts";
 import type { Source } from "./feed.ts";
 import {
   type Keys,
@@ -156,12 +156,13 @@ const hub = (open: () => AsyncIterator<unknown>): Hub => {
     // A slot that leaves can come back, so a later subscriber reads it alone.
     if (current === run) current = undefined;
   };
-  /** Opens a new run, and makes it current. */
-  const start = () => {
-    const run: Run = (current = { takers: new Set(), iterator: open() });
-    void pump(run);
-    return run;
-  };
+  /** Opens a new run outside the pull that asks for it, and makes it current (HE-05A). */
+  const start = () =>
+    pulling(undefined, () => {
+      const run: Run = (current = { takers: new Set(), iterator: open() });
+      void pump(run);
+      return run;
+    });
   return {
     subscribe(take) {
       const run = current ?? start();

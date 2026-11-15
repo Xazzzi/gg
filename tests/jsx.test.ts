@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
-import { CHAN, Channel, select } from "../src/index.ts";
+import { CHAN, Channel, derive, StopError, select } from "../src/index.ts";
 import {
   consume,
   createContext,
@@ -550,6 +550,29 @@ test("JX-066 a dynamic prop keeps its last output, and stops with the unmount of
   mount(el(), done);
   await setImmediate();
   assert.equal(html(done), '<p title="x"></p>');
+});
+
+test("JX-02A an unmount function does nothing after a later mount into the same parent", async () => {
+  const parent = el(),
+    ch = latest<string>();
+  const first = mount(parent, "a");
+  const second = mount(parent, h("p", { children: ch }));
+  first();
+  ch.send("b");
+  await setImmediate();
+  assert.equal(html(parent), "<div><p>b</p></div>");
+  second();
+  assert.equal(html(parent), "<div></div>");
+  // A later call removes no child that other code added.
+  parent.append(fakeDocument.createTextNode("x"));
+  second();
+  assert.equal(html(parent), "<div>x</div>");
+  // A mount after an unmount gets its own function.
+  const third = mount(parent, "c");
+  second();
+  assert.equal(html(parent), "<div>c</div>");
+  third();
+  assert.equal(html(parent), "<div></div>");
 });
 
 test("JX-02A JX-03B unmount stops each host inside the parent, ends each at once, and empties the parent", async () => {
@@ -1692,6 +1715,77 @@ test("JX-054 use waits until the runtime places its placeholder, also in each ro
   assert.deepEqual(reported, []);
 });
 
+test("JX-054 JX-041 JX-089 a use that its drive lets go before a place throws a StopError, which no code reports", async () => {
+  reported.length = 0;
+  const log: unknown[] = [];
+  async function* Waits() {
+    try {
+      yield* use(Theme);
+      log.push("placed");
+    } catch (error) {
+      log.push(error instanceof StopError, (error as StopError).reason);
+      throw error;
+    } finally {
+      log.push("finally");
+    }
+  }
+  // No host places the nodes of this each, so its drive pulls each row again, which then waits in use.
+  const items = select(["a"], { autoStart: true, backPressure: false }),
+    list = each(items, () => h(Waits));
+  await list.next();
+  void list.next(); // Reads the rows, and yields their placeholders
+  await setImmediate();
+  assert.deepEqual(log, []);
+  await list.return();
+  await setImmediate();
+  assert.deepEqual(log, [true, "use not placed", "finally"]);
+  assert.deepEqual(reported, []);
+});
+
+test("JX-054 HE-059 a use whose placeholder a builder stops throws a StopError", async () => {
+  const n = new Channel<number>(),
+    waits: Promise<unknown>[] = [];
+  const view = derive(n, value => {
+    const wait = use(Theme);
+    void wait.next();
+    waits.push(wait.next());
+    return value;
+  });
+  n.send(1), n.send(2);
+  await view.next();
+  await view.next();
+  await assert.rejects(
+    waits[0],
+    (error: unknown) => error instanceof StopError,
+  );
+  await view.return();
+  await assert.rejects(
+    waits[1],
+    (error: unknown) => error instanceof StopError,
+  );
+});
+
+test("JX-054 HE-059 a use that a builder stops while no code waits for it causes no unhandledRejection", async () => {
+  const n = new Channel<number>(),
+    seen: unknown[] = [],
+    listeners = process.listeners("unhandledRejection");
+  process.removeAllListeners("unhandledRejection");
+  process.on("unhandledRejection", error => seen.push(error));
+  try {
+    // The generator stays at the yield of its placeholder, so no code reads the rejection.
+    const view = derive(n, value => (void use(Theme).next(), value));
+    n.send(1);
+    await view.next();
+    await view.return();
+    await setImmediate();
+    assert.deepEqual(seen, []);
+  } finally {
+    process.removeAllListeners("unhandledRejection");
+    for (const listener of listeners)
+      process.on("unhandledRejection", listener);
+  }
+});
+
 test("JX-088 a place that throws reports the error, and stops the drive of the host", async () => {
   reported.length = 0;
   const parent = el(),
@@ -1913,27 +2007,34 @@ test("JX-0B2 JX-0B3 a custom element of a tag with no definition holds its value
   const name = tag(),
     source = latest<unknown>(),
     note = latest<unknown>(),
+    title = latest<unknown>(),
     clicks: unknown[] = [];
   const node = h(name, {
     note,
     label: "a",
     items: source,
     id: "i",
+    title,
+    class: "c",
     onClick: (event: unknown) => clicks.push(event),
     children: [h("p", { children: latest<string>() }), "t"],
   });
   assert.ok(!(node instanceof Card));
-  assert.deepEqual([...node.attributes], []);
+  // A key of HTMLElement.prototype is never own, so it writes at once, and class waits.
+  assert.deepEqual([...node.attributes], [["id", "i"]]);
   assert.equal(node.listeners.length, 1);
   const parent = el();
   mount(parent, node);
   source.send("x");
   source.send([2]);
   note.send("n");
+  title.send("t");
   await setImmediate();
   // The children and the drives run while the values wait.
-  assert.equal(html(parent), `<div><${name}><p></p>t</${name}></div>`);
-  assert.deepEqual([...node.attributes], []);
+  assert.equal(
+    html(parent),
+    `<div><${name} id="i" title="t"><p></p>t</${name}></div>`,
+  );
   const other = h(name, { label: "b" });
   customElements.define(name, Card as any);
   await setImmediate();
@@ -1942,7 +2043,14 @@ test("JX-0B2 JX-0B3 a custom element of a tag with no definition holds its value
   assert.deepEqual(node.log, ["note n 2", "label a 2"]);
   assert.deepEqual(other.log, ["label b 0"]);
   assert.deepEqual(node.items, [2]);
-  assert.deepEqual([...node.attributes], [["id", "i"]]);
+  assert.deepEqual(
+    [...node.attributes],
+    [
+      ["id", "i"],
+      ["title", "t"],
+      ["class", "c"],
+    ],
+  );
   source.send([3]);
   await setImmediate();
   assert.deepEqual(node.items, [3]);
@@ -1964,8 +2072,8 @@ test("JX-0B2 a tag that whenDefined rejects applies its values as attributes", a
   assert.deepEqual(
     [...node.attributes],
     [
+      ["id", "i"], // Written at once, as a key that is never own
       ["label", "a"],
-      ["id", "i"],
     ],
   );
   assert.match(String(reported[0]), /items does not take a function/);

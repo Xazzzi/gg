@@ -1,5 +1,8 @@
+import { StopError } from "./channel.ts";
+import { bindPulled } from "./devtools.ts";
 import { defer, waiting } from "./host.ts";
 import type { Child } from "./jsx.ts";
+import { noop } from "./source.ts";
 
 declare const VALUE: unique symbol;
 /** A context key, with the type of the value that its providers give. */
@@ -50,7 +53,11 @@ export async function* use<T>(
 ): AsyncGenerator<Comment, T, unknown> {
   const anchor = document.createComment(""),
     placed = Promise.withResolvers<void>();
-  defer(waiting, anchor, placed.resolve);
+  // A wait that ends with no place throws, so the component does not run on with no context (JX-054).
+  const lost = { return: () => placed.reject(new StopError("use not placed")) };
+  placed.promise.catch(noop); // The component reads the rejection only at its next pull
+  defer(waiting, anchor, placed.resolve, lost.return);
+  bindPulled(lost); // JX-041
   yield anchor;
   await placed.promise;
   return consume(anchor, context);

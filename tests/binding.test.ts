@@ -646,3 +646,112 @@ test("JX-041 a component that finishes returns the reads that it left open", asy
   assert.deepEqual(log, ["reader"]);
   s[CHAN].close();
 });
+
+test("HE-05A JX-041 a shared slot reader stays when the drive of its first derive stops", async () => {
+  const s = select({ a: 1 }, { autoStart: true }),
+    first = el(),
+    second = el();
+  // The pull of the first derive opens the shared reader.
+  const unmount = mount(
+    first,
+    derive(s, "a", v => `x${v}`),
+  );
+  await setImmediate();
+  mount(
+    second,
+    derive(s, "a", v => `y${v}`),
+  );
+  await setImmediate();
+  assert.equal(html(second), "<div>y1</div>");
+  unmount();
+  await setImmediate();
+  s.a = 2;
+  await setImmediate();
+  assert.equal(html(second), "<div>y2</div>");
+  s[CHAN].close();
+});
+
+test("HE-05A JX-041 a shared item reader stays when the drive of its first derive stops", async () => {
+  const items = select(["a"], { autoStart: true }),
+    first = el(),
+    second = el();
+  let item!: Item<string>;
+  mount(
+    el("ul"),
+    each(items, (given: Item<string>) => ((item = given), "row")),
+  );
+  await setImmediate();
+  const unmount = mount(
+    first,
+    derive(item, v => `x${v}`),
+  );
+  await setImmediate();
+  mount(
+    second,
+    derive(item, v => `y${v}`),
+  );
+  await setImmediate();
+  assert.equal(html(second), "<div>ya</div>");
+  unmount();
+  await setImmediate();
+  items[0] = "b";
+  await setImmediate();
+  assert.equal(html(second), "<div>yb</div>");
+  items[CHAN].close();
+});
+
+test("JX-041 a consumer and a reader that end before their source leave it, so it retains none", async () => {
+  const registry = new FinalizationRegistry<() => void>(done => done()),
+    ch = new Channel<number>(),
+    s = select({ a: 1 }, { autoStart: true });
+  let collected = 0;
+  async function* Opens() {
+    yield el("p");
+    // Each opens after a plain yield, so it is bound to this component, and ends while the component runs.
+    (() => {
+      const consumer = ch[Symbol.asyncIterator](),
+        reader = changes(s);
+      registry.register(consumer, () => collected++);
+      registry.register(reader, () => collected++);
+      void consumer.next();
+      void consumer.return(undefined);
+      void reader.return();
+    })();
+    await new Promise(() => {});
+  }
+  const unmount = mount(el(), h(Opens));
+  for (let i = 0; i < 20 && collected < 2; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  assert.equal(collected, 2);
+  unmount();
+  s[CHAN].close();
+});
+
+test("JX-067 JX-02B an element that the map of a binding builds never starts, so the binding has nothing to stop", async () => {
+  const s = select({ a: 1 }, { autoStart: true }),
+    text = new Channel<string>(),
+    built: any[] = [];
+  const counts = await counting(async () => {
+    const unmount = mount(
+      el(),
+      h("p", {
+        title: derive(s, "a", v => {
+          built.push(h("b", { children: text }));
+          return `${v}`;
+        }),
+      }),
+    );
+    await setImmediate();
+    s.a = 2;
+    await setImmediate();
+    unmount();
+    await setImmediate();
+  });
+  assert.equal(built.length, 2);
+  // No element got a drive, and no consumer attached to the channel of its child.
+  assert.equal(counts.select, undefined);
+  assert.equal(counts["channel attach"], undefined);
+  s[CHAN].close();
+});

@@ -260,10 +260,11 @@ A consumer under `latest` retains only its next value.
 
 The consumer is an async generator, except that `return()` and `throw()` do not wait for a pending `next()`.
 
-- CH-070: `return()` MUST detach only that consumer.
+- CH-070: `return(value)` MUST detach only that consumer.
   It MUST NOT close the channel.
+  It MUST resolve with `{ done: true, value }`.
 - CH-071: `throw(error)` MUST end only that consumer.
-  That consumer rejects with `error`.
+  It MUST reject with the unchanged `error`.
 - CH-072: Under `ackStyle: "any"`, `return()` and `throw()` on a consumer MUST NOT resolve an `asend`.
   Under `"all"`, CH-01E applies.
 - CH-073: If a `next()` is pending, `return()` and `throw()` MUST resolve it with `{ done: true, value: undefined }` at once.

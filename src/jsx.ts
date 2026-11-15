@@ -92,13 +92,17 @@ const SVG_TAGS = new Set(
     ),
   ),
   isSvg = (tag: string) => SVG_TAGS.has(tag) || /^fe[A-Z]/.test(tag);
+// The last mount into each parent, which its unmount function ends (JX-02A).
+const mounts = new WeakMap<Parent, object>();
 /** Mounts children into parent, keeps dynamic children live, and gives a function that unmounts them. */
 export function mount(parent: Parent, ...children: Child[]): () => void {
   attach(parent, children, true);
-  let done = false;
+  const mine = {};
+  mounts.set(parent, mine);
   return () => {
-    if (done) return;
-    done = true;
+    // A later mount into parent owns its children, and stopped the ones of this mount (JX-02A).
+    if (mounts.get(parent) !== mine) return;
+    mounts.delete(parent);
     unmount(parent);
     parent.replaceChildren();
   };
@@ -150,7 +154,8 @@ export function jsx(
         (lower in element ? lower : name).slice(2),
         value as any,
       );
-    } else if (values) values.set(name, value);
+    } else if (values && !(name in HTMLElement.prototype))
+      values.set(name, value); // JX-0B2 holds only a key that can be own
     // A property takes null and false as a dynamic output does (JX-002).
     else if (property(element, name)) live.push([name, value]);
     else if (value !== null && value !== false)

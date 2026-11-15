@@ -21,12 +21,12 @@ export const pulledSource = () => pulled;
 type Returnable = { return(value?: any): unknown };
 // The consumers and readers that code opened while a drive pulled a source, which end when the host lets the source go (JX-041).
 const opened = new WeakMap<object, Set<Returnable>>();
-/** Binds a consumer or a reader to the source that a drive pulls now, if any. */
+/** Binds a consumer or a reader to the source that a drive pulls now, if any, and gives the set that it leaves when it ends. */
 export const bindPulled = (consumer: Returnable) => {
   if (Object(pulled) !== pulled) return;
-  const set = opened.get(pulled as object);
-  if (set) set.add(consumer);
-  else opened.set(pulled as object, new Set([consumer]));
+  let set = opened.get(pulled as object);
+  if (!set) opened.set(pulled as object, (set = new Set()));
+  return set.add(consumer);
 };
 /** Returns the consumers and readers bound to a source, once. */
 export const release = (source: unknown) => {

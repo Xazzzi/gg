@@ -93,6 +93,13 @@ for (const type of ["click", "dblclick", "input", "change", "keydown", "blur"])
     writable: true,
   });
 
+// The browser has id and title on the prototype of an element, so they are never own properties (JX-0B1).
+for (const name of ["id", "title"])
+  Object.defineProperty(FakeElement.prototype, name, {
+    value: "",
+    writable: true,
+  });
+
 // A registry of custom elements: an element of a defined tag is made by its class, which takes the tag.
 const classes = new Map<string, typeof FakeElement>(),
   definitions = new Map<string, PromiseWithResolvers<void>>();

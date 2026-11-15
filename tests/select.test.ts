@@ -2951,16 +2951,26 @@ test("SE-131 break does not close", async () => {
   s[CHAN].close();
 });
 
-test("SE-133 a late next consumer never reads the first publish", async () => {
+test("SE-133 SE-045 a late next consumer does not read the first state, and its attach ends the wait of step 4", async () => {
+  let pulls = 0;
+  const source = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => (pulls++, new Promise<never>(() => {})),
+    }),
+  };
   const s = select(
-    { a: 1 },
+    { a: 1, b: source },
     { autoStart: true, firstReceive: "next", thenReceive: "every" },
   );
   await setImmediate();
+  assert.equal(pulls, 0); // The flush waits at step 4
   const pending = iter(s).next();
   await setImmediate();
+  assert.equal(pulls, 1);
+  assert.match(inspect(pending), /pending/);
+  s.a = 2;
+  assert.equal(((await pending).value as any).a, 2);
   s[CHAN].close();
-  assert.equal((await pending).done, true);
 });
 
 test("SE-134 stop with no backPressure can drop the final snapshot", async () => {

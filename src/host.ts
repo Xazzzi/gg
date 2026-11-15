@@ -1,4 +1,5 @@
 // The host machinery of the JSX runtime: conversion, placement, drives, placement waits and dynamic props.
+import { StopError } from "./channel.ts";
 import { type Emit, owned, pulling, register, release } from "./devtools.ts";
 import { BIND } from "./helpers.ts";
 import type { Child } from "./jsx.ts";
@@ -444,7 +445,8 @@ export const drive = <E extends Driven>(
       backPressure: false,
       [RETURNS]: true, // A removed entry ends its source (JX-035, JX-041)
       // A child that fails after its drive let it go, or in its return(), has no entry to report it (JX-089).
-      [FAULT]: error => reportError(error),
+      // A stop error tells a source that it stopped, so it is no failure.
+      [FAULT]: error => error instanceof StopError || reportError(error),
       [REPORT]: ops => {
         try {
           let moved = false;
@@ -539,15 +541,18 @@ const scopes = new WeakMap<Node, Scope>(),
 export const waiting = new WeakMap<Node, () => void>(),
   binding = new WeakMap<Node, () => void>(), // The dynamic props, which start after the host (JX-061)
   guarding = new WeakMap<Node, () => void>(); // A boundary, which starts before what is inside it (JX-091)
-type Wait = (() => void) & { ref: WeakRef<Node> };
+type Wait = (() => void) & { ref: WeakRef<Node>; lost?: () => void };
 // The nodes of the waits that are not started, so a placement walks no node when there is none.
 const unstarted = new Set<WeakRef<Node>>();
 
-/** Makes start wait in map until a runtime placement reaches node, and records the node for a builder (HE-059). */
+/**
+ * Makes start wait in map until a runtime placement reaches node, and records the node for a builder (HE-059).
+ * The builder that ends the wait calls lost. */
 export const defer = (
   map: WeakMap<Node, () => void>,
   node: Node,
   start: () => void,
+  lost?: () => void,
 ) => {
   const ref = new WeakRef(node),
     wait = () => {
@@ -555,7 +560,7 @@ export const defer = (
       start();
     };
   unstarted.add(ref);
-  map.set(node, Object.assign(wait, { ref }));
+  map.set(node, Object.assign(wait, { ref, lost }));
   record(() => quit(node));
 };
 /** Ends the wait of node in map, if it has one. */
@@ -683,6 +688,7 @@ export const holds = (node: Node) => !!under.get(node)?.size;
 export const stopIn = (node: Node) => under.get(node)?.forEach(stop);
 /** Ends the waits of node and stops its scope, for the builder that owns it (HE-059). */
 const quit = (node: Node) => {
+  (waiting.get(node) as Wait | undefined)?.lost?.();
   settle(guarding, node);
   settle(waiting, node);
   settle(binding, node);
@@ -737,8 +743,8 @@ const applyProp = (
   else if (!Object.is(value, entry.value))
     try {
       const values = held.get(element);
-      // A custom element of a tag with no definition holds the output (JX-0B2).
-      if (values) values.set(name, value);
+      // A custom element of a tag with no definition holds the output, unless the key is never own (JX-0B2).
+      if (values && !(name in HTMLElement.prototype)) values.set(name, value);
       else put(element, name, value);
       entry.value = value;
     } catch (error) {

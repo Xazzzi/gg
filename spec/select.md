@@ -549,6 +549,9 @@ It is a slice reader of one key that gives values, not operations.
 - SE-161: `watch` MUST open a slice reader of `[key]` at its first `next()`, and not before.
   So an array index names the slot at that index at the first `next()`.
 - SE-162: The first `next()` MUST resolve with the output of the slot in `outputs`, if `outputs` has the slot.
+  Before start, `outputs` is empty (SE-142), so the first `next()` waits for the description of SE-107.
+  A key of an object shape that has no slot names the slot that a later assignment makes, so the first `next()` waits for that assignment.
+  An index at or past the length names no slot (SE-155), so the reader finishes (SE-156), and `watch` finishes.
 - SE-163: Each read of the reader MUST give the last output that its operations give the slot.
   `next()` MUST resolve with that output, if it is not `Object.is` equal to the last output that `watch` gave.
   Otherwise it MUST wait for the next read.
@@ -606,10 +609,11 @@ These behaviours come from the rules above and are intentional.
   So each slot reads each value.
   `fill` and `copyWithin` can create this sharing.
   `select` does not call `return()` on an iterator that they overwrite (SE-122).
-- SE-133: With `autoStart`, `backPressure` and a late `firstReceive: "next"` consumer, no consumer ever reads the first publish.
-  The flush blocks at step 4 until the channel becomes terminal.
+- SE-133: With `autoStart`, `backPressure` and a late `firstReceive: "next"` consumer, the flush blocks at step 4 until that consumer attaches.
+  The attach ends the wait and sends a snapshot (SE-045), which that consumer does not read, because it starts at the next value.
+  So that consumer reads the first state only with the next change.
 - SE-134: With `stopStyle: "stop"` and `backPressure: false`, auto close can discard the final snapshot (CH-065).
-- SE-135: With `backPressure`, a flush blocks at step 4 while a consumer makes no `next()` call.
+- SE-135: With `backPressure`, a flush blocks at step 4 while a consumer makes no `next()` call, and no reader ends the wait (SE-04A).
   `select` does not call the report hook during that time.
   Operations collect with no limit.
 - SE-136: `select` discards a value that it pulled for a removed slot or a terminal channel.
@@ -622,8 +626,10 @@ These behaviours come from the rules above and are intentional.
 - SE-139: Each index is a slot.
   So a huge `length` can use all memory, unlike a sparse `Array`.
 - SE-13A: The library does not support objects that inherit from the proxy.
-- SE-13B: A reader that makes no more `next()` calls and does not finish retains each later operation.
+- SE-13B: A reader that code holds, and that makes no more `next()` calls and does not finish, retains each later operation.
+  The library cannot tell it from a reader that code reads later.
   So finish a reader with `return()`, `[Symbol.dispose]()` or `using` when its observer ends.
+  A reader that code drops retains nothing after the garbage collector takes it (SE-14E).
 - SE-13C: Readers and the report hook can get the same operation objects.
   So an observer that changes an operation changes it for the others.
   This spec does not define a write through such an object.

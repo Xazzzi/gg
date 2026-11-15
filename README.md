@@ -134,7 +134,7 @@ A fragment takes such children too.
 Props set attributes, and `value`, `checked`, `selected`, `indeterminate` and `muted` set properties.
 An `on` prop takes only a function, and a URL attribute rejects a `javascript:` URL, so data in a prop cannot run code.
 A custom element gets the props that its class defines as properties, so a web component takes objects, arrays and functions with no extra syntax.
-Its other props stay attributes, and a tag with no definition yet holds its props until `customElements.define`.
+Its other props stay attributes, and a tag with no definition yet holds its props until `customElements.define`, except those that no class can define, such as `id` and `style`.
 An `on` prop keeps the case of a custom event, such as `onitemSelected`, and `onClick` still listens to `click`.
 `mount` also takes a `ShadowRoot`, so a web component can render its shadow tree with JSX.
 Each HTML and SVG tag has typed listeners and live properties, and takes any other attribute.

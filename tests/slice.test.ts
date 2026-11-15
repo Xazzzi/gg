@@ -400,6 +400,26 @@ test("SE-162 SE-155 a watch before start gives the output that start describes",
   assert.deepEqual(await k, { done: false, value: 1 });
 });
 
+test("SE-162 a watch of a missing object key waits for its assignment, and a watch of an index past the length finishes", async () => {
+  const s: any = select({ a: 1 }, { autoStart: true, backPressure: false });
+  await setImmediate();
+  const missing = watch(s, "b"),
+    first = missing.next();
+  await setImmediate();
+  assert.ok(pending(first));
+  s.b = 2;
+  assert.deepEqual(await first, { done: false, value: 2 });
+  await missing.return();
+  const list = select([1], { autoStart: true, backPressure: false });
+  await setImmediate();
+  assert.deepEqual(await watch(list, 1).next(), {
+    done: true,
+    value: undefined,
+  });
+  s[CHAN].close();
+  list[CHAN].close();
+});
+
 test("SE-163 watch gives the last output of each read, and skips an equal one", async () => {
   const s = await started(
     select({ a: 1, b: 0 } as Record<string, number>, open),

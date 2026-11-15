@@ -455,6 +455,7 @@ export class Reader implements Changes<unknown> {
   #emit?: Emit;
   #start: () => void;
   #ref = new WeakRef(this); // What the log holds (SE-14E)
+  #bound?: Set<unknown>; // The binding to a pulled source, which the reader leaves when it ends (JX-041)
 
   static {
     positionOf = reader => reader.#at;
@@ -482,7 +483,7 @@ export class Reader implements Changes<unknown> {
       keys,
       source: pulledSource(),
     });
-    bindPulled(this); // JX-041
+    this.#bound = bindPulled(this); // JX-041
     if (slice?.spent?.()) {
       this.#end(); // SE-156 finishes a reader that names no slot
       return;
@@ -533,6 +534,7 @@ export class Reader implements Changes<unknown> {
   #end() {
     if (this.#ended) return;
     this.#ended = true;
+    this.#bound?.delete(this);
     this.#emit?.("end");
   }
 

@@ -21,7 +21,13 @@ type Cell<T> = { n: number; value?: T; next?: Cell<T> };
 type Reader<T> = { at?: Cell<T>; pos: number; placed?: boolean };
 type Ack = PromiseWithResolvers<void> & { n: number; next?: Ack };
 // The stop flag of a consumer, and its own wake while it blocks under thenReceive "unread" (CH-075).
-type Stop = { on?: true; wake?: () => void };
+// It also holds the consumer and the set of its binding, which the consumer leaves when it ends (JX-041).
+type Stop = {
+  on?: true;
+  wake?: () => void;
+  self?: unknown;
+  bound?: Set<unknown>;
+};
 
 const STOP_BRAND = Symbol.for("gg.StopError");
 /** The values that each channel option takes. */
@@ -271,7 +277,7 @@ export class Channel<T, TReturn = undefined>
     };
     consumer.return = value => (halt(), end(value));
     consumer.throw = error => (halt(), fail(error));
-    bindPulled(consumer); // JX-041
+    stop.bound = bindPulled((stop.self = consumer)); // JX-041
     return consumer;
   }
 
@@ -298,6 +304,7 @@ export class Channel<T, TReturn = undefined>
       }
     } finally {
       this.#emit?.("detach", reader);
+      stop.bound?.delete(stop.self);
       this.#active--;
       if (reader.placed) {
         this.#placed--;

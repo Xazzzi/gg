@@ -29,7 +29,7 @@ Each word has one meaning.
 Code names, key words and the terms in each spec are technical names.
 A rule refers to another rule by its ID, with or without parentheses, such as CH-012 or (CH-012).
 An example comment that starts with `=>` shows the real result.
-`npm run examples` writes these comments.
+`npm run spec:examples` writes these comments.
 `npm run checks` fails if a comment differs from the real result.
 
 These words have one meaning in all specs:

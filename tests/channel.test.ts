@@ -1100,7 +1100,7 @@ test("CH-070 CH-072 return detaches without closing or acknowledging", async () 
   const it = iter(ch);
   await it.next();
   const sent = ch.asend(2);
-  assert.deepEqual(await it.return(undefined), end());
+  assert.deepEqual(await it.return(7 as any), { done: true, value: 7 });
   await setImmediate();
   assert.ok(isPending(sent));
   assert.ok(!ch.signal.aborted);

@@ -510,6 +510,7 @@ So a slice reader of an array observes rows, not positions.
 
 - SE-150: If `keys` is defined and is not an array, `changes` MUST throw a `TypeError` synchronously.
   For an object shape, each key MUST be a string, a symbol or a number, and a number names its string key.
+  For an object shape, `keys` MUST hold at least one key, because a key slice follows its keys and with none it can get no operation.
   For an array shape, each key MUST be a non-negative integer.
   Otherwise `changes` MUST throw a `TypeError` synchronously.
   Repeated keys name one slot.

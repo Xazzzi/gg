@@ -56,6 +56,10 @@ test("SE-150 changes checks slice keys synchronously", async () => {
       name: "TypeError",
       message: "An array slice takes indexes",
     });
+  assert.throws(() => changes_(o, []), {
+    name: "TypeError",
+    message: "An object slice takes at least one key",
+  });
   assert.deepEqual(changes_(o, ["a", Symbol.for("b"), 1]).outputs, {});
   assert.deepEqual(changes_(a, []).outputs, []);
   assert.deepEqual(changes_(o, undefined).outputs, {});

@@ -330,7 +330,8 @@ async function objectRun(seed: number) {
   void (async () => {
     for await (const _ of s); // mapSnapshot runs only for a consumer (SE-045)
   })();
-  const chosen = keys.filter(() => roll(2)),
+  const some = keys.filter(() => roll(2)),
+    chosen = some.length ? some : [keys[roll(keys.length)]], // SE-150 takes at least one key
     reader = changes(s, chosen),
     mirror: any = { ...reader.outputs };
   void (async () => {

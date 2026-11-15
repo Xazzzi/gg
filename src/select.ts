@@ -469,6 +469,9 @@ class Select {
             ? "An array slice takes indexes"
             : "An object slice takes property keys",
         );
+    // A key slice follows its keys, so with none it would wait for good.
+    if (!isArray && !keys.length)
+      throw new TypeError("An object slice takes at least one key");
   }
 
   /** Opens a reader of the log, or of a slice of it. */

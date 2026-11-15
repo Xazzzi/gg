@@ -403,6 +403,42 @@ test("JX-041 a stop returns the consumers, readers and watches that a component 
   s[CHAN].close();
 });
 
+test("JX-088 JX-041 a drive that fails to apply a report returns what its components opened, and ends them", async () => {
+  const restore = reports(),
+    ch = new Channel<number>(),
+    values = new Channel<any>({
+      firstReceive: "latest",
+      thenReceive: "latest",
+    }),
+    failure = new Error("place"),
+    bad = el("b"),
+    parent = el(),
+    log: string[] = [];
+  const insert = parent.insertBefore;
+  parent.insertBefore = function (node: any, ref: any) {
+    if (node === bad) throw failure;
+    return insert.call(this, node, ref);
+  };
+  async function* Reads() {
+    yield el("p");
+    try {
+      for await (const _ of ch);
+    } finally {
+      log.push("channel");
+    }
+  }
+  const counts = await counting(async () => {
+    mount(parent, h(Reads), values);
+    await setImmediate();
+    values.send(bad);
+    await setImmediate();
+  });
+  restore();
+  assert.deepEqual(reported, [failure]);
+  assert.deepEqual(log, ["channel"]);
+  assert.equal(counts["component end"], 1); // DV-045
+});
+
 test("JX-041 a read that opens after an await is not bound, and a plain yield before it binds it", async () => {
   const ch = new Channel<number>(),
     log: string[] = [];

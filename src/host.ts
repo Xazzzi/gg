@@ -432,6 +432,11 @@ export const drive = <E extends Driven>(
   // A drive that stopped shows nothing, so no boundary takes its failure (JX-094).
   const fail = (error: unknown) =>
     stopped ? reportError(error) : route(error);
+  /** Lets each source go, which ends what its pulls opened (JX-041, DV-045). */
+  const letGo = () => {
+    for (const entry of keyed.values())
+      end(entry.source), release(entry.source);
+  };
   const sources = owned(owner, () =>
     select({} as Record<string, unknown>, {
       autoStart: true,
@@ -467,6 +472,7 @@ export const drive = <E extends Driven>(
         } catch (error) {
           // The select has no consumer to get the error, so the drive hands it on, and SE-110 stops it (JX-088).
           fail(error);
+          letGo();
           throw error;
         }
         // A parked drive applies the outputs that it has, and pulls no more until it resumes (JX-083).
@@ -506,8 +512,7 @@ export const drive = <E extends Driven>(
     stop() {
       stopped = true;
       sources[Symbol.dispose]();
-      for (const entry of keyed.values())
-        end(entry.source), release(entry.source);
+      letGo();
     },
   };
 };

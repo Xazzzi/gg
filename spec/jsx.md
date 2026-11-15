@@ -229,6 +229,7 @@ The runtime converts a child to nodes by these rules, in order.
   For example, a place throws for a node that holds its host, and the start of a waiting element can throw.
   The select of a drive has no consumer, so without this rule no code gets the error.
   The nodes stay as they are, and the scopes under the host continue.
+  The drive lets each source go, so JX-041 applies.
 - JX-08A: The select of each drive MUST have the return flag (SE-128).
   So a drive that removes an entry calls `return()` on the iterator of its source, and on the iterators of its parts (JX-035, JX-041).
 - JX-089: The select of each drive MUST have a fault hook that calls `globalThis.reportError` (SE-127).

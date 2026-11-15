@@ -476,6 +476,10 @@ A proxy read returns sources (SE-080), so a reader carries the `outputs` that it
 - SE-14B: The log MUST NOT retain an operation that each attached reader has read.
 - SE-14C: When no reader stays attached and the report hook does not exist, the log MUST drop its operations and build no more (SE-10A).
 - SE-14D: `outputs(state)` MUST return what `outputs` of a new reader holds at that call (SE-142), and MUST NOT make a reader.
+- SE-14E: The log MUST NOT retain a reader that has no pending `next()`.
+  So a reader that code drops does not retain operations, and a report does not wake it.
+  The library cannot tell a dropped reader from one that code reads later, so only the garbage collector ends it.
+  A reader with a pending `next()` MUST stay retained until that call settles, because code can hold only its promise.
   So code reads the current outputs with no reader to finish (SE-14B).
   It MUST throw a `TypeError` if `state` is not a proxy that `select` returned, as `changes` does (SE-140).
 

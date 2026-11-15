@@ -278,12 +278,14 @@ test("SE-157 a slice keeps no operation of the log, and only its own operations"
   const s = await started(
     select({ a: 0, b: 0 } as Record<string, unknown>, open),
   );
-  changes(s, ["a"]);
+  const reader = changes(s, ["a"]);
   assert.ok(await collected(value => ((s.b = value), (s.b = 0))));
   assert.ok(!(await collected(value => ((s.a = value), (s.a = 0)))));
   const a = await started(select([0, 0] as unknown[], open));
-  changes(a, [0]);
+  const slice = changes(a, [0]);
   assert.ok(await collected(value => ((a[1] = value), (a[1] = 0))));
+  reader.return(); // Held until here, as SE-14E lets a dropped reader go
+  slice.return();
 });
 
 test("SE-151 SE-14A a slice reads its operations after close, then finishes, or rejects after a failure", async () => {

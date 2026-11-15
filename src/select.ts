@@ -10,6 +10,7 @@ import {
 } from "./channel.ts";
 import { type Emit, pulling, register } from "./devtools.ts";
 import {
+  alive,
   beginReader,
   type Changes,
   IndexSlice,
@@ -762,7 +763,8 @@ class Select {
         removed: [],
         added: all.map(slot => this.#out(slot)),
       }));
-    for (const reader of this.#log.readers) beginReader(reader, all.length);
+    for (const reader of alive(this.#log.readers))
+      beginReader(reader, all.length);
     // Stryker disable next-line MethodExpression,CallExpression: a log with no reader left only stops sooner (SE-14C)
     this.#log.trim();
     const rejected =

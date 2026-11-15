@@ -115,17 +115,39 @@ export class Watcher implements Watch<unknown> {
   }
 }
 
+type Ref = WeakRef<Reader>;
+
+/** Gives the readers of refs that code did not drop, because a collected reader leaves its ref until the registry takes it out. */
+export function* alive(refs: Iterable<Ref>) {
+  for (const ref of refs) {
+    const reader = ref.deref();
+    if (reader) yield reader;
+  }
+}
+
+/** Takes a reader that code dropped out of its log (SE-14E). */
+const dropped = new FinalizationRegistry<{
+  log: Log;
+  ref: Ref;
+  names?: Set<PropertyKey>;
+}>(({ log, ref, names }) => {
+  log.remove(ref, names);
+  log.trim();
+});
+
 /**
  * The operations of a select: the ones since the last report, and the reported ones that a reader did not read.
- * SE-14B drops what each reader read, and SE-14C stops the log with no reader. */
+ * SE-14B drops what each reader read, and SE-14C stops the log with no reader.
+ * The log holds a reader weakly, so a reader that code drops retains no operation (SE-14E). */
 export class Log {
   pending?: Op[]; // Undefined while no one reads operations
   // Stryker disable next-line ArrayDeclaration: a reader starts after all that the log holds
   reported: Op[] = []; // From the absolute index base
   base = 0;
-  readers = new Set<Reader>(); // The readers that each publish wakes
-  named?: Map<PropertyKey, Set<Reader>>; // The readers of key slices, which a publish wakes by key
-  parked?: Set<Reader>; // The readers with a read that waits, which observe each report (SE-04A)
+  readers = new Set<Ref>(); // The readers that each publish wakes
+  named?: Map<PropertyKey, Set<Ref>>; // The readers of key slices, which a publish wakes by key
+  parked?: Set<Reader>; // The key slice readers with a read that waits, which observe each report (SE-04A)
+  waiting = new Set<Reader>(); // The readers with a read that waits, held until it settles, as code may hold only its promise
   kept?: boolean; // The report hook or devtools read each report, which connect sets
   read?: boolean; // A reader read or waited since the flush cleared it, so the flush was observed (SE-04A)
   #seen?: PromiseWithResolvers<void>;
@@ -163,25 +185,26 @@ export class Log {
     return !this.readers.size && !this.named?.size;
   }
 
-  /** Attaches a reader, by name when it reads a key slice. */
-  add(reader: Reader, names?: Set<PropertyKey>) {
+  /** Attaches a reader by its ref, by name when it reads a key slice, and takes it out when code drops it. */
+  add(reader: Reader, ref: Ref, names?: Set<PropertyKey>) {
     // Stryker disable next-line ConditionalExpression: a key slice among the readers that each publish wakes reads the same operations
-    if (!names?.size) this.readers.add(reader);
+    if (!names?.size) this.readers.add(ref);
     else {
       const named = (this.named ??= new Map());
       for (const name of names)
-        named.get(name)?.add(reader) ?? named.set(name, new Set([reader]));
+        named.get(name)?.add(ref) ?? named.set(name, new Set([ref]));
     }
+    dropped.register(reader, { log: this, ref, names });
   }
 
-  /** Detaches a reader, and tells if it was attached. */
-  remove(reader: Reader, names?: Set<PropertyKey>) {
+  /** Detaches a reader by its ref, and tells if it was attached. */
+  remove(ref: Ref, names?: Set<PropertyKey>) {
     const named = this.named;
-    if (!names?.size || !named) return this.readers.delete(reader);
+    if (!names?.size || !named) return this.readers.delete(ref);
     let had: boolean | undefined; // Each name has the reader, or none has
     for (const name of names) {
       const readers = named.get(name);
-      had = readers?.delete(reader);
+      had = readers?.delete(ref);
       if (readers?.size === 0) named.delete(name);
     }
     return had;
@@ -189,9 +212,9 @@ export class Log {
 
   /** Gives each attached reader one time. */
   all() {
-    const all = new Set(this.readers);
-    for (const readers of this.named?.values() ?? [])
-      for (const reader of readers) all.add(reader);
+    const all = new Set(alive(this.readers));
+    for (const refs of this.named?.values() ?? [])
+      for (const reader of alive(refs)) all.add(reader);
     return all;
   }
 
@@ -214,14 +237,15 @@ export class Log {
     if (this.empty) return;
     append(this.reported, report);
     this.#last = report;
-    for (const reader of this.readers) wakeReader(reader);
+    for (const reader of alive(this.readers)) wakeReader(reader);
     // A key slice reads only its keys, so a report wakes no reader of other keys (SE-153).
     const due = new Set<Reader>();
     // Stryker disable next-line ConditionalExpression: with no key slice, no operation names a reader
     if (this.named?.size)
       for (const op of report)
-        for (const reader of this.named.get((op as { key: PropertyKey }).key) ??
-          [])
+        for (const reader of alive(
+          this.named.get((op as { key: PropertyKey }).key) ?? [],
+        ))
           due.add(reader);
     for (const reader of due) wakeReader(reader);
     if (this.parked?.size) this.observe(); // A reader that no key woke has nothing to read
@@ -270,7 +294,7 @@ export class Log {
     // Stryker disable next-line ConditionalExpression: an empty log has nothing to drop
     if (this.reported.length) {
       let low = this.end;
-      for (const reader of this.readers)
+      for (const reader of alive(this.readers))
         low = Math.min(low, positionOf(reader));
       this.reported.splice(0, low - this.base);
       this.base = low;
@@ -424,6 +448,7 @@ export class Reader implements Changes<unknown> {
   #ended = false;
   #emit?: Emit;
   #start: () => void;
+  #ref = new WeakRef(this); // What the log holds (SE-14E)
 
   static {
     positionOf = reader => reader.#at;
@@ -456,7 +481,7 @@ export class Reader implements Changes<unknown> {
     else if (!terminal(channel)) {
       this.#at += log.pending?.length ?? 0;
       log.pending ??= [];
-      log.add(this, slice?.names);
+      log.add(this, this.#ref, slice?.names);
     }
   }
 
@@ -513,7 +538,7 @@ export class Reader implements Changes<unknown> {
     this.#at = log.end;
     if (slice.spent?.()) {
       // Stryker disable next-line BlockStatement,CallExpression: a spent reader reads past each later report, so this only stops the log sooner
-      log.remove(this);
+      log.remove(this.#ref);
       this.#end();
     }
   }
@@ -524,7 +549,7 @@ export class Reader implements Changes<unknown> {
       return this.#taken.length ? this.#taken.splice(0) : undefined;
     const log = this.#log,
       end = log.end;
-    if (!log.readers.has(this) || this.#at >= end) return undefined;
+    if (!log.readers.has(this.#ref) || this.#at >= end) return undefined;
     const at = this.#at,
       value = log.from(at);
     this.#at = end;
@@ -551,11 +576,12 @@ export class Reader implements Changes<unknown> {
       ) {
         // Stryker disable next-line ConditionalExpression: a reader that each publish wakes observes the report there
         if (this.#slice?.names) (this.#log.parked ??= new Set()).add(this);
+        this.#log.waiting.add(this);
         this.#log.observe(); // SE-04A: a reader with nothing to read observed all that concerns it
         return;
       } else {
         this.#log.parked?.delete(this);
-        this.#log.remove(this, this.#slice?.names);
+        this.#log.remove(this.#ref, this.#slice?.names);
         this.#log.trim();
         if (!this.#closed && failed(channel)) next.reject(resultOf(channel));
         else next.resolve({ done: true, value: undefined });
@@ -564,6 +590,7 @@ export class Reader implements Changes<unknown> {
       }
       this.#waiting.shift();
     }
+    this.#log.waiting.delete(this);
   }
 
   /** Stops the reader, and ends its waiting reads. */
@@ -571,7 +598,7 @@ export class Reader implements Changes<unknown> {
     this.#closed = true;
     this.#end();
     this.#taken.length = 0;
-    if (this.#log.remove(this, this.#slice?.names)) this.#log.trim();
+    if (this.#log.remove(this.#ref, this.#slice?.names)) this.#log.trim();
     this.#settle();
   }
 }

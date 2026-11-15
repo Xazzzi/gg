@@ -410,3 +410,58 @@ test("SE-04A under ackStyle all, only a snapshot consumer releases a flush", asy
   assert.deepEqual(await read, set(2, 1));
   s[CHAN].close();
 });
+
+test("SE-14E a dropped reader retains no operation, for a whole log, an index slice and a key slice", async () => {
+  const list = await started(select([0] as unknown[], open)),
+    keys = await started(select({ a: 0 as unknown }, open));
+  (() => {
+    changes(list);
+    changes(list, [0]);
+    changes(keys, ["a"]);
+  })();
+  assert.ok(await collected(value => (list.push(value), list.pop())));
+  assert.ok(await collected(value => ((list[0] = value), (list[0] = 0))));
+  assert.ok(await collected(value => ((keys.a = value), (keys.a = 0))));
+});
+
+test("SE-14E a dropped reader with a pending next() stays, and gets the next report", async () => {
+  const s = await started(select({ a: 0 }, open));
+  let got: unknown;
+  (() => {
+    changes(s)
+      .next()
+      .then(result => (got = result));
+  })();
+  for (let i = 0; i < 5; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  s.a = 1;
+  await setImmediate();
+  assert.deepEqual(got, set(1, 0));
+});
+
+test("SE-14E a reader that the collector took before the registry ran is skipped at start, at a report and at close", async () => {
+  const gc = globalThis.gc as () => void;
+  const s = select({ a: 0 as unknown }, { ...open, autoStart: false }),
+    list = select([0] as unknown[], { ...open, autoStart: false });
+  (() => {
+    changes(s);
+    changes(s, ["a"]);
+    changes(list, [0]);
+  })();
+  const kept = changes(s);
+  await setImmediate();
+  gc(); // The registry runs in a later task, so the log still has the refs here
+  void kept.next();
+  list[CHAN][Symbol.asyncIterator]().next();
+  await setImmediate();
+  gc();
+  s.a = 1;
+  list[0] = 1;
+  await setImmediate();
+  gc();
+  s[CHAN].close();
+  assert.deepEqual(await kept.next(), set(1, 0));
+  assert.deepEqual(await kept.next(), done);
+});

@@ -110,6 +110,7 @@ export const createSim = (count = 12) => {
   };
   running.send(false);
   pace.send(rate);
+  trail.send(true);
   publish();
   return {
     bodies,

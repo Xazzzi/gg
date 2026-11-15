@@ -998,7 +998,7 @@ test("FE-060 return takes effect only after the generator's await settles", asyn
   assert.deepEqual(log, ["finally"]);
 });
 
-test("FE-061 a value pulled for a terminal channel never gets to another consumer", async () => {
+test("FE-061 CH-073 a pull that is pending when the channel is terminal reads no value, so another consumer gets it", async () => {
   const queue = new Channel<number>({ thenReceive: "unread" });
   const ch = every<number>();
   const run = feed(queue, ch, { autoStart: true });
@@ -1008,7 +1008,7 @@ test("FE-061 a value pulled for a terminal channel never gets to another consume
   queue.send(1);
   await setImmediate();
   queue.close();
-  assert.equal((await iter(queue).next()).done, true);
+  assert.deepEqual(await iter(queue).next(), { done: false, value: 1 });
 });
 
 test("FE-062 a run with no read stays blocked until the channel is terminal", async () => {

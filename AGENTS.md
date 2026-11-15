@@ -33,6 +33,7 @@ Run `npx biome check --write spec` after a spec edit, because Biome formats the 
 Run `npm run build:devtools` after a devtools change, and ask the user to reload the extension.
 Bump `PROTOCOL` in `devtools/src/hook.ts` and `devtools/src/panel.tsx` together when the batch shape changes.
 Call esbuild as `node_modules/.bin/esbuild`, which is a binary, not a script for `node`.
+When you run `cat`, send the output to a file and show only the lines that matter.
 
 ## Names
 

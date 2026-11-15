@@ -162,7 +162,7 @@ So a map that reads one key of a `select` runs only when that key changes, and n
   It MUST discard a value or a failure that `source` gives later, and a later result of `map`.
   `map` MUST NOT run for a value that `source` gives after `return()`.
   So the consumer of a derive ends at once, and HE-053 does not permit a plain `async function*` wrapper.
-  The source decides when its own consumer ends: a `Channel` consumer with a pending `next()` detaches when that `next()` settles (CH-073).
+  The source decides when its own consumer ends: a `Channel` consumer detaches at once, also with a pending `next()` (CH-073).
 - HE-056: The iterator MUST serve `next()` calls one at a time, in order.
   A `next()` after the finish MUST resolve with `{ done: true, value: undefined }`.
   `[Symbol.asyncIterator]()` MUST return the iterator.

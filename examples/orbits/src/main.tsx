@@ -1,25 +1,28 @@
-import { type Child, derive, latest, mount } from "@xazzzi/gg";
+import { derive, iff, latest, mount } from "@xazzzi/gg";
 import { createSim } from "./sim.ts";
 import { Chart, Orrery } from "./views.tsx";
 
 const $ = (selector: string) => document.querySelector(selector) as Element;
 const sim = createSim();
 
-/** Mounts a view into stage at each other toggle, and unmounts it between, while the simulation runs on. */
-const mountable = (stage: Element, view: () => Child) => {
+/** A flag that a button flips, so iff builds the view at each show and stops it at each hide. */
+const flag = () => {
   const shown = latest<boolean>();
-  let unmount: (() => void) | undefined;
-  const toggle = () => {
-    if (unmount) unmount(), (unmount = undefined);
-    else unmount = mount(stage, view());
-    shown.send(!!unmount);
-  };
-  toggle();
-  return { shown, toggle };
+  let on = true;
+  shown.send(on);
+  return { shown, toggle: () => shown.send((on = !on)) };
 };
 
-const orrery = mountable($(".orrery"), () => <Orrery sim={sim} />);
-const chart = mountable($(".chart"), () => <Chart sim={sim} />);
+const orrery = flag(),
+  chart = flag();
+mount(
+  $(".orrery"),
+  iff(orrery.shown, () => <Orrery sim={sim} />),
+);
+mount(
+  $(".chart"),
+  iff(chart.shown, () => <Chart sim={sim} />),
+);
 const label = (shown: boolean) => (shown ? "Unmount" : "Mount");
 
 mount(

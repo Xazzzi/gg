@@ -236,8 +236,7 @@ A consumer under `latest` retains only its next value.
 
 ## Consumer lifetime
 
-The consumer is an async generator.
-These rules come from generator semantics.
+The consumer is an async generator, except that `return()` and `throw()` do not wait for a pending `next()`.
 
 - CH-070: `return()` MUST detach only that consumer.
   It MUST NOT close the channel.
@@ -245,13 +244,12 @@ These rules come from generator semantics.
   That consumer rejects with `error`.
 - CH-072: Under `ackStyle: "any"`, `return()` and `throw()` on a consumer MUST NOT resolve an `asend`.
   Under `"all"`, CH-01E applies.
-- CH-073: If a `next()` is pending, `return()` and `throw()` wait until that `next()` settles.
-  The pending `next()` still reads a value.
-  So under `"unread"`, no other consumer gets that value.
-  If this is a problem, a caller MUST NOT abandon a pending `next()`.
+- CH-073: If a `next()` is pending, `return()` and `throw()` MUST resolve it with `{ done: true, value: undefined }` at once.
+  The pending `next()` MUST NOT read a value, so under `"unread"` another consumer gets that value.
+  `return()` and `throw()` then act as CH-070 and CH-071 say.
+  So a consumer that code stops on a quiet channel detaches at once.
+  A `next()` that code abandons with no `return()` still reads a value.
 - CH-074: `break` in `for await` MUST behave as `return()`.
-  No `next()` is pending at that point.
-  So CH-073 does not apply.
 
 ## Stop error
 

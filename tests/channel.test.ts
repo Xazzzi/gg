@@ -1073,17 +1073,33 @@ test("CH-071 throw ends only that consumer", async () => {
   assert.ok(!ch.signal.aborted);
 });
 
-test("CH-073 return waits for a pending next, which still reads", async () => {
-  const ch = new Channel<number>({ thenReceive: "unread" });
-  const it = iter(ch);
-  const pending = it.next();
-  await setImmediate();
-  const returning = it.return(undefined);
-  await setImmediate();
-  assert.ok(isPending(returning));
-  ch.send(1);
-  assert.deepEqual(await pending, val(1));
-  await returning;
+test("CH-073 return and throw end a pending next at once, which reads no value", async () => {
+  const ch = new Channel<number>({ thenReceive: "unread" }),
+    failure = new Error("x");
+  for (const stop of [
+    (it: AsyncGenerator<number>) => it.return(7),
+    (it: AsyncGenerator<number>) => it.throw(failure),
+  ]) {
+    const it = iter(ch),
+      pending = it.next(),
+      other = iter(ch).next();
+    await setImmediate();
+    const stopping = stop(it);
+    assert.deepEqual(await pending, end());
+    await stopping.then(
+      result => assert.deepEqual(result, { done: true, value: 7 }),
+      error => assert.equal(error, failure),
+    );
+    ch.send(1);
+    assert.deepEqual(await other, val(1));
+  }
+  // A next that has not started its read yet reads nothing either.
+  ch.send(2);
+  const it = iter(ch),
+    pending = it.next();
+  void it.return(undefined);
+  assert.deepEqual(await pending, end());
+  assert.deepEqual(await iter(ch).next(), val(2));
 });
 
 test("CH-074 break detaches", async () => {

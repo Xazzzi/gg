@@ -173,7 +173,7 @@ These behaviours come from the rules above and are intentional.
   Its `return()` has effect only after that `await` settles.
   If the `await` never settles, the `finally` blocks of the generator never execute.
 - FE-061: `feed` discards a value that it pulled for a terminal channel.
-  If the source is a `thenReceive: "unread"` channel, no other consumer gets that value.
+  If the source is a `Channel`, a pull that is pending when the run ends reads no value (CH-073), so another consumer gets it.
 - FE-062: With `backPressure: true`, a run blocks while no consumer has read its value or a later value (CH-019).
   This occurs with no consumers, or with `autoStart: true` and a late `firstReceive: "next"` consumer.
   The run ends when the channel becomes terminal.

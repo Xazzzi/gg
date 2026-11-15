@@ -180,8 +180,7 @@ export class Channel<T, TReturn = undefined>
     if (this.#then !== "latest") cell.next = this.#tail;
     this.#behind = this.#placed;
     this.#newest = this.#keepsNewest() ? cell : undefined;
-    this.#wake?.resolve();
-    this.#wake = undefined;
+    this.#rouse();
     this.#emit?.("send", value, cell.n);
   }
 
@@ -218,23 +217,39 @@ export class Channel<T, TReturn = undefined>
     this.close();
   }
 
-  /** Gives a new consumer, which attaches at its first `next()`. */
-  async *[Symbol.asyncIterator](): AsyncGenerator<
-    T,
-    TReturn | undefined,
-    void
-  > {
+  /**
+   * Gives a new consumer, which attaches at its first `next()`.
+   * Its `return()` and `throw()` end a pending `next()` at once (CH-073). */
+  [Symbol.asyncIterator](): AsyncGenerator<T, TReturn | undefined, void> {
+    const stop: { on?: true } = {},
+      consumer = this.#consume(stop),
+      end = consumer.return.bind(consumer),
+      fail = consumer.throw.bind(consumer);
+    const halt = () => {
+      stop.on = true;
+      this.#rouse();
+    };
+    consumer.return = value => (halt(), end(value));
+    consumer.throw = error => (halt(), fail(error));
+    return consumer;
+  }
+
+  /** Reads values for one consumer until it ends, or until stop is on. */
+  async *#consume(stop: {
+    on?: true;
+  }): AsyncGenerator<T, TReturn | undefined, void> {
     const reader = this.#attach();
     try {
       for (;;) {
         await null; // A read always happens in a microtask
-        while (!this.#readable(reader)) {
+        while (!stop.on && !this.#readable(reader)) {
           if (this.#terminal) {
             if (this.#failed) throw this.#result;
             return this.#result as TReturn;
           }
           await (this.#wake ??= Promise.withResolvers()).promise;
         }
+        if (stop.on) return undefined;
         yield this.#take(reader);
         if (this.#then === "latest")
           reader.at =
@@ -252,6 +267,12 @@ export class Channel<T, TReturn = undefined>
       this.#prune();
       if (this.#readers?.delete(reader)) this.#ack(this.#floor()); // CH-01E
     }
+  }
+
+  /** Wakes each consumer that waits, so it checks the channel again. */
+  #rouse() {
+    this.#wake?.resolve();
+    this.#wake = undefined;
   }
 
   /** Counts a new consumer, and starts it where its first receive mode says. */
@@ -361,8 +382,7 @@ export class Channel<T, TReturn = undefined>
     this.#acked = this.#lastAck;
     this.#consumer?.reject(this.#stopError());
     this.#consumer = undefined;
-    this.#wake?.resolve();
-    this.#wake = undefined;
+    this.#rouse();
     if (this.#stops) {
       this.#newest = undefined;
       this.#anchor = this.#tail;

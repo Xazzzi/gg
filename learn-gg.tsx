@@ -22,6 +22,7 @@ import {
   derive,
   each,
   feed,
+  iff,
   isVal,
   latest,
   mount,
@@ -692,6 +693,64 @@ topic("each renders a list from a select");
   await tick();
   console.log(html(ul)); // => <ul><li>cy</li><li>bob</li><li>Ann</li></ul>
   console.log(ul.childNodes[2] === ann); // => true, the same node
+}
+
+topic("iff shows one of two views");
+{
+  // iff gives then while its source is truthy, and otherwise while it is not.
+  // A function branch builds a new view at each change, and iff stops the view before it.
+  const parent = document.createElement("div");
+  const open = latest<boolean>();
+  const time = latest<string>();
+  time.send("12:00");
+  mount(
+    parent,
+    iff(open, () => <b>{time}</b>, "closed"),
+  );
+  open.send(false);
+  await tick();
+  console.log(html(parent)); // => <div>closed</div>
+  open.send(true);
+  await tick();
+  console.log(html(parent)); // => <div><b>12:00</b></div>
+}
+
+topic("Scopes: a view out of the tree parks");
+{
+  // Each started element belongs to the mount or the each row above it, and stops with it.
+  // An element that leaves the tree pulls nothing until it comes back, so a component can keep views.
+  const parent = document.createElement("div");
+  const view = latest<Node | string>();
+  const count = latest<number>();
+  count.send(1);
+  const kept = (<p>{count}</p>) as Node;
+  const unmount = mount(parent, view);
+  view.send(kept);
+  await tick();
+  view.send("away");
+  await tick();
+  count.send(2); // The pull that was pending takes 2
+  count.send(3);
+  await tick();
+  console.log(html(kept)); // => <p>2</p>, parked
+  view.send(kept);
+  await tick();
+  console.log(html(parent)); // => <div><p>3</p></div>
+  unmount(); // Stops kept too, because it started under this mount
+}
+
+topic("Parts: live children inside an output");
+{
+  // An output can hold live children, so a component can yield another component.
+  async function* Greeting({ name }: { name: Channel<string> }) {
+    yield ["Hi ", name, "!"];
+  }
+  const parent = document.createElement("div");
+  const name = latest<string>();
+  mount(parent, <Greeting name={name} />);
+  name.send("Ada");
+  await tick();
+  console.log(html(parent)); // => <div>Hi Ada!</div>
 }
 
 topic("Context");

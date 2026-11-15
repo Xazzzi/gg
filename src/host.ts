@@ -2,7 +2,7 @@
 import { type Emit, owned, pulling, register, release } from "./devtools.ts";
 import { BIND } from "./helpers.ts";
 import type { Child } from "./jsx.ts";
-import { FAULT, REPORT, select, type Val } from "./select.ts";
+import { FAULT, REPORT, RETURNS, select, type Val } from "./select.ts";
 import { chunked, noop, record } from "./source.ts";
 
 // An entry that a drive keys, with its source and its last applied output.
@@ -347,7 +347,8 @@ export const applyOutput = (
     return false;
   }
   const { value } = state;
-  if (Object.is(value, entry.value)) return false;
+  // An entry that each renders again keeps the output of its old child (JX-03C).
+  if (state.status === "pending" || Object.is(value, entry.value)) return false;
   const retext = !!entry.text && isText(value);
   if (retext) (entry.text as Text).data = `${value}`;
   else
@@ -436,6 +437,7 @@ export const drive = <E extends Driven>(
       autoStart: true,
       autoClose,
       backPressure: false,
+      [RETURNS]: true, // A removed entry ends its source (JX-035, JX-041)
       // A child that fails after its drive let it go, or in its return(), has no entry to report it (JX-089).
       [FAULT]: error => reportError(error),
       [REPORT]: ops => {
@@ -472,14 +474,13 @@ export const drive = <E extends Driven>(
       },
     }),
   );
-  /** Takes an entry and the parts that its outputs made out of the select, and returns the source of a part. */
+  /** Takes an entry and the parts that its outputs made out of the select, which returns their sources. */
   const quit = (entry: Entry) => {
     if (entry.pool) for (const part of entry.pool.values()) quit(part);
     entry.pool = undefined;
     keyed.delete(entry.key as string);
     delete sources[entry.key as string];
     entry.gate = undefined; // So a parked pull of the part never runs
-    entry.via?.return();
     end(entry.source);
     release(entry.source); // JX-041
   };

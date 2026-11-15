@@ -123,56 +123,55 @@ const drop = (stops: (() => void)[]) => {
 type Result = { value?: unknown; done?: true; failed?: true; error?: unknown };
 type Hub = { subscribe(take: (result: Result) => void): () => void };
 
+// One reader of a hub, with its subscribers and its newest result.
+type Run = {
+  takers: Set<(result: Result) => void>;
+  iterator: AsyncIterator<unknown>;
+  newest?: Result;
+};
+
+/** Gives a result to the subscribers of a run, and keeps it for later ones. */
+const send = (run: Run, result: Result) => {
+  run.newest = result;
+  for (const take of [...run.takers]) take(result);
+};
+
 /**
  * Makes one reader of open for all subscribers, which opens at the first subscriber and returns after the last (HE-05A).
- * A new subscriber gets the newest result at once. */
+ * A new subscriber gets the newest result at once, and starts a new run after the last one finished or returned. */
 const hub = (open: () => AsyncIterator<unknown>): Hub => {
-  const takers = new Set<(result: Result) => void>();
-  let iterator: AsyncIterator<unknown> | undefined,
-    newest: Result | undefined,
-    run = 0;
-  const send = (result: Result) => {
-    newest = result;
-    for (const take of [...takers]) take(result);
-  };
-  /** Reads the source until it finishes or fails, or until the last subscriber leaves. */
-  const pump = async (mine: number) => {
-    for (;;) {
-      let result: Result;
-      try {
-        const read = await (iterator as AsyncIterator<unknown>).next();
-        result = read.done ? { done: true } : { value: read.value };
-      } catch (error) {
-        result = { failed: true, error };
-      }
-      if (mine !== run) return; // The last subscriber left, so a later run owns the hub
-      send(result);
-      if (result.done || result.failed) return;
+  let current: Run | undefined;
+  /**
+   * Reads the source of a run until it finishes, fails or returns.
+   * The loop ends by the iterator protocol, and a run that its subscribers left sends to none. */
+  const pump = async (run: Run) => {
+    let result: Result = { done: true };
+    try {
+      for await (const value of { [Symbol.asyncIterator]: () => run.iterator })
+        send(run, { value });
+    } catch (error) {
+      result = { failed: true, error };
     }
+    send(run, result);
+    // A slot that leaves can come back, so a later subscriber reads it alone.
+    if (current === run) current = undefined;
+  };
+  /** Opens a new run, and makes it current. */
+  const start = () => {
+    const run: Run = (current = { takers: new Set(), iterator: open() });
+    void pump(run);
+    return run;
   };
   return {
     subscribe(take) {
-      takers.add(take);
-      if (newest) take(newest);
-      else if (!iterator) {
-        iterator = open();
-        // Stryker disable next-line UpdateOperator: runs only need to differ
-        void pump(++run);
-      }
+      const run = current ?? start();
+      run.takers.add(take);
+      if (run.newest) take(run.newest);
       return () => {
-        // A finished source keeps its last result, so a later subscriber gets it.
-        if (
-          !takers.delete(take) ||
-          takers.size ||
-          newest?.done ||
-          newest?.failed
-        )
-          return;
-        // Stryker disable next-line UpdateOperator: runs only need to differ
-        run++;
-        void quietReturn(iterator);
-        iterator = undefined;
-        newest = undefined;
+        if (!run.takers.delete(take) || run.takers.size) return;
+        // A subscriber of a finished run can leave after a new run started.
+        if (current === run) current = undefined;
+        void quietReturn(run.iterator);
       };
     },
   };

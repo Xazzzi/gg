@@ -163,7 +163,8 @@ So a map that reads one key of a `select` runs only when that key changes, and n
 - HE-05A: The derives of one slot of an object `select`, and the derives of one `Item` (JX-03F), MUST share one reader of that source.
   The shared reader MUST open at the first `next()` of any of these derives, and MUST call `return()` on its source after the last of them returns.
   Each derive MUST then act as if it read the source alone: it gets the newest output when it reads, and the end or the failure of the source.
-  A shared reader that finished MUST give its end to a later derive.
+  After the shared reader finishes, a later derive MUST open a new shared reader.
+  So a later derive of a slot that a `delete` removed waits for the slot, and reads it when code writes the key again.
   An index names the slot at that index at the call (SE-155), and a slot moves (SE-092), so the derives of an index MUST NOT share a reader.
 - HE-059: `derive` owns what `map` builds.
   While `map` runs, the JSX runtime records each element that `jsx` creates with a dynamic child or a dynamic prop, each wait of `use`, and each dynamic result of a component.

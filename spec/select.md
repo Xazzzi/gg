@@ -144,6 +144,9 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 - **Fault hook**: an internal callback that gets each error that `select` ignores or discards (SE-127).
   The JSX host sets it for its drives (JX-089).
   It is not public API, and no option sets it.
+- **Return flag**: an internal flag that makes a delete return the iterator of its slot (SE-128).
+  The JSX host sets it for its drives (JX-08A).
+  It is not public API, and no option sets it.
 - **Reserved key**: `Symbol.asyncIterator`, `Symbol.dispose` or `CHAN`.
 - **Terminal**: the state of a channel after its first `close` or `throw` call.
 
@@ -577,6 +580,9 @@ It is a slice reader of one key that gives values, not operations.
 - SE-127: If the fault hook exists, `select` MUST call it with each error that SE-02A, SE-121, SE-124 and SE-126 ignore or discard.
   `select` MUST NOT call it for a source with no `return`.
   So a select with no consumer can still make its failures loud.
+- SE-128: If the return flag is set, a `delete` MUST apply SE-120 and SE-121 to the slot that it removes, before the select discards that slot.
+  An overwrite still follows SE-122.
+  So a drive that owns its sources ends the iterator that its select opened, which the drive cannot reach.
 
 ## Limits
 

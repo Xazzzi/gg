@@ -229,6 +229,8 @@ The runtime converts a child to nodes by these rules, in order.
   For example, a place throws for a node that holds its host, and the start of a waiting element can throw.
   The select of a drive has no consumer, so without this rule no code gets the error.
   The nodes stay as they are, and the scopes under the host continue.
+- JX-08A: The select of each drive MUST have the return flag (SE-128).
+  So a drive that removes an entry calls `return()` on the iterator of its source, and on the iterators of its parts (JX-035, JX-041).
 - JX-089: The select of each drive MUST have a fault hook that calls `globalThis.reportError` (SE-127).
   So a child that fails after its drive removed or stopped it, and a `return()` that fails when a drive stops, report the error.
 - JX-029: To place, the runtime MUST NOT move a node that stays in order.
@@ -353,7 +355,7 @@ A component instance that finishes renders again with the next value of its item
   To end an `Item`, `each` MUST close its channel if it has one, and abort its `signal`.
   `each` MUST then stop each scope that is bound through a node of the entry (JX-080).
   This includes a node that an earlier output of the child or of one of its parts gave, if a scope is still bound through it.
-  It MUST also return each part that the outputs of the child made (JX-086).
+  It MUST also return the child, and each part that the outputs of the child made (JX-086, JX-08A).
   So a row that leaves ends the dynamic children and the dynamic props inside it, also the ones that are parked.
 - JX-036: `each` MUST drive the dynamic children of its entries with one `select`, with `autoStart`, no `autoClose` and no `backPressure`.
   JX-024 to JX-028 apply.

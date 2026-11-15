@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
+import { inspect } from "node:util";
 import { CHAN, Channel, changes, derive, select, watch } from "../src/index.ts";
 import { Catch, each, type Item, jsx, mount } from "../src/jsx.ts";
 import { fakeDocument, html } from "./dom.ts";
@@ -84,16 +85,72 @@ test("HE-05A a derive of a slot that leaves finishes, and a failure of the selec
   delete s.a;
   assert.equal((await one.next()).done, true);
   assert.equal((await two.next()).done, true);
-  // A finished hub gives its end to a later derive of the same key.
-  assert.equal((await derive(s, "a", n => n).next()).done, true);
+  // A later derive reads the key alone, so it waits for the key, and gets the value of the new slot.
+  const later = await counting(async () => {
+    const three = derive(s, "a", n => n),
+      next = three.next();
+    await setImmediate();
+    assert.match(inspect(next), /pending/);
+    s.a = 2;
+    assert.deepEqual(await next, { done: false, value: 2 });
+    await three.return();
+  });
+  // The finished derives hold no part of the new reader, so its last derive returns it.
+  assert.deepEqual([later.reader, later["reader end"]], [1, 1]);
   const error = new Error("fail");
   const t: any = select({ a: 1 }, { autoStart: true });
-  const three = derive(t, "a", n => n),
-    four = derive(t, "a", n => n);
-  await Promise.all([three.next(), four.next()]);
+  const four = derive(t, "a", n => n),
+    five = derive(t, "a", n => n);
+  await Promise.all([four.next(), five.next()]);
   t[CHAN].throw(error);
-  await assert.rejects(three.next(), e => e === error);
   await assert.rejects(four.next(), e => e === error);
+  await assert.rejects(five.next(), e => e === error);
+  // A later derive of a failed select reads it as a watch alone does: the output, then the failure.
+  const late = derive(t, "a", n => n);
+  assert.equal((await late.next()).value, 1);
+  await assert.rejects(late.next(), e => e === error);
+});
+
+test("HE-05A a reader that ends after its derives left keeps the reader of later derives", async () => {
+  const s = select({ a: 1 }, { autoStart: true });
+  const one = derive(s, "a", n => n);
+  await one.next();
+  const counts = await counting(async () => {
+    await one.return();
+    // The first reader ends after this derive starts the next one.
+    const two = derive(s, "a", n => n);
+    assert.equal((await two.next()).value, 1);
+    await setImmediate();
+    const three = derive(s, "a", n => n);
+    assert.equal((await three.next()).value, 1);
+    await Promise.all([two.return(), three.return()]);
+  });
+  assert.equal(counts.reader, 1);
+  s[CHAN].close();
+});
+
+test("HE-05A a derive that leaves a finished reader keeps the reader of later derives", async () => {
+  const s: any = select({ a: 1 }, { autoStart: true }),
+    gate = Promise.withResolvers<void>();
+  const slow = derive(s, "a", async n => (await gate.promise, n));
+  void slow.next();
+  await setImmediate();
+  delete s.a;
+  await setImmediate();
+  const counts = await counting(async () => {
+    const two = derive(s, "a", n => n),
+      next = two.next();
+    // slow reads the finished reader, and leaves it while its map waits.
+    await slow.return();
+    const three = derive(s, "a", n => n),
+      after = three.next();
+    s.a = 2;
+    assert.deepEqual([(await next).value, (await after).value], [2, 2]);
+    await Promise.all([two.return(), three.return()]);
+  });
+  assert.equal(counts.reader, 1);
+  gate.resolve();
+  s[CHAN].close();
 });
 
 test("HE-05A derives of one item share one channel reader", async () => {

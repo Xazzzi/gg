@@ -1389,6 +1389,25 @@ test("JX-03C a child that reads once renders again at the next value, and keeps 
   assert.equal(seen.length, 3);
 });
 
+test("JX-03C JX-024 an entry that renders again keeps its nodes while its new child is pending", async () => {
+  const parent = el(),
+    later = Promise.withResolvers<unknown>();
+  const { items, list } = gated(["a"], item =>
+    item.value === "a"
+      ? Promise.resolve(h("b", { children: "a" }))
+      : later.promise,
+  );
+  mount(parent, list);
+  await setImmediate();
+  assert.equal(html(parent), "<div><b>a</b></div>");
+  items[0] = "b";
+  await setImmediate();
+  assert.equal(html(parent), "<div><b>a</b></div>");
+  later.resolve(h("b", { children: "b" }));
+  await setImmediate();
+  assert.equal(html(parent), "<div><b>b</b></div>");
+});
+
 test("JX-03C a child that ends after a send renders again at once with the latest value", async () => {
   const { items, list, seen, gate } = gated(["a"], async function* (_, gate) {
     yield el("b");

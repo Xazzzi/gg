@@ -14,7 +14,7 @@ import {
   spread,
   type Val,
 } from "../src/index.ts";
-import { FAULT, REPORT } from "../src/select.ts";
+import { FAULT, REPORT, RETURNS } from "../src/select.ts";
 
 const iter = (s: any) => s[Symbol.asyncIterator]();
 const pendingVal = {
@@ -2816,6 +2816,21 @@ test("SE-120 SE-121 terminal returns unfinished iterators, ignoring errors", asy
   await setImmediate();
 });
 
+// An async iterable whose pulls stay pending, and which counts the returns of its iterators.
+const waiting = () => {
+  const counts = { returned: 0 };
+  const iterable = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => new Promise<IteratorResult<unknown>>(() => {}),
+      return() {
+        counts.returned++;
+        return Promise.resolve({ done: true as const, value: undefined });
+      },
+    }),
+  };
+  return Object.assign(counts, { iterable });
+};
+
 test("SE-122 a removed source is not closed", async () => {
   let returned = 0;
   const raw = {
@@ -2824,11 +2839,30 @@ test("SE-122 a removed source is not closed", async () => {
       returned++;
     },
   };
-  const s: any = select({ raw }, open);
+  const busy = waiting();
+  const s: any = select({ raw, busy: busy.iterable }, open);
   await setImmediate();
   s.raw = 1;
+  delete s.busy;
   s[CHAN].close();
   assert.equal(returned, 0);
+  assert.equal(busy.returned, 0);
+});
+
+test("SE-128 with the return flag, a delete returns the iterator of the slot, and an overwrite returns nothing", async () => {
+  const deleted = waiting(),
+    overwritten = waiting();
+  const s: any = select({ a: deleted.iterable, b: overwritten.iterable }, {
+    autoStart: true,
+    [RETURNS]: true,
+  } as any);
+  await setImmediate();
+  delete s.a;
+  assert.equal(deleted.returned, 1);
+  s.b = 1;
+  assert.equal(overwritten.returned, 0);
+  s[CHAN].close();
+  assert.equal(deleted.returned, 1);
 });
 
 test("SE-125 before start only the source's own return runs", () => {

@@ -424,11 +424,12 @@ test("JX-087 an output that holds its own source, or a bad child after a dynamic
 test("JX-085 JX-035 a row that leaves or renders again returns the parts of its outputs", async () => {
   const items = select(["a", "b"], { autoStart: true, backPressure: false }),
     parts = [counted(), counted()],
-    old = counted(),
+    olds = [counted(), counted()],
     once = latest<any>();
   let at = 0;
   async function* Row() {
-    const part = parts[at++];
+    const part = parts[at],
+      old = olds[at++];
     yield [old.source];
     yield ["row", part.source];
     for await (const _ of once) return;
@@ -447,15 +448,51 @@ test("JX-085 JX-035 a row that leaves or renders again returns the parts of its 
     parts.map(part => part.stats.returns),
     [0, 1],
   );
-  assert.equal(old.stats.returns, 1);
+  assert.deepEqual(
+    olds.map(old => old.stats.returns),
+    [0, 1],
+  );
   // The child of the first row finishes, and a new value renders the row again (JX-03C).
   parts.push(counted());
+  olds.push(counted());
   await show(once, 1);
   items[0] = "c";
   await setImmediate();
   await setImmediate();
   assert.equal(parts[0].stats.returns, 1);
-  assert.equal(old.stats.returns, 2);
+  assert.equal(olds[0].stats.returns, 1);
+});
+
+test("JX-035 JX-041 JX-08A a row that leaves returns its child, so a component that waits on other code ends at its next yield", async () => {
+  const items = select(["a", "b"], { autoStart: true, backPressure: false }),
+    source = counted(),
+    gate = Promise.withResolvers<void>(),
+    log: string[] = [];
+  async function* Row() {
+    try {
+      yield "row";
+      await gate.promise;
+      yield "again";
+      log.push("resumed");
+    } finally {
+      log.push("finally");
+    }
+  }
+  let at = 0;
+  const parent = el("ul");
+  mount(
+    parent,
+    each(items, () => (at++ ? Row() : source.source)),
+  );
+  await setImmediate();
+  assert.equal(source.stats.opened, 1);
+  items.splice(0, 2);
+  await setImmediate();
+  assert.equal(source.stats.returns, 1);
+  gate.resolve();
+  await setImmediate();
+  assert.deepEqual(log, ["finally"]);
+  assert.equal(html(parent), "<ul></ul>");
 });
 
 test("HE-059 derive stops the elements that map built for the previous output, and keeps the ones that code built before", async () => {

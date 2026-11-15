@@ -10,15 +10,28 @@ import { fakeDocument } from "./dom.ts";
 setFlagsFromString("--expose-gc");
 const collect: () => void = runInNewContext("gc");
 
-/** Checks that the heap grows by under budget bytes for each round of run, after a warm up. */
+/** Collects until the heap stops shrinking, because jobs that are still pending hold garbage of earlier checks. */
+const settled = async () => {
+  let used = Infinity;
+  for (let i = 0; i < 20; i++) {
+    await setImmediate();
+    collect();
+    const now = process.memoryUsage().heapUsed;
+    if (now >= used) break;
+    used = now;
+  }
+  return used;
+};
+
+/**
+ * Checks that the heap grows by under budget bytes for each round of run.
+ * The first rounds take the growth that does not repeat, such as caches and compiled code, so only the next rounds count. */
 const flat = async (name: string, budget: number, run: () => unknown) => {
   const rounds = 10_000;
-  for (let i = 0; i < 100; i++) await run();
-  collect();
-  const before = process.memoryUsage().heapUsed;
   for (let i = 0; i < rounds; i++) await run();
-  collect();
-  const grown = (process.memoryUsage().heapUsed - before) / rounds;
+  const before = await settled();
+  for (let i = 0; i < rounds; i++) await run();
+  const grown = ((await settled()) - before) / rounds;
   console.log(`${name}: ${grown.toFixed(0)} bytes per round`);
   assert.ok(grown < budget, `${name} grew over ${budget} bytes per round`);
 };
@@ -110,7 +123,7 @@ await within(
   (async () => {
     for await (const _ of s);
   })();
-  await flat("SE-04B flushes that only a consumer reads", 100, () => {
+  await flat("SE-04B flushes that only a consumer reads", 16, () => {
     s.n++;
     return setImmediate();
   });
@@ -124,7 +137,7 @@ await within(
     fakeDocument.createElement("ul") as any,
     each(list, item => jsx("li", { children: `${item.value}` })),
   );
-  await flat("JX-070 reads of each with static rows", 100, () => {
+  await flat("JX-070 reads of each with static rows", 16, () => {
     list.push(1);
     list.shift();
     return setImmediate();

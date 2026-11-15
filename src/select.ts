@@ -47,6 +47,8 @@ export const CHAN: unique symbol = Symbol.for("gg.CHAN") as any;
 export const REPORT: unique symbol = Symbol() as any;
 /** The option key of the fault hook, which gets the errors that select ignores (SE-127). Not exported from the package. */
 export const FAULT: unique symbol = Symbol() as any;
+/** The option key that makes a delete return the iterator of the slot, for a drive that owns its sources (SE-128). Not exported from the package. */
+export const RETURNS: unique symbol = Symbol() as any;
 declare const OUTPUTS: unique symbol; // Type only, so changes infers the outputs
 
 export type SelectShape = Record<string | symbol, unknown> | readonly unknown[];
@@ -66,6 +68,7 @@ export type SelectOptions<S, R> = ChannelOptions & {
   mapSnapshot?: (snapshot: S) => R;
   [REPORT]?: (ops: Op[]) => unknown; // A promise holds the next pulls (JX-083)
   [FAULT]?: (error: unknown) => void;
+  [RETURNS]?: boolean;
 };
 
 type Returned<R> = 0 extends 1 & R
@@ -302,6 +305,7 @@ class Select {
   #unwrap: boolean;
   #hook?: (ops: Op[]) => void; // The report hook, which is no observer
   #fault?: (error: unknown) => void;
+  #returns: boolean; // A delete returns the iterator of its slot (SE-128)
   #mapSnapshot?: (snapshot: unknown) => unknown;
   // A flush walks only these worklists, so one change costs no walk of the shape (SE-048).
   // Each worklist exists from its first slot on, so a select of plain values makes none.
@@ -393,6 +397,7 @@ class Select {
       mapSnapshot,
       [REPORT]: hook,
       [FAULT]: fault,
+      [RETURNS]: returns = false,
     } = options;
     if (autoClose) this.#watched = new Set();
     this.#backPressure = backPressure;
@@ -400,6 +405,7 @@ class Select {
     this.#unwrap = unwrap;
     this.#hook = hook;
     this.#fault = fault;
+    this.#returns = returns;
     this.#mapSnapshot = mapSnapshot;
     this.#channel = channel;
     this.#isArray = Array.isArray(shape);
@@ -804,10 +810,15 @@ class Select {
     this.#hold?.resolve();
     for (const slot of this.#slots()) {
       slot.dead = true;
-      if (slot.kind >= ASYNC && slot.status < FINAL)
-        void quietReturn(slot.iterator ?? slot.source, this.#fault);
+      this.#close(slot);
     }
     for (const reader of this.#log.all()) wakeReader(reader); // SE-14A
+  }
+
+  /** Calls `return()` on the iterator of a slot that is not finished, or on its source before start (SE-120, SE-125). */
+  #close(slot: Slot) {
+    if (slot.kind >= ASYNC && slot.status < FINAL)
+      void quietReturn(slot.iterator ?? slot.source, this.#fault);
   }
 
   /** Gives the outputs of all slots, in the shape of the target. */
@@ -1077,6 +1088,7 @@ class Select {
       prev: this.#out(slot),
     }));
     slot.dead = true;
+    if (this.#returns) this.#close(slot);
     this.#map.delete(key);
     this.#touch();
     return true;

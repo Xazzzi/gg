@@ -7,6 +7,7 @@ import {
   changes,
   derive,
   feed,
+  iff,
   latest,
   select,
   watch,
@@ -122,12 +123,14 @@ test("DV-003 the hook finds the caller at a fixed stack depth", () => {
     feed([1], new Channel());
     select({});
     derive(new Channel(), String);
+    iff(new Channel(), 1);
     latest();
   } finally {
     delete g[HOOK];
   }
-  assert.equal(frames.length, 8);
+  assert.equal(frames.length, 10);
   frames.splice(5, 1); // The channel of derive
+  frames.splice(6, 1); // The channel of iff
   assert.match(frames[3], /^channel .*select\.ts/); // The channel that select owns
   frames.splice(3, 1);
   for (const frame of frames) assert.match(frame, /devtools\.test\.ts/);
@@ -906,5 +909,50 @@ test("DV-002 DV-060 DV-061 DV-062 derive registers its source and map, and emits
     assert.equal(ends(), 4);
   } finally {
     off();
+  }
+});
+
+test("DV-001 DV-002 iff registers as a derive with its source and map", () => {
+  const { log, details, off } = install();
+  try {
+    const ch = new Channel<boolean>(),
+      it = iff(ch, "on");
+    assert.deepEqual(log.at(-1), ["derive", "register"]);
+    assert.equal(details.get(it).source, ch);
+    assert.equal(typeof details.get(it).map, "function");
+  } finally {
+    off();
+  }
+});
+
+test("DV-045 a row that leaves ends a finished part of its child one time", async () => {
+  const counts = ends();
+  try {
+    const state = select(["a"], open);
+    await setImmediate();
+    let result!: object;
+    async function* Once() {
+      yield "once";
+    }
+    const row = new Channel<Child>({
+      firstReceive: "latest",
+      thenReceive: "latest",
+    });
+    mount(
+      el(),
+      each(state, () => {
+        result = jsx(Once, {}) as object;
+        row.send([result as Child]);
+        return row;
+      }),
+    );
+    await setImmediate();
+    await setImmediate();
+    assert.equal(counts.get(result), 1);
+    state.pop();
+    await setImmediate();
+    assert.equal(counts.get(result), 1);
+  } finally {
+    delete g[HOOK];
   }
 });

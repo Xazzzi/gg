@@ -172,7 +172,7 @@ export function iff<A, B = undefined>(
 ): Derived<Awaited<A | B>> {
   if (typeof source?.[Symbol.asyncIterator] !== "function")
     throw new TypeError("iff source is not an async iterable");
-  let last: boolean | undefined;
+  let off: boolean | undefined; // The falsiness of the last value
   const map = (value: unknown) => {
       const branch = value ? then : otherwise;
       return typeof branch === "function"
@@ -180,7 +180,7 @@ export function iff<A, B = undefined>(
         : branch;
     },
     box: { emit?: Emit } = {},
-    derived = mapped(source, map, box, value => last !== (last = !!value));
+    derived = mapped(source, map, box, value => off !== (off = !value));
   box.emit = register("derive", derived, { source, map }); // DV-003
   return derived as Derived<Awaited<A | B>>;
 }

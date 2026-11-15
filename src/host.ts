@@ -281,6 +281,7 @@ export const applyOutput = (
           node => nodes.push(node),
           source => cuts.push([nodes.length, source]),
         );
+      // Stryker disable next-line ConditionalExpression: an output with no dynamic child makes one static part with the same nodes
       if (cuts.length) {
         for (const [, source] of cuts) check(entry, source);
         parts = [];
@@ -358,6 +359,7 @@ export const drive = <E extends Driven>(
           if (apply(entry, state, parts)) moved = true;
           if (state.done) {
             end(entry.source);
+            // Stryker disable next-line ConditionalExpression: each marks a finished part, which it never renders again
             if (!(entry as Driven as Entry).in) done?.(entry);
             keyed.delete(key);
             if (!keyed.size) over?.();
@@ -391,8 +393,11 @@ export const drive = <E extends Driven>(
     remove: quit as unknown as (entry: E) => void,
     park(on: boolean) {
       parked = on;
+      // Stryker disable next-line ConditionalExpression: a drive that parks has no gate, because a drive parks only while it runs
       if (!on) gate?.resolve(), (gate = undefined);
-      for (const { source } of keyed.values()) (source as any)[PARK]?.(on);
+      // A part that left its output stays parked (JX-086).
+      for (const entry of keyed.values())
+        if (!(entry as Driven as Entry).gate) (entry.source as any)[PARK]?.(on);
     },
     stop() {
       sources[Symbol.dispose]();
@@ -475,7 +480,7 @@ const enter = (node: Node): Scope => {
 /** Takes a scope out of the scope above it. */
 const leave = (scope: Scope) => {
   scopes.delete(scope.node);
-  scope.up?.kids?.delete(scope);
+  if (scope.up) (scope.up.kids as Set<Scope>).delete(scope);
   under.get(scope.top as Node)?.delete(scope);
 };
 /** Stops the drive of the children of a scope, and each scope under it. */
@@ -499,6 +504,7 @@ const tidy = (scope: Scope) => {
 };
 /** Parks or resumes the drives of a scope and of the scopes under it that are not off (JX-083). */
 const sync = (scope: Scope, live: boolean) => {
+  // Stryker disable next-line ConditionalExpression: a park or a resume of a drive in that state changes nothing
   if (scope.live === live) return;
   scope.live = live;
   scope.host?.park(!live);

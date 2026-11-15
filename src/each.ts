@@ -159,7 +159,11 @@ async function* replay<T>(
     (entry: Kept, state, parts) => {
       const old = entry.nodes,
         moved = applyOutput(entry, state, parts);
-      if (moved) keep(entry, old);
+      // The entry of each around a part keeps the old nodes of the part.
+      let top: Entry = entry;
+      while (top.in) top = top.in;
+      // Stryker disable next-line ConditionalExpression: an apply that moves nothing leaves no node of the entry
+      if (moved) keep(top as Kept, old);
       return moved;
     },
     () => {

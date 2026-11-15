@@ -249,6 +249,7 @@ An output can hold dynamic children, so a component yields another component, an
   A parked part follows JX-083.
   When a later output of the same entry holds that source again, the host MUST use the same part, with its nodes, and resume it.
   A part of a parked part starts parked.
+  A parked part stays parked when its drive resumes, and its `each` too (JX-084).
   A part that finished keeps its nodes.
   The stop of the drive returns each unfinished part (SE-120), and `each` returns the parts of an entry that leaves or renders again.
 - JX-087: An output that holds the source of its entry, or of an entry around it, MUST call `globalThis.reportError` with a `TypeError`, and the entry MUST keep its nodes and its parts.
@@ -278,7 +279,7 @@ A component instance that finishes renders again with the next value of its item
 - JX-035: For an item that leaves the mirror, `each` MUST end its `Item` and stop the drive of its child.
   To end an `Item`, `each` MUST close its channel if it has one, and abort its `signal`.
   `each` MUST then stop each scope that is bound through a node of the entry (JX-080).
-  This includes a node that an earlier output of the child gave, if a scope is still bound through it.
+  This includes a node that an earlier output of the child or of one of its parts gave, if a scope is still bound through it.
   It MUST also return each part that the outputs of the child made (JX-086).
   So a row that leaves ends the dynamic children and the dynamic props inside it, also the ones that are parked.
 - JX-036: `each` MUST drive the dynamic children of its entries with one `select`, with `autoStart`, `nonYielding` and no `autoClose`.

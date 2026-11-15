@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
+import { inspect } from "node:util";
 import { Channel, derive, iff, select } from "../src/index.ts";
 import { each, type Item, jsx, mount } from "../src/jsx.ts";
 import { fakeDocument, html } from "./dom.ts";
@@ -625,10 +626,11 @@ test("HE-060 HE-061 iff gives a branch at each change of the truthiness, and cal
   assert.deepEqual(await none.next(), { done: false, value: undefined });
   await one.return();
   await none.return();
-  assert.throws(() => iff({} as any, 1), {
-    name: "TypeError",
-    message: "iff source is not an async iterable",
-  });
+  for (const source of [{}, null])
+    assert.throws(() => iff(source as any, 1), {
+      name: "TypeError",
+      message: "iff source is not an async iterable",
+    });
 });
 
 test("HE-061 HE-059 iff stops the view of a function branch at the next change, and parks a view that code built", async () => {
@@ -674,4 +676,269 @@ test("JX-084 JX-086 a parked part parks an each in it, and a row with an Item re
   await setImmediate();
   assert.equal(html(s.parent), "<div>3</div>");
   s.unmount();
+});
+
+test("JX-035 JX-085 an entry that leaves stops the elements under the nodes that a part of its child gave before", async () => {
+  const text = latest<string>(),
+    inner = latest<any>(),
+    row = latest<any>(),
+    items = select(["a"], { autoStart: true, nonYielding: true });
+  text.send("t");
+  row.send(["<", inner, ">"]);
+  const parent = el("ul");
+  const channels = await selects(async () => {
+    mount(
+      parent,
+      each(items, () => row),
+    );
+    await show(inner, h("b", { children: text }));
+    await show(inner, "x");
+  });
+  assert.equal(html(parent), "<ul><x></ul>");
+  assert.deepEqual(aborted(channels), [false, false, false]);
+  items.pop();
+  await setImmediate();
+  assert.deepEqual(aborted(channels), [false, false, true]);
+});
+
+test("JX-084 JX-086 a host that resumes keeps an each parked in a part that left its output", async () => {
+  const s = stage(),
+    box = el("section"),
+    inner = latest<any>(),
+    items = select(["a"], { autoStart: true, nonYielding: true }),
+    row = counted(),
+    list = each(items, () => row.source);
+  await show(s.view, box);
+  mount(box, inner);
+  await show(inner, [list]);
+  row.send("1");
+  await setImmediate();
+  assert.equal(html(box), "<section>1</section>");
+  await show(inner, "none");
+  await show(s.view, "x");
+  await show(s.view, box);
+  row.send("2"), row.send("3");
+  await setImmediate();
+  await setImmediate();
+  assert.equal(row.stats.pulls, 2);
+  await show(inner, [list]);
+  await setImmediate();
+  assert.equal(html(box), "<section>3</section>");
+  s.unmount();
+});
+
+test("JX-085 JX-086 a part that a parked part outputs starts parked, also an each, and runs at the resume", async () => {
+  reported.length = 0;
+  (globalThis as any).reportError = (error: unknown) => reported.push(error);
+  const s = stage(),
+    inner = latest<any>(),
+    items = select(["a"], { autoStart: true, nonYielding: true });
+  await show(s.view, ["<", inner, ">"]);
+  await show(s.view, "none");
+  await show(inner, ["[", each(items, ({ value }) => value), "]"]);
+  assert.equal(html(s.parent), "<div>none</div>");
+  await show(s.view, ["<", inner, ">"]);
+  await setImmediate();
+  assert.equal(html(s.parent), "<div><[a]></div>");
+  assert.deepEqual(reported, []);
+  s.unmount();
+});
+
+test("JX-086 a parked part that changes its nodes does not change the nodes of each", async () => {
+  const items = select(["a"], { autoStart: true, nonYielding: true }),
+    inner = latest<unknown>(),
+    row = latest<any>();
+  row.send(["<", inner, ">"]);
+  const list = each(items, () => row);
+  // Takes yields until each gives the nodes of want.
+  const until = async (want: string) => {
+    let nodes: Node[] | undefined;
+    do nodes = (await list.next()).value as Node[] | undefined;
+    while (nodes?.map(node => (node as Text).data).join() !== want);
+  };
+  inner.send("i");
+  await until("<,i,>");
+  row.send("plain");
+  await until("plain");
+  // The parked part applies its pending pull, so each has nothing to yield.
+  inner.send(["j"]);
+  const next = list.next();
+  await setImmediate();
+  assert.match(inspect(next), /pending/);
+  await list.return();
+});
+
+test("JX-035 an entry that renders a static child again stops the elements under the nodes of its finished child", async () => {
+  const text = latest<string>(),
+    items = select(["a"], { autoStart: true, nonYielding: true });
+  text.send("t");
+  let renders = 0;
+  async function* Once() {
+    yield h("b", { children: text });
+  }
+  const parent = el("ul");
+  const channels = await selects(async () => {
+    mount(
+      parent,
+      each(items, () => (renders++ ? "static" : Once())),
+    );
+    await setImmediate();
+    items[0] = "b";
+    await setImmediate();
+  });
+  assert.equal(html(parent), "<ul>static</ul>");
+  assert.deepEqual(aborted(channels), [false, false, false]);
+  items.pop();
+  await setImmediate();
+  assert.deepEqual(aborted(channels), [false, false, true]);
+});
+
+test("JX-035 JX-070 an entry keeps no earlier node that holds no scope", async () => {
+  const items = select(["a"], { autoStart: true, nonYielding: true }),
+    row = latest<any>(),
+    parent = el("ul");
+  mount(
+    parent,
+    each(items, () => row),
+  );
+  let first: any = h("i", {});
+  const ref = new WeakRef(first);
+  await show(row, first);
+  await show(row, h("u", {}));
+  assert.equal(html(parent), "<ul><u></u></ul>");
+  first = undefined;
+  await setImmediate();
+  collect();
+  assert.equal(ref.deref(), undefined);
+});
+
+test("HE-059 JX-086 derive takes the component result that it stops out of the drive, and a later output makes a new part for it", async () => {
+  const n = latest<number>(),
+    part = counted(),
+    s = stage();
+  // The source returns from its iterator, not from itself.
+  await show(
+    s.view,
+    derive(n, value => (value % 2 ? h(() => part.source, {}) : "x")),
+  );
+  await show(n, 1);
+  part.send("p");
+  await setImmediate();
+  assert.equal(html(s.parent), "<div>p</div>");
+  await show(n, 2);
+  assert.equal(html(s.parent), "<div>x</div>");
+  assert.deepEqual([part.stats.opened, part.stats.returns], [1, 1]);
+  await show(n, 3);
+  await show(n, 4);
+  assert.deepEqual([part.stats.opened, part.stats.returns], [2, 2]);
+  s.unmount();
+});
+
+test("HE-059 JX-086 derive stops a part that it never pulled, and one whose iterator has no return", async () => {
+  reported.length = 0;
+  (globalThis as any).reportError = (error: unknown) => reported.push(error);
+  const n = latest<number>(),
+    opened: number[] = [],
+    bare = (id: number) => ({
+      [Symbol.asyncIterator]: () => (
+        opened.push(id),
+        {
+          next: () =>
+            opened.push(id) > 2
+              ? new Promise(() => {})
+              : Promise.resolve({ done: false, value: `${id}` }),
+        }
+      ),
+    }),
+    view = derive(n, value => (value === 2 ? "x" : h(() => bare(value), {}))),
+    s = stage();
+  await show(s.view, [view]);
+  await show(n, 1);
+  assert.equal(html(s.parent), "<div>1</div>");
+  await show(n, 2);
+  assert.equal(html(s.parent), "<div>x</div>");
+  // The part of 3 starts parked, so it never opens.
+  await show(s.view, "none");
+  await show(n, 3);
+  await view.return();
+  assert.deepEqual(opened, [1, 1, 1]);
+  assert.deepEqual(reported, []);
+  s.unmount();
+});
+
+test("HE-059 derive stops a built element that is the parent of a mount", async () => {
+  const n = new Channel<number>(),
+    text = latest<string>(),
+    view = derive(n, () => h("b", { title: text }));
+  text.send("t");
+  n.send(1), n.send(2);
+  const built = (await view.next()).value as any;
+  const channels = await selects(async () => {
+    mount(built, text);
+    await setImmediate();
+  });
+  assert.equal(html(built), "<b>t</b>");
+  await view.next();
+  assert.deepEqual(aborted(channels), [true]);
+  await view.return();
+});
+
+test("HE-059 derive stops no component result that is not dynamic", async () => {
+  const n = new Channel<number>();
+  let returns = 0;
+  const view = derive(n, () => h(() => ({ return: () => returns++ }), {}));
+  n.send(1), n.send(2);
+  await view.next();
+  await view.next();
+  await view.return();
+  assert.equal(returns, 0);
+});
+
+test("JX-081 a mount into an element whose scope left binds to the scope above again", async () => {
+  const text = latest<string>(),
+    box = el("section"),
+    s = stage();
+  text.send("t");
+  await show(s.view, box);
+  mount(box, Promise.resolve("p"));
+  await setImmediate();
+  const channels = await selects(async () => {
+    mount(box, text);
+    await setImmediate();
+  });
+  assert.equal(html(box), "<section>t</section>");
+  s.unmount();
+  assert.deepEqual(aborted(channels), [true]);
+});
+
+test("JX-081 a stopped scope leaves the scope above, so a mount again into it keeps a later mount below", async () => {
+  const text = latest<string>(),
+    box = el("section"),
+    s = stage();
+  text.send("t");
+  await show(s.view, box);
+  mount(box, text);
+  await setImmediate();
+  s.unmount();
+  const channels = await selects(async () => {
+    mount(box, text);
+    await setImmediate();
+  });
+  mount(s.parent, "y");
+  assert.deepEqual(aborted(channels), [false]);
+});
+
+test("JX-081 an element whose children finish keeps its scope while its dynamic props run", async () => {
+  const text = latest<string>(),
+    s = stage();
+  text.send("t");
+  const channels = await selects(async () => {
+    await show(s.view, h("p", { title: text, children: Promise.resolve("x") }));
+    await setImmediate();
+  });
+  assert.equal(html(s.parent), '<div><p title="t">x</p></div>');
+  // The host of p finished, and its props run.
+  assert.deepEqual(aborted(channels), [true, false]);
+  s.unmount();
+  assert.deepEqual(aborted(channels), [true, true]);
 });

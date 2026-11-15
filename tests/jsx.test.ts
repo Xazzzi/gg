@@ -1190,7 +1190,10 @@ test("JX-03A a render result with a nested dynamic child ends each", async () =>
   });
   const list = each(items, () => [Promise.resolve("x")]);
   await setImmediate();
-  await assert.rejects(list.next(), TypeError);
+  await assert.rejects(list.next(), {
+    name: "TypeError",
+    message: "A dynamic child is not permitted here",
+  });
 });
 
 test("JX-03B return() ends the items and stops the drive", async () => {

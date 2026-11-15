@@ -1166,6 +1166,23 @@ test("JX-093 a boundary takes one failure, so a failure of its fallback goes to 
   assert.equal(list.length, 1);
 });
 
+test("JX-092 JX-02A a dynamic fallback in place of the last child of the boundary stays its drive, and stops with the mount", async () => {
+  const list = reporting(),
+    queue = counted();
+  const view = h(Catch, {
+    fallback: () => queue.source,
+    children: h("div", { children: boom() }),
+  });
+  const unmount = mount(el(), view);
+  queue.send("q");
+  await setImmediate();
+  await setImmediate();
+  assert.equal(html(view), "<div>q</div>");
+  unmount();
+  assert.equal(queue.stats.returns, 1);
+  assert.deepEqual(list, []);
+});
+
 test("JX-092 a failure with no armed boundary reports, as before", async () => {
   const list = reporting(),
     parent = el();

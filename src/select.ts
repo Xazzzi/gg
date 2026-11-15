@@ -888,6 +888,7 @@ class Select {
             : Promise.withResolvers());
           await hold.promise;
           this.#hold = undefined;
+          if (this.#terminal) return; // A close ends the wait too
         }
       } else if (publish) {
         this.#stale = false;

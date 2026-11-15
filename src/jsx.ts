@@ -131,13 +131,14 @@ export function jsx(
     dynamic: [string, unknown][] = [];
   for (const name of Object.keys(props)) {
     const value = props[name];
-    if (name === "children" || value == null || value === false) continue;
+    if (name === "children" || value === undefined) continue;
     if (isDynamic(value)) {
       if (name.startsWith("on"))
         throw new TypeError(`${name} does not take a dynamic value`);
       dynamic.push([name, value]);
       values?.set(name, NONE);
     } else if (name.startsWith("on")) {
+      if (value === null || value === false) continue;
       // A text value would make an inline handler, which runs text as code (JX-008).
       if (typeof value !== "function")
         throw new TypeError(`${name} takes a function`);
@@ -148,8 +149,10 @@ export function jsx(
         value as any,
       );
     } else if (values) values.set(name, value);
+    // A property takes null and false as a dynamic output does (JX-002).
     else if (property(element, name)) live.push([name, value]);
-    else element.setAttribute(name, attribute(name, value));
+    else if (value !== null && value !== false)
+      element.setAttribute(name, attribute(name, value));
   }
   attach(element, props.children, false);
   // After the children, so a select finds the option that its value names.

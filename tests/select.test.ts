@@ -2709,6 +2709,22 @@ test("SE-046 a flush stops after a terminal publish wait", async () => {
   assert.equal(pulls, 0);
 });
 
+test("SE-046 SE-045 a flush that a close ends in its wait with no observer maps no snapshot", async () => {
+  let maps = 0;
+  const s: any = select(
+    { a: 1, p: new Promise(() => {}) },
+    { autoClose: true, mapSnapshot: snap => (maps++, snap) },
+  );
+  const it = iter(s);
+  await it.next();
+  await it.return();
+  s.a = 2;
+  await setImmediate();
+  s[Symbol.dispose]();
+  await setImmediate();
+  assert.equal(maps, 1);
+});
+
 test("SE-046 a flush stops between iterators in step 1", async () => {
   let pulled = 0,
     reports = 0;

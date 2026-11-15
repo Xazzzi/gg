@@ -465,7 +465,8 @@ export const drive = <E extends Driven>(
               // Stryker disable next-line ConditionalExpression: each marks a finished part, which it never renders again
               if (!(entry as Driven as Entry).in) done?.(entry);
               keyed.delete(key);
-              if (!keyed.size) over?.();
+              // A boundary that stopped the drive in this report can have given its scope a new drive (JX-092).
+              if (!keyed.size && !stopped) over?.();
             }
           }
           if (moved && !stopped) changed();

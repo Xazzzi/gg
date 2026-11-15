@@ -124,7 +124,7 @@ test("JX-001 takes the namespace from xmlns, then from an SVG tag", () => {
   assert.equal(h("div", { xmlns: null }).namespaceURI, XHTML);
 });
 
-test("JX-002 assigns live properties, and skips them for null, undefined and false", () => {
+test("JX-002 assigns live properties, also null and false, and skips them for undefined", () => {
   const node = h("input", {
     value: 0,
     checked: true,
@@ -138,11 +138,12 @@ test("JX-002 assigns live properties, and skips them for null, undefined and fal
     [0, true, "s", 1, true],
   );
   assert.deepEqual([...node.attributes], [["other", ""]]);
-  const empty = h("input", { value: null, checked: false, muted: undefined });
+  const off = h("input", { value: null, checked: false, muted: undefined });
   assert.deepEqual(
-    Reflect.ownKeys(empty),
-    Reflect.ownKeys(new FakeElement("input")),
+    [off.value, off.checked, "muted" in off],
+    [null, false, false],
   );
+  assert.deepEqual([...off.attributes], []);
 });
 
 test("JX-002 JX-003 assigns live properties after the children mount", () => {
@@ -1867,6 +1868,20 @@ test("JX-0B0 a custom element gets its own properties as properties after its ch
   );
 });
 
+test("JX-0B0 JX-002 JX-0B2 a static null or false sets an own property, also after a hold, and undefined keeps the field", async () => {
+  const defined = h(card(), { items: false, render: null, label: undefined });
+  assert.deepEqual(
+    [defined.items, defined.render, defined.log],
+    [false, null, []],
+  );
+  const name = tag(),
+    node = h(name, { items: null, render: false, label: undefined, id: false });
+  customElements.define(name, Card as any);
+  await setImmediate();
+  assert.deepEqual([node.items, node.render, node.log], [null, false, []]);
+  assert.deepEqual([...node.attributes], []);
+});
+
 test("JX-0B0 JX-063 a dynamic prop assigns an own property as it is", async () => {
   const source = latest<unknown>(),
     node = h(card(), { items: source });
@@ -1976,12 +1991,16 @@ test("JX-0B4 a hold retains no element, and a definition skips a collected one",
   await setImmediate();
 });
 
-test("JX-008 a value at an on key that is no function throws", () => {
+test("JX-008 a value at an on key that is no function throws, except null, undefined and false", () => {
   for (const value of ["alert(1)", true, 0])
     assert.throws(
       () => h("img", { onerror: value }),
       /TypeError: onerror takes a function/,
     );
+  for (const value of [null, undefined, false]) {
+    const node = h("img", { onerror: value });
+    assert.deepEqual([node.listeners, [...node.attributes]], [[], []]);
+  }
 });
 
 test("JX-009 a javascript: URL throws at a URL attribute, as the URL parser reads it", () => {

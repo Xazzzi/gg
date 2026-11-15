@@ -138,8 +138,10 @@ The runtime uses the global `document` when it creates nodes.
   If the element has a property at the key in lower case, such as `onclick`, the event type is the rest of the key in lower case.
   Otherwise the event type is the rest of the key as it is.
   So `onClick` listens to `click`, and `onitemSelected` listens to `itemSelected`, which a web component can dispatch.
-  `null`, `undefined` and `false` MUST set nothing.
+  `undefined` MUST set nothing, as for a prop that code leaves out.
+  At a key that starts with `on`, and at an attribute, `null` and `false` MUST set nothing too.
   Another value at a live property, or at an own property (JX-0B0), MUST be assigned to the property of the element, after JX-003 mounts the children.
+  So `null` and `false` at a property give the result that a dynamic prop gives for them (JX-063).
   So a `<select value>` finds its options.
   `true` MUST set the attribute to `""`.
   An object whose `toString` is `Object.prototype.toString` MUST throw a `TypeError`, because it has no text of its own.

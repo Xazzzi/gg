@@ -1342,3 +1342,58 @@ test("CH-031 a consumer blocked at next counts as behind", async () => {
   assert.deepEqual(await first, val(1));
   assert.deepEqual(await it.next(), val(3));
 });
+
+const QUEUE = { thenReceive: "unread" } as const;
+
+test("CH-075 a send wakes the consumers that block in order, one for each value", async () => {
+  const ch = new Channel<number>(QUEUE),
+    [a, b, c] = [iter(ch), iter(ch), iter(ch)],
+    reads = [a.next(), b.next(), c.next()];
+  await setImmediate();
+  ch.send(1);
+  ch.send(2);
+  assert.deepEqual(await reads[0], val(1));
+  assert.deepEqual(await reads[1], val(2));
+  assert.ok(isPending(reads[2] as Promise<unknown>));
+  ch.close();
+  assert.deepEqual(await reads[2], end());
+});
+
+test("CH-075 a consumer that a send woke and that ends before it reads passes the wake on", async () => {
+  const ch = new Channel<number>(QUEUE),
+    a = iter(ch),
+    b = iter(ch),
+    first = a.next(),
+    second = b.next();
+  await setImmediate();
+  ch.send(1);
+  await a.return(undefined);
+  assert.deepEqual(await first, end());
+  assert.deepEqual(await second, val(1));
+});
+
+test("CH-075 a send skips a consumer that halted while it blocked", async () => {
+  const ch = new Channel<number>(QUEUE),
+    a = iter(ch),
+    b = iter(ch),
+    first = a.next(),
+    second = b.next();
+  await setImmediate();
+  await a.return(undefined);
+  assert.deepEqual(await first, end());
+  ch.send(1);
+  assert.deepEqual(await second, val(1));
+});
+
+test("CH-075 a consumer that ends with no value to read wakes no one, so the queue keeps its order", async () => {
+  const ch = new Channel<number>(QUEUE),
+    [a, b, c] = [iter(ch), iter(ch), iter(ch)],
+    reads = [a.next(), b.next(), c.next()];
+  await setImmediate();
+  await a.return(undefined);
+  await setImmediate();
+  ch.send(1);
+  assert.deepEqual(await reads[1], val(1));
+  assert.ok(isPending(reads[2] as Promise<unknown>));
+  ch.close();
+});

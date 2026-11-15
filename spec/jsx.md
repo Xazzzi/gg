@@ -136,6 +136,13 @@ The runtime uses the global `document` when it creates nodes.
   With a dynamic child, at any depth of its arrays, `Fragment` MUST return `props.children` unchanged.
   So the host that gets those children drives them (JX-020).
 
+- JX-008: A value at a key that starts with `on` MUST throw a `TypeError`, unless it is a function, `null`, `undefined` or `false`.
+  An event attribute runs its text as code, so a text value from data would run that data.
+  JX-060 does the same for a dynamic value.
+- JX-009: At `href`, `src`, `action`, `formaction` and `xlink:href`, in any case, a text that has the `javascript:` scheme MUST throw a `TypeError`.
+  The check reads the text as the URL parser does: it skips leading C0 controls and spaces, and it skips tabs and newlines.
+  A link from data then cannot run code when the user clicks it.
+  A dynamic prop reports the error (JX-065).
 ## Children
 
 The runtime converts a child to nodes by these rules, in order.
@@ -173,6 +180,12 @@ The runtime converts a child to nodes by these rules, in order.
   A conversion error MUST call `globalThis.reportError` with that error.
   The entry MUST keep its nodes.
   The other entries continue.
+- JX-088: If a drive throws while it applies a report, the runtime MUST call `globalThis.reportError` with that error, and the drive MUST stop (SE-110).
+  For example, a place throws for a node that holds its host, and the start of a waiting element can throw.
+  The select of a drive has no consumer, so without this rule no code gets the error.
+  The nodes stay as they are, and the scopes under the host continue.
+- JX-089: The select of each drive MUST have a fault hook that calls `globalThis.reportError` (SE-127).
+  So a child that fails after its drive removed or stopped it, and a `return()` that fails when a drive stops, report the error.
 - JX-029: To place, the runtime MUST NOT move a node that stays in order.
   It MUST move only the nodes outside one longest run of nodes that keep their order, so a swap moves two nodes.
   It MUST remove a node that leaves the host, and MUST NOT move the nodes after it.

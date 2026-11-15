@@ -14,7 +14,7 @@ import {
 } from "./host.ts";
 import type { Child } from "./jsx.ts";
 import { changes, isState, type Op, type State } from "./select.ts";
-import { noop } from "./source.ts";
+import { append, noop } from "./source.ts";
 
 // `finished` marks a finished child, and `sent` a value sent after the last render (JX-03C).
 type Kept = Entry & {
@@ -257,8 +257,7 @@ async function* replay<T>(
       if (dirty) {
         dirty = false;
         const nodes: Node[] = [];
-        for (const entry of entries)
-          for (const node of entry.nodes) nodes.push(node);
+        for (const entry of entries) append(nodes, entry.nodes);
         // Stryker disable next-line CallExpression: a conversion gives the same nodes
         converted.add(nodes);
         yield nodes;

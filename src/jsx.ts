@@ -10,7 +10,7 @@ import {
   toNodes,
   unmount,
 } from "./host.ts";
-import { record } from "./source.ts";
+import { chunked, record } from "./source.ts";
 
 export type Static =
   | Node
@@ -119,9 +119,12 @@ export function jsx(
       if (name.startsWith("on"))
         throw new TypeError(`${name} does not take a dynamic value`);
       dynamic.push([name, value]);
-    } else if (typeof value === "function" && name.startsWith("on"))
+    } else if (name.startsWith("on")) {
+      // A text value would make an inline handler, which runs text as code (JX-008).
+      if (typeof value !== "function")
+        throw new TypeError(`${name} takes a function`);
       element.addEventListener(name.slice(2).toLowerCase(), value as any);
-    else if (LIVE.has(name)) live.push([name, value]);
+    } else if (LIVE.has(name)) live.push([name, value]);
     else element.setAttribute(name, attribute(name, value));
   }
   attach(element, props.children, false);
@@ -144,7 +147,7 @@ export function Fragment(props: { children?: Child }): Child;
 export function Fragment({ children }: { children?: Child }): Child {
   if (live(children)) return children;
   const fragment = document.createDocumentFragment();
-  fragment.append(...toNodes(children));
+  chunked(toNodes(children), part => fragment.append(...part));
   return fragment;
 }
 

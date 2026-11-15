@@ -1,8 +1,8 @@
 // The host machinery of the JSX runtime: conversion, placement, drives, placement waits and dynamic props.
 import { type Emit, owned, pulling, register } from "./devtools.ts";
 import type { Child } from "./jsx.ts";
-import { REPORT, select, type Val } from "./select.ts";
-import { noop, record } from "./source.ts";
+import { FAULT, REPORT, select, type Val } from "./select.ts";
+import { chunked, noop, record } from "./source.ts";
 
 // An entry that a drive keys, with its source and its last applied output.
 type Driven = { key?: string; source?: unknown; value?: unknown; via?: Gated };
@@ -28,12 +28,21 @@ export const LIVE = new Set([
   "muted",
 ]);
 
-/** Gives the attribute text of a value, and throws for an object with no text of its own (JX-002). */
+// The attributes that load or navigate to a URL, and the javascript: scheme as the URL parser reads it (JX-009).
+const URLS = new Set(["href", "src", "action", "formaction", "xlink:href"]);
+const SCRIPT =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the URL parser skips leading C0 controls
+  /^[\u0000-\u001F ]*j[\t\n\r]*a[\t\n\r]*v[\t\n\r]*a[\t\n\r]*s[\t\n\r]*c[\t\n\r]*r[\t\n\r]*i[\t\n\r]*p[\t\n\r]*t[\t\n\r]*:/i;
+
+/** Gives the attribute text of a value, and throws for an object with no text of its own (JX-002) or a javascript: URL (JX-009). */
 export const attribute = (name: string, value: any): string => {
   if (value === true) return "";
   if (value.toString === Object.prototype.toString)
     throw new TypeError(`${name} does not take a plain object`);
-  return `${value}`;
+  const text = `${value}`;
+  if (URLS.has(name.toLowerCase()) && SCRIPT.test(text))
+    throw new TypeError(`${name} does not take a javascript: URL`);
+  return text;
 };
 
 /** Tells if a value renders as a `Text` node. */
@@ -135,7 +144,7 @@ const arrange = (
   // Stryker disable next-line ConditionalExpression,BlockStatement: the general path gives the same nodes, with one removal for each
   if (!old.size && whole) {
     parent.replaceChildren();
-    for (const node of want) parent.insertBefore(node, null);
+    chunked(want, part => parent.append(...part));
     return want;
   }
   for (const node of leave) node.remove();
@@ -349,23 +358,31 @@ export const drive = <E extends Driven>(
       autoStart: true,
       autoClose,
       nonYielding: true,
+      // A child that fails after its drive let it go, or in its return(), has no entry to report it (JX-089).
+      [FAULT]: error => reportError(error),
       [REPORT]: ops => {
-        let moved = false;
-        for (const op of ops) {
-          const { key } = op as { key: string },
-            entry = keyed.get(key),
-            state = (op as { value: Val<unknown> }).value;
-          if (!entry) continue;
-          if (apply(entry, state, parts)) moved = true;
-          if (state.done) {
-            end(entry.source);
-            // Stryker disable next-line ConditionalExpression: each marks a finished part, which it never renders again
-            if (!(entry as Driven as Entry).in) done?.(entry);
-            keyed.delete(key);
-            if (!keyed.size) over?.();
+        try {
+          let moved = false;
+          for (const op of ops) {
+            const { key } = op as { key: string },
+              entry = keyed.get(key),
+              state = (op as { value: Val<unknown> }).value;
+            if (!entry) continue;
+            if (apply(entry, state, parts)) moved = true;
+            if (state.done) {
+              end(entry.source);
+              // Stryker disable next-line ConditionalExpression: each marks a finished part, which it never renders again
+              if (!(entry as Driven as Entry).in) done?.(entry);
+              keyed.delete(key);
+              if (!keyed.size) over?.();
+            }
           }
+          if (moved) changed();
+        } catch (error) {
+          // The select has no consumer to get the error, so the drive reports it, and SE-110 stops it (JX-088).
+          reportError(error);
+          throw error;
         }
-        if (moved) changed();
         // A parked drive applies the outputs that it has, and pulls no more until it resumes (JX-083).
         if (parked) return (gate ??= Promise.withResolvers()).promise;
       },
@@ -448,7 +465,9 @@ const settle = (map: WeakMap<Node, () => void>, node: Node) => {
   if (wait) unstarted.delete(wait.ref);
   map.delete(node);
 };
-/** Tells if a wait can still start, and forgets the waits of collected nodes. */
+/**
+ * Tells if a wait can still start, and forgets the waits of collected nodes.
+ * A place then walks only the nodes that it adds, which code just built, so the walk costs a constant factor (scope.md). */
 const waits = () => {
   for (const ref of unstarted) if (!ref.deref()) unstarted.delete(ref);
   return unstarted.size > 0;
@@ -617,7 +636,7 @@ export const attach = (parent: Element, children: Child, placed: boolean) => {
   // A new element has no child and no host, so its nodes land in order with no placement.
   else
     for (const entry of entries)
-      for (const node of entry.nodes) parent.insertBefore(node, null);
+      chunked(entry.nodes, part => parent.append(...part));
   if (!dynamic.length) return;
   register("mount", parent, {});
   const start = () => {

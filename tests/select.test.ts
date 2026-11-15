@@ -13,7 +13,7 @@ import {
   spread,
   type Val,
 } from "../src/index.ts";
-import { REPORT } from "../src/select.ts";
+import { FAULT, REPORT } from "../src/select.ts";
 
 const iter = (s: any) => s[Symbol.asyncIterator]();
 const pendingVal = {
@@ -3438,4 +3438,60 @@ test("SE-04C a flush waits for a promise from the report hook before it pulls", 
   gate.resolve();
   await setImmediate();
   assert.equal(pulls, 2);
+});
+
+test("SE-127 the fault hook gets the late failures of removed sources, and of sources after terminal", async () => {
+  const faults: unknown[] = [],
+    removed = Promise.withResolvers<number>(),
+    late = Promise.withResolvers<number>(),
+    pull = Promise.withResolvers<IteratorResult<number>>();
+  const s: any = select(
+    {
+      removed: removed.promise,
+      late: late.promise,
+      pull: { next: () => pull.promise },
+    },
+    { [FAULT]: (error: unknown) => faults.push(error) } as any,
+  );
+  const it = iter(s);
+  await it.next();
+  delete s.removed;
+  removed.reject("removed");
+  await setImmediate();
+  s[Symbol.dispose]();
+  late.reject("late");
+  pull.reject("pull");
+  await setImmediate();
+  assert.deepEqual(faults, ["removed", "late", "pull"]);
+});
+
+test("SE-127 the fault hook gets the failures of return(), and nothing for a source with no return()", async () => {
+  const faults: unknown[] = [],
+    never = () => new Promise<IteratorResult<unknown>>(() => {});
+  let step = 0;
+  // The first value rejects, so SE-02A calls return(), which throws.
+  const rejecting = {
+    next: async () =>
+      step++ ? never() : { done: false, value: Promise.reject("value") },
+    return() {
+      throw "first";
+    },
+  };
+  const s: any = select(
+    {
+      rejecting,
+      stopped: {
+        next: never,
+        return: () => Promise.reject("second"),
+      },
+      bare: { next: never },
+    },
+    { [FAULT]: (error: unknown) => faults.push(error) } as any,
+  );
+  const it = iter(s);
+  await it.next();
+  await setImmediate();
+  s[Symbol.dispose]();
+  await setImmediate();
+  assert.deepEqual(faults, ["first", "second"]);
 });

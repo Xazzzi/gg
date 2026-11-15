@@ -250,6 +250,11 @@ The consumer is an async generator, except that `return()` and `throw()` do not 
   So a consumer that code stops on a quiet channel detaches at once.
   A `next()` that code abandons with no `return()` still reads a value.
 - CH-074: `break` in `for await` MUST behave as `return()`.
+- CH-075: Under `thenReceive: "unread"`, a value MUST wake only the first blocked consumer, in the order in which the consumers blocked.
+  Only one consumer reads each value, so a wake of each blocked consumer is work that no read needs.
+  A consumer that `return()` or `throw()` ends while it blocks MUST NOT take a wake.
+  A consumer that ends while a value is readable MUST wake the next blocked consumer, because a send can have woken it for that value.
+  When the channel becomes terminal, it MUST wake each blocked consumer.
 
 ## Stop error
 

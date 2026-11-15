@@ -20,6 +20,8 @@ type Cell<T> = { n: number; value?: T; next?: Cell<T> };
 // A placed reader reads the newest value next, while an unplaced one reads the head.
 type Reader<T> = { at?: Cell<T>; pos: number; placed?: boolean };
 type Ack = PromiseWithResolvers<void> & { n: number; next?: Ack };
+// The stop flag of a consumer, and its own wake while it blocks under thenReceive "unread" (CH-075).
+type Stop = { on?: true; wake?: () => void };
 
 const STOP_BRAND = Symbol.for("gg.StopError");
 /** The values that each channel option takes. */
@@ -100,7 +102,9 @@ export class Channel<T, TReturn = undefined>
   #behind = 0; // Placed consumers whose position is before the newest value
   #acked = {} as Ack; // The last settled ack, or a blank one
   #lastAck = this.#acked;
-  #wake?: PromiseWithResolvers<void>;
+  #wake?: PromiseWithResolvers<void>; // The one wake of all blocked consumers, except under "unread"
+  // Under "unread" one consumer reads each value, so a send wakes only the first one that blocked.
+  #queue?: Stop[];
   #consumer?: PromiseWithResolvers<void>;
   #failed?: boolean;
   #result: unknown;
@@ -162,6 +166,7 @@ export class Channel<T, TReturn = undefined>
     this.#then = thenReceive;
     this.#stops = stopStyle === "stop";
     if (ackStyle === "all") this.#readers = new Set();
+    if (thenReceive === "unread") this.#queue = [];
     if (firstReceive === "first" || firstReceive === "unread")
       this.#anchor = this.#tail;
     if (!silent) this.#emit = register("channel", this, chosen);
@@ -180,7 +185,8 @@ export class Channel<T, TReturn = undefined>
     if (this.#then !== "latest") cell.next = this.#tail;
     this.#behind = this.#placed;
     this.#newest = this.#keepsNewest() ? cell : undefined;
-    this.#rouse();
+    if (this.#queue) this.#hand();
+    else this.#rouse();
     this.#emit?.("send", value, cell.n);
   }
 
@@ -221,13 +227,16 @@ export class Channel<T, TReturn = undefined>
    * Gives a new consumer, which attaches at its first `next()`.
    * Its `return()` and `throw()` end a pending `next()` at once (CH-073). */
   [Symbol.asyncIterator](): AsyncGenerator<T, TReturn | undefined, void> {
-    const stop: { on?: true } = {},
+    const stop: Stop = {},
       consumer = this.#consume(stop),
       end = consumer.return.bind(consumer),
       fail = consumer.throw.bind(consumer);
     const halt = () => {
       stop.on = true;
-      this.#rouse();
+      if (!this.#queue) return this.#rouse();
+      const { wake } = stop;
+      stop.wake = undefined; // So the queue skips this consumer
+      wake?.();
     };
     consumer.return = value => (halt(), end(value));
     consumer.throw = error => (halt(), fail(error));
@@ -235,9 +244,7 @@ export class Channel<T, TReturn = undefined>
   }
 
   /** Reads values for one consumer until it ends, or until stop is on. */
-  async *#consume(stop: {
-    on?: true;
-  }): AsyncGenerator<T, TReturn | undefined, void> {
+  async *#consume(stop: Stop): AsyncGenerator<T, TReturn | undefined, void> {
     const reader = this.#attach();
     try {
       for (;;) {
@@ -247,7 +254,7 @@ export class Channel<T, TReturn = undefined>
             if (this.#failed) throw this.#result;
             return this.#result as TReturn;
           }
-          await (this.#wake ??= Promise.withResolvers()).promise;
+          await this.#block(stop);
         }
         if (stop.on) return undefined;
         yield this.#take(reader);
@@ -266,6 +273,31 @@ export class Channel<T, TReturn = undefined>
       }
       this.#prune();
       if (this.#readers?.delete(reader)) this.#ack(this.#floor()); // CH-01E
+      // A consumer that a send woke can end before it reads, so it passes the wake on (CH-075).
+      if (this.#queue && this.#readable(reader)) this.#hand();
+    }
+  }
+
+  /** Waits for a wake: the one of all consumers, or its own in the queue under "unread". */
+  #block(stop: Stop) {
+    const queue = this.#queue;
+    if (!queue) return (this.#wake ??= Promise.withResolvers()).promise;
+    return new Promise<void>(resolve => {
+      stop.wake = resolve;
+      queue.push(stop);
+    });
+  }
+
+  /** Wakes the first consumer in the queue, and drops the ones that halted. */
+  #hand() {
+    const queue = this.#queue as Stop[];
+    for (let stop: Stop | undefined; (stop = queue.shift()); ) {
+      const { wake } = stop;
+      if (!wake) continue;
+      stop.wake = undefined;
+      wake();
+      // Stryker disable next-line BlockStatement: a wake of each queued consumer gives the same reads, with more work
+      return;
     }
   }
 
@@ -383,6 +415,7 @@ export class Channel<T, TReturn = undefined>
     this.#consumer?.reject(this.#stopError());
     this.#consumer = undefined;
     this.#rouse();
+    if (this.#queue) for (const stop of this.#queue.splice(0)) stop.wake?.();
     if (this.#stops) {
       this.#newest = undefined;
       this.#anchor = this.#tail;

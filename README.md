@@ -123,6 +123,7 @@ It yields again only to replace its node, or to wake its host with the same node
 A promise or an async iterable is a child, so a channel of strings is live text.
 A fragment takes such children too, and its host drives them.
 Props set attributes, and `value`, `checked`, `selected`, `indeterminate` and `muted` set properties.
+An `on` prop takes only a function, and a URL attribute rejects a `javascript:` URL, so data in a prop cannot run code.
 Each HTML and SVG tag has typed listeners and live properties, and takes any other attribute.
 A promise or an async iterable prop is live, and sets its attribute or property with each value.
 SVG tags get the SVG namespace, and an `xmlns` prop sets any namespace.

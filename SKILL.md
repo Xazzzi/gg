@@ -78,7 +78,8 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
   It yields again only to replace its root, or to wake its host with the same node (JX-025).
 - A promise or an async iterable is a dynamic child.
   A channel of strings is live text.
-- `on*` props with a function become listeners, and the event type is the lower case rest of the key.
+- `on*` props with a function become listeners, and the event type is the lower case rest of the key. Another value at an `on*` key throws (JX-008).
+- A `javascript:` URL at `href`, `src`, `action`, `formaction` or `xlink:href` throws (JX-009).
 - Other props set attributes, except `value`, `checked`, `selected`, `indeterminate` and `muted`, which set properties (JX-002).
 - A promise or an async iterable prop is live, so `class={channel}` changes the attribute with each value, and `null`, `undefined` or `false` removes it (JX-064).
   An `on*` prop cannot be dynamic (JX-060).

@@ -136,6 +136,9 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 - **Report hook**: an internal callback that gets the operations of each report, synchronously.
   The JSX host sets it for its drives (JX-022).
   It is not public API, and no option sets it.
+- **Fault hook**: an internal callback that gets each error that `select` ignores or discards (SE-127).
+  The JSX host sets it for its drives (JX-089).
+  It is not public API, and no option sets it.
 - **Reserved key**: `Symbol.asyncIterator`, `Symbol.dispose` or `CHAN`.
 - **Terminal**: the state of a channel after its first `close` or `throw` call.
 
@@ -554,6 +557,9 @@ It is a slice reader of one key that gives values, not operations.
 - SE-126: After the channel is terminal, `select` MUST discard results and rejections from promises and pulls.
   They MUST NOT cause an unhandled rejection.
   This includes a discarded result with a `value` that is a rejecting `Promise`.
+- SE-127: If the fault hook exists, `select` MUST call it with each error that SE-02A, SE-121, SE-124 and SE-126 ignore or discard.
+  `select` MUST NOT call it for a source with no `return`.
+  So a select with no consumer can still make its failures loud.
 
 ## Limits
 

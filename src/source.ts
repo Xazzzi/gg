@@ -72,6 +72,22 @@ export const open = (source: any, { kind, method }: Detected): [any, any] => {
   return [iterator, iterator.next];
 };
 
+// The most items that one call takes as arguments, because a larger spread overflows the stack.
+const CHUNK = 1024;
+/** Hands items to use in parts of at most CHUNK items, so each part can be spread into one call. */
+export const chunked = <V>(
+  items: readonly V[],
+  use: (part: V[]) => unknown,
+) => {
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: the parts give the same calls, with one copy
+  if (items.length <= CHUNK) return void use(items as V[]);
+  for (let at = 0; at < items.length; at += CHUNK)
+    use(items.slice(at, at + CHUNK));
+};
+/** Appends items to a list in place, in chunked spreads. */
+export const append = <V>(list: V[], items: readonly V[]) =>
+  chunked(items, part => list.push(...part));
+
 /**
  * Splices items into a list in place, and gives the removed items.
  * Array.prototype.splice takes items as arguments, which limits their number. */
@@ -81,11 +97,12 @@ export const replace = <V>(
   count: number,
   items: V[],
 ) => {
-  // Stryker disable next-line ConditionalExpression,EqualityOperator: the pushes give the same list, with more copies
-  if (items.length < 1024) return list.splice(start, count, ...items);
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: the appends give the same list, with more copies
+  if (items.length <= CHUNK) return list.splice(start, count, ...items);
   const rest = list.splice(start),
     removed = rest.splice(0, count);
-  for (const item of items.concat(rest)) list.push(item);
+  append(list, items);
+  append(list, rest);
   return removed;
 };
 
@@ -125,12 +142,18 @@ export const quiet = (value: unknown) => {
 };
 
 /**
- * Calls `return()` on an iterator, and ignores what it throws or rejects with.
+ * Calls `return()` on an iterator, if it has one, and hands what it throws or rejects with to onError.
  * The call happens synchronously, and the promise settles with the iterator's return(). */
-export const quietReturn = async (iterator: any) => {
+export const quietReturn = async (
+  iterator: any,
+  onError: (error: unknown) => void = noop,
+) => {
   try {
-    await iterator.return(); // A missing method throws here, and is ignored too
-  } catch {}
+    const close = iterator.return;
+    if (typeof close === "function") await close.call(iterator);
+  } catch (error) {
+    onError(error);
+  }
 };
 
 // The stop functions of what code builds now, while a builder runs.

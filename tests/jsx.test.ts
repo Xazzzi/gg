@@ -54,7 +54,6 @@ test("JX-002 applies props in key order", () => {
   const node = h("input", {
     onClick: click,
     onkeydown: undefined,
-    onblur: "x",
     data: fn,
     a: null,
     b: undefined,
@@ -68,7 +67,6 @@ test("JX-002 applies props in key order", () => {
   assert.deepEqual(
     [...node.attributes],
     [
-      ["onblur", "x"],
       ["data", `${fn}`],
       ["d", ""],
       ["e", "0"],
@@ -1569,4 +1567,155 @@ test("JX-054 use waits until the runtime places its placeholder, also in each ro
   await setImmediate();
   assert.equal(html(tree), "<div><b>x!</b><ul><b>a!</b><b>b!</b></ul></div>");
   assert.deepEqual(reported, []);
+});
+
+test("JX-088 a place that throws reports the error, and stops the drive of the host", async () => {
+  reported.length = 0;
+  const parent = el(),
+    failure = new Error("place"),
+    bad = el("b"),
+    values = latest<any>(),
+    insert = parent.insertBefore;
+  parent.insertBefore = function (node: any, ref: any) {
+    if (node === bad) throw failure;
+    return insert.call(this, node, ref);
+  };
+  mount(parent, values);
+  values.send(bad);
+  await setImmediate();
+  assert.deepEqual(reported, [failure]);
+  values.send("ok");
+  await setImmediate();
+  assert.equal(html(parent), "<div></div>");
+});
+
+test("JX-088 a start that throws in a place reports the error, and stops the drive of the host", async () => {
+  reported.length = 0;
+  const failure = new Error("start");
+  let reads = 0;
+  // The conversion reads then one time, and the start of the inner host reads it again.
+  const source = {
+    get then() {
+      if (++reads > 1) throw failure;
+      return () => {};
+    },
+  };
+  const parent = el(),
+    values = latest<any>();
+  mount(parent, values);
+  values.send(h("p", { children: source }));
+  await setImmediate();
+  assert.deepEqual(reported, [failure]);
+  values.send("ok");
+  await setImmediate();
+  assert.equal(html(parent), "<div><p></p></div>");
+});
+
+test("JX-089 a row that fails after its item leaves reports the error", async () => {
+  reported.length = 0;
+  const failure = new Error("row"),
+    state = select(["a"]),
+    parent = el();
+  async function* Row({ item }: { item: Item<string> }) {
+    yield h("li", { children: item.value });
+    for await (const value of item) void value;
+    throw failure;
+  }
+  mount(
+    parent,
+    each(state, item => h(Row, { item })),
+  );
+  await setImmediate();
+  assert.equal(html(parent), "<div><li>a</li></div>");
+  state.pop();
+  await setImmediate();
+  assert.deepEqual(reported, [failure]);
+});
+
+test("JX-089 a return() that fails when the host stops reports the error, and a child with no return() reports nothing", async () => {
+  reported.length = 0;
+  const failure = new Error("return"),
+    never = () => new Promise<IteratorResult<string>>(() => {});
+  const failing = {
+      [Symbol.asyncIterator]: () => ({
+        next: never,
+        return() {
+          throw failure;
+        },
+      }),
+    },
+    bare = { [Symbol.asyncIterator]: () => ({ next: never }) };
+  const unmount = mount(el(), failing, bare);
+  await setImmediate();
+  unmount();
+  await setImmediate();
+  assert.deepEqual(reported, [failure]);
+});
+
+test("JX-089 a promise row that rejects after its item leaves reports the error", async () => {
+  reported.length = 0;
+  const failure = new Error("late"),
+    row = Promise.withResolvers<string>(),
+    state = select(["a"]),
+    parent = el();
+  mount(
+    parent,
+    each(state, () => row.promise),
+  );
+  await setImmediate();
+  state.pop();
+  await setImmediate();
+  row.reject(failure);
+  await setImmediate();
+  assert.deepEqual(reported, [failure]);
+});
+
+test("JX-008 a value at an on key that is no function throws", () => {
+  for (const value of ["alert(1)", true, 0])
+    assert.throws(
+      () => h("img", { onerror: value }),
+      /TypeError: onerror takes a function/,
+    );
+});
+
+test("JX-009 a javascript: URL throws at a URL attribute, as the URL parser reads it", () => {
+  const script = "javascript:".split("");
+  const urls = [
+    "javascript:alert(1)",
+    "JavaScript:x",
+    " \u0000\u001Fjavascript:x",
+    script.join("\t"),
+    script.join("\n"),
+    script.join("\r"),
+  ];
+  for (const url of urls)
+    assert.throws(
+      () => h("a", { href: url }),
+      /TypeError: href does not take a javascript: URL/,
+    );
+  for (const name of ["src", "action", "formAction", "xlink:href", "HREF"])
+    assert.throws(() => h("a", { [name]: "javascript:x" }), TypeError);
+  const safe = h("a", {
+    href: "/javascript:x",
+    src: "x javascript:",
+    action: "javascripts:x",
+    title: "javascript:x",
+  });
+  assert.equal(safe.attributes.get("href"), "/javascript:x");
+  assert.equal(safe.attributes.get("title"), "javascript:x");
+});
+
+test("JX-009 JX-065 a dynamic javascript: URL reports a TypeError, and keeps the attribute", async () => {
+  reported.length = 0;
+  const href = latest<string>(),
+    link = h("a", { href });
+  mount(el(), link);
+  href.send("/a");
+  await setImmediate();
+  href.send("javascript:x");
+  await setImmediate();
+  assert.equal(link.attributes.get("href"), "/a");
+  assert.ok(reported[0] instanceof TypeError);
+  assert.equal(reported.length, 1);
+  href.close();
 });

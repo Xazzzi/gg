@@ -145,3 +145,21 @@ test("a web component takes the languages as a property, and its custom event wr
   await expect(chips).toHaveText(["Go"]);
   expect((await state(page)).languages).toEqual(["Go"]);
 });
+
+test("a name change stops the check of the last name, whose signal aborts it (JX-0C2)", async ({
+  page,
+}) => {
+  const name = row(page, "Name"),
+    stopped = async () =>
+      Number.parseInt(
+        (await name.locator(".aborted").textContent()) as string,
+        10,
+      );
+  await expect(name.locator(".availability")).toHaveText("Ada is free");
+  const before = await stopped();
+  // Each key starts a check, and stops the check before it, which waits in its delay.
+  await name.locator("input").fill("");
+  await name.locator("input").pressSequentially("Grace", { delay: 20 });
+  await expect(name.locator(".availability")).toHaveText("Grace is taken");
+  expect(await stopped()).toBeGreaterThanOrEqual(before + 5);
+});

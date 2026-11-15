@@ -1,5 +1,7 @@
+import { StopError } from "./channel.ts";
 import { register } from "./devtools.ts";
 import {
+  aborts,
   adopt,
   attach,
   attribute,
@@ -8,6 +10,7 @@ import {
   guard,
   isDynamic,
   NONE,
+  outlive,
   type Parent,
   property,
   put,
@@ -108,14 +111,47 @@ export function mount(parent: Parent, ...children: Child[]): () => void {
   };
 }
 
-/** Creates an element with props and children, or calls a component with props. */
+/** The second argument of a component, with a signal that aborts when the runtime lets the instance go (JX-0C0). */
+export type Instance = { readonly signal: AbortSignal };
+
+let finish: (instance: Life) => void;
+const stopped = () => new StopError("component stopped");
+/** Makes its controller only when code reads the signal. */
+class Life implements Instance {
+  #control?: AbortController;
+  #ended = false;
+
+  static {
+    finish = life => {
+      life.#ended = true;
+      life.#control?.abort(stopped());
+    };
+  }
+
+  get signal(): AbortSignal {
+    if (!this.#control) {
+      this.#control = new AbortController();
+      if (this.#ended) this.#control.abort(stopped());
+    }
+    return this.#control.signal;
+  }
+}
+
+/** Creates an element with props and children, or calls a component with props, and an instance if it takes one. */
 export function jsx(
-  type: string | ((props: any) => Child),
+  type: string | ((props: any, instance: Instance) => Child),
   props: Props,
   _key?: unknown,
 ): Child {
   if (typeof type === "function") {
-    const result = type(props);
+    const life = type.length > 1 ? new Life() : undefined,
+      result = type(props, life as Life);
+    if (life) {
+      const end = () => finish(life);
+      if (isDynamic(result)) aborts.set(result as object, end);
+      else if ((result as Node | null)?.nodeType === 1)
+        outlive(result as Element, end);
+    }
     if (typeof result === "object" && result) {
       const emit = register("component", result, { type, props });
       // Stryker disable next-line ConditionalExpression: an undefined emitter only costs a WeakMap entry

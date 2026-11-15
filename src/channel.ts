@@ -270,6 +270,8 @@ export class Channel<T, TReturn = undefined>
       fail = consumer.throw.bind(consumer);
     const halt = () => {
       stop.on = true;
+      stop.bound?.delete(stop.self); // A consumer that did not attach runs no finally
+
       if (!this.#queue) return this.#rouse();
       const { wake } = stop;
       stop.wake = undefined; // So the queue skips this consumer

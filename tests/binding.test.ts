@@ -729,6 +729,28 @@ test("JX-041 a consumer and a reader that end before their source leave it, so i
   s[CHAN].close();
 });
 
+test("JX-041 a consumer that returns before it attaches leaves its source, so it retains none", async () => {
+  const registry = new FinalizationRegistry<() => void>(done => done()),
+    ch = new Channel<number>();
+  let collected = false;
+  async function* Opens() {
+    yield el("p");
+    (() => {
+      const consumer = ch[Symbol.asyncIterator]();
+      registry.register(consumer, () => (collected = true));
+      void consumer.return(undefined);
+    })();
+    await new Promise(() => {});
+  }
+  const unmount = mount(el(), h(Opens));
+  for (let i = 0; i < 20 && !collected; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  assert.ok(collected);
+  unmount();
+});
+
 test("JX-067 JX-02B an element that the map of a binding builds never starts, so the binding has nothing to stop", async () => {
   const s = select({ a: 1 }, { autoStart: true }),
     text = new Channel<string>(),

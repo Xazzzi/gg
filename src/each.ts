@@ -1,4 +1,4 @@
-import { Channel } from "./channel.ts";
+import { Channel, StopError } from "./channel.ts";
 import { owned, register } from "./devtools.ts";
 import { applyOps, untouched } from "./helpers.ts";
 import {
@@ -35,6 +35,7 @@ export type Item<T> = AsyncIterable<T> & {
   readonly signal: AbortSignal;
 };
 
+const gone = () => new StopError("item left");
 let deliver: (handle: Handle<unknown>, value: unknown) => void,
   leave: (handle: Handle<unknown>) => void,
   left: (handle: Handle<unknown>) => boolean;
@@ -66,7 +67,7 @@ class Handle<T> implements Item<T> {
   get signal(): AbortSignal {
     if (!this.#control) {
       this.#control = new AbortController();
-      if (this.#left) this.#control.abort();
+      if (this.#left) this.#control.abort(gone());
     }
     return this.#control.signal;
   }
@@ -97,7 +98,7 @@ class Handle<T> implements Item<T> {
   #leave() {
     this.#left = true;
     this.#channel?.close();
-    this.#control?.abort();
+    this.#control?.abort(gone());
   }
 }
 

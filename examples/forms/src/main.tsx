@@ -1,6 +1,8 @@
 import {
   consume,
   derive,
+  type Instance,
+  latest,
   mount,
   type Props,
   Provide,
@@ -201,6 +203,29 @@ async function* AllMembers({
   yield box;
 }
 
+// A delay that a signal cancels, as fetch does, so the timer of a stale check never fires.
+const delay = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    });
+  });
+const TAKEN = ["Grace", "Alan"],
+  aborted = latest<number>();
+let checks = 0;
+aborted.send(checks);
+
+// derive stops the check of the last name at each change, which aborts its signal (JX-0C2).
+// The rejection is a StopError, so the stopped check reports nothing.
+async function* Availability({ name }: { name: string }, { signal }: Instance) {
+  signal.addEventListener("abort", () => aborted.send(++checks));
+  yield "checking…";
+  await delay(600, signal);
+  yield TAKEN.includes(name) ? `${name} is taken` : `${name} is free`;
+}
+
 // The outputs read the snapshots of the form, which also starts it for the watch of each control.
 const form = createForm();
 mount(
@@ -211,6 +236,15 @@ mount(
         <label class="row">
           <span>Name</span>
           <TextField field="name" type="text" />
+          <small class="note">
+            <output class="availability">
+              {derive(form, "name", name => (
+                <Availability name={name} />
+              ))}
+            </output>
+            {", "}
+            <span class="aborted">{aborted} stopped</span>
+          </small>
         </label>
         <label class="row">
           <span>Bio</span>

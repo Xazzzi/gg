@@ -575,6 +575,19 @@ test("JX-02A an unmount function does nothing after a later mount into the same 
   assert.equal(html(parent), "<div></div>");
 });
 
+test("JX-02A JX-081 an unmount function after the unmount of a mount around it empties its parent", async () => {
+  const root = el(),
+    box = el("section"),
+    ch = latest<string>();
+  const outer = mount(root, box);
+  const inner = mount(box, ch);
+  ch.send("a");
+  await setImmediate();
+  outer(); // Stops the scope of box, which the mount around it holds
+  inner();
+  assert.equal(html(box), "<section></section>");
+});
+
 test("JX-02A JX-03B unmount stops each host inside the parent, ends each at once, and empties the parent", async () => {
   const root = el(),
     count = latest<number>();
@@ -1540,7 +1553,7 @@ test("JX-03D value follows the item, and keeps the last value after it leaves", 
   assert.equal(item.value, "b");
 });
 
-test("JX-03E signal is one object, and aborts when the item leaves", async () => {
+test("JX-03E signal is one object, and aborts with a StopError when the item leaves", async () => {
   const { items, seen } = handles(["a", "b"]);
   await setImmediate();
   const [a, b] = seen,
@@ -1550,7 +1563,9 @@ test("JX-03E signal is one object, and aborts when the item leaves", async () =>
   items.length = 0;
   await setImmediate();
   assert.equal(signal.aborted, true);
-  assert.equal(signal.reason.name, "AbortError");
+  assert.ok(signal.reason instanceof StopError);
+  assert.equal(signal.reason.reason, "item left");
+  assert.ok(b.signal.reason instanceof StopError);
   assert.equal(b.signal.aborted, true);
   assert.equal(b.signal, b.signal);
 });
@@ -2079,9 +2094,9 @@ test("JX-0B2 a tag that whenDefined rejects applies its values as attributes", a
   assert.match(String(reported[0]), /items does not take a function/);
   assert.equal(reported.length, 1);
   // A later element of the tag waits for whenDefined again.
-  const next = h("font-face", { id: "j" });
+  const next = h("font-face", { label: "b" });
   await setImmediate();
-  assert.deepEqual([...next.attributes], [["id", "j"]]);
+  assert.deepEqual([...next.attributes], [["label", "b"]]);
 });
 
 test("JX-0B4 a hold retains no element, and a definition skips a collected one", async () => {

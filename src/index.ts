@@ -29,6 +29,7 @@ export type {
   Context,
   Dynamic,
   EachOptions,
+  Instance,
   Item,
   JSX,
   Props,

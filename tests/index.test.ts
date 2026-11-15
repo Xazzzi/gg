@@ -6,6 +6,7 @@ import "./exports.test.ts";
 import "./feed.test.ts";
 import "./fuzz.test.ts";
 import "./helpers.test.ts";
+import "./instance.test.ts";
 import "./jsx.test.ts";
 import "./messages.test.ts";
 import "./scope.test.ts";

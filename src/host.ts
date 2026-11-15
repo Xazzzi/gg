@@ -332,7 +332,7 @@ const take = (entry: Entry, source: any, host: Parts): Entry => {
 export const quitSource = (source: any) => {
   const out = evict.get(source);
   if (out) out();
-  else source.return?.();
+  else abort(source), source.return?.();
 };
 
 /**
@@ -404,9 +404,14 @@ export const applyOutput = (
 };
 
 // The emitters of component results, which a host ends one time (DV-045).
-export const ends = new WeakMap<object, Emit>();
-/** Tells devtools one time that a component result ended. */
+export const ends = new WeakMap<object, Emit>(),
+  // The aborts of the signals of component results, which run one time (JX-0C2).
+  aborts = new WeakMap<object, () => void>();
+/** Aborts the signal of a component result, which a second abort does not change. */
+const abort = (source: unknown) => aborts.get(source as object)?.();
+/** Tells devtools one time that a component result ended, and aborts its signal. */
 export const end = (source: unknown) => {
+  abort(source);
   ends.get(source as object)?.("end");
   ends.delete(source as object);
 };
@@ -529,7 +534,7 @@ type Scope = {
   kids?: Set<Scope>;
   host?: Driving; // The drive of the children
   props?: Driving; // The drive of the dynamic props
-  binds?: Set<Driving>; // The props that a shared derive gives with no drive (JX-067)
+  binds?: Set<Driving>; // The props that a shared derive gives with no drive (JX-067), and component aborts (JX-0C3)
   off?: boolean; // A place removed top
   live: boolean;
   guard?: true; // A boundary, which stays a scope (JX-091)
@@ -540,6 +545,7 @@ const scopes = new WeakMap<Node, Scope>(),
 // What starts when a runtime placement first reaches a node: a host (JX-02B), or the wait of use (JX-054).
 export const waiting = new WeakMap<Node, () => void>(),
   binding = new WeakMap<Node, () => void>(), // The dynamic props, which start after the host (JX-061)
+  stopping = new WeakMap<Node, () => void>(), // The aborts of components that gave the element (JX-0C3)
   guarding = new WeakMap<Node, () => void>(); // A boundary, which starts before what is inside it (JX-091)
 type Wait = (() => void) & { ref: WeakRef<Node>; lost?: () => void };
 // The nodes of the waits that are not started, so a placement walks no node when there is none.
@@ -581,6 +587,7 @@ const wake = (node: Node) => {
   guarding.get(node)?.();
   waiting.get(node)?.();
   binding.get(node)?.();
+  stopping.get(node)?.();
   for (let child = node.firstChild; child; child = child.nextSibling)
     wake(child);
 };
@@ -689,6 +696,7 @@ export const stopIn = (node: Node) => under.get(node)?.forEach(stop);
 /** Ends the waits of node and stops its scope, for the builder that owns it (HE-059). */
 const quit = (node: Node) => {
   (waiting.get(node) as Wait | undefined)?.lost?.();
+  outlast(node);
   settle(guarding, node);
   settle(waiting, node);
   settle(binding, node);
@@ -795,6 +803,27 @@ export const bind = (element: Element, props: [string, unknown][]) =>
     );
     for (const [name, source] of driven) host.add({ name, source });
   });
+
+// The aborts of the components that gave an element, until its scope stops (JX-0C3).
+const outlived = new WeakMap<Element, Set<() => void>>();
+/** Aborts when the scope of element stops, or when a builder stops element before a placement reaches it. */
+export const outlive = (element: Element, abort: () => void) => {
+  const set = outlived.get(element);
+  if (set) return void set.add(abort);
+  outlived.set(element, new Set([abort]));
+  defer(stopping, element, () => {
+    const stop = () => outlast(element);
+    (enter(element).binds ??= new Set()).add({ stop, park: noop });
+  });
+};
+/** Runs the aborts of node, so a later component that gives node waits for a new place. */
+const outlast = (node: Node) => {
+  const all = outlived.get(node as Element);
+  outlived.delete(node as Element);
+  // Stryker disable next-line CallExpression: a wait that stays only makes a place abort aborted signals again
+  settle(stopping, node);
+  if (all) for (const each of all) each();
+};
 
 /**
  * Makes parent a host for children, with static runs and dynamic entries in order.

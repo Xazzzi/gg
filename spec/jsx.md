@@ -36,8 +36,9 @@ export type Props = {
   [name: `on${string}`]: ((event: any) => void) | undefined;
 } & { [name: string]: unknown; children?: Child };
 
+export type Instance = { readonly signal: AbortSignal };
 export function jsx(
-  type: string | ((props: any) => Child),
+  type: string | ((props: any, instance: Instance) => Child),
   props: Props,
   key?: unknown,
 ): Child;
@@ -124,6 +125,7 @@ The runtime uses the global `document` when it creates nodes.
   Its attribute sets only the initial state, or it has no attribute.
 - **Custom element**: an element that `document.createElement` creates for a tag with a `-`, while `globalThis.customElements` exists.
 - **Own property**: a property that a custom element has, and that `HTMLElement.prototype` does not have.
+- **Instance**: the second argument of a component, which tells it when the runtime lets its result go (JX-0C0).
 
 ## Elements
 
@@ -396,7 +398,8 @@ A component instance that finishes renders again with the next value of its item
   A rejected child also finishes.
 - JX-03D: `value` MUST give the last value that `each` gave the `Item`.
   It keeps that value after the `Item` ends.
-- JX-03E: `signal` MUST give one `AbortSignal`, which aborts with no reason when the `Item` ends.
+- JX-03E: `signal` MUST give one `AbortSignal`, which aborts with a `StopError` when the `Item` ends.
+  So a row that rethrows it reports nothing (JX-089).
 - JX-03F: The first iteration of an `Item` MUST create a `Channel` with `firstReceive: "latest"` and `thenReceive: "latest"`, send `value`, and close it if the `Item` ended.
   Each iteration MUST give a reader of that one channel.
   So a component that never iterates its `Item` costs no channel.
@@ -427,6 +430,25 @@ Provide a `Channel` or a `select` for a value that changes.
   A component in an element that the runtime never places waits.
   If the wait ends with no place, the generator MUST throw a `StopError`, so the component does not continue with no context, and its `finally` blocks run.
   The wait ends when the drive lets the component go (JX-041), if `use` started in the pull, and when a builder stops the placeholder (HE-059).
+
+## Instances
+
+A component that waits in other work, such as a `fetch`, sees no `return()` of its drive until that work settles.
+So the runtime gives the component a signal, which aborts when the runtime lets its result go.
+Parking does not abort it, because a parked result resumes (JX-083).
+`item.signal` stays separate, because a row and the components in it end at different times.
+`AbortSignal.any()` combines the two.
+
+- JX-0C0: If the `length` of a component is more than 1, `jsx` MUST call it with `props` and a new instance.
+  Otherwise the component MUST get no instance.
+  So a component with one parameter costs nothing.
+- JX-0C1: `signal` MUST give one `AbortSignal`, which `jsx` makes at the first read.
+  A read after the abort MUST give an aborted signal.
+- JX-0C2: If the result of the component is a dynamic child, its signal MUST abort when a drive lets the result go (JX-041), when the result finishes, and when a builder stops it (HE-059).
+  The reason MUST be a `StopError`, so a component that rethrows it reports nothing (JX-089).
+- JX-0C3: If the result is an element, its signal MUST abort with a `StopError` when the scope of the element stops (JX-081), or when a builder stops the element before a place reaches it (HE-059).
+  A place that reaches the element makes it a scope (JX-080).
+  The signal of any other result MUST NOT abort.
 
 ## Boundaries
 
@@ -473,6 +495,7 @@ The scopes give a tree that needs no part of the generator.
 - JX-041: When a drive lets a source go, because it stops, removes the entry, or the source finishes, the runtime MUST call `return()` on each `Channel` consumer and each reader of `changes` that code opened while the drive pulled that source.
   A `watch` opens its reader at its first `next()`, so a `for await` on a `watch` in the pull is bound too.
   A consumer or a reader that ends before the drive lets the source go MUST leave the source, so the source retains none that ended.
+  This includes a consumer that gets `return()` or `throw()` before it attaches.
   The shared reader of HE-05A serves each of its derives, so it MUST NOT be bound to a source.
   So a component that waits on an open channel ends at once (CH-073).
   Code after an `await` or a `yield*` resumes outside the pull (DV-052), so what it opens is not bound.

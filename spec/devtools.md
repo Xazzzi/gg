@@ -18,7 +18,7 @@ So this spec defines only the contract with that extension.
 
 ## Registration
 
-- DV-001: The library MUST read the hook when it creates a `Channel`, when `feed`, `select`, `derive` or `iff` is called, and for each registration of DV-040 to DV-042, DV-046 and DV-050.
+- DV-001: The library MUST read the hook when it creates a `Channel`, when `feed`, `select`, `derive` or `iff` is called, and for each registration of DV-040 to DV-042, DV-046, DV-047 and DV-050.
   If the value is not a function, the library does no devtools work for that object.
 - DV-002: The library MUST call the hook as `hook(kind, target, detail)`.
   The hook returns an emitter or `undefined`.
@@ -26,6 +26,7 @@ So this spec defines only the contract with that extension.
   For `"mount"`, it MUST be the hook, two internal functions, `mount` or `jsx`, and then the caller.
   So the hook can find the caller in `new Error().stack`.
   A `"reader"` registration has no fixed depth, because `watch` opens its reader inside `next()`.
+  A `"part"` registration has no fixed depth, because a host makes a part when it applies an output.
 - DV-004: The library MUST NOT catch errors from the hook or from an emitter.
   The hook MUST NOT throw.
 
@@ -40,6 +41,7 @@ So this spec defines only the contract with that extension.
 | `"item"`      | The `Item`                                  | `{ channel }`                                                                        |
 | `"reader"`    | The reader that `changes` makes             | `{ state, keys, source }`, with `keys` undefined for a reader of all slots           |
 | `"derive"`    | The iterator that `derive` or `iff` returns | `{ source, map }`, with the map of `iff` that picks a branch                         |
+| `"part"`      | The object that a drive reads for a part    | `{ source }`                                                                         |
 
 - DV-005: Each `detail` MUST also have `owner`, which is the owner that creates the object, or `undefined`.
 
@@ -101,7 +103,7 @@ So this spec defines only the contract with that extension.
   So a debugger can name the code that reads a select through `changes`, `watch` or `each`.
 - DV-051: A reader MUST emit `("end")` one time, when it finishes, or when an array slice has no selected slot left (SE-156).
 - DV-053: A read that resolves with operations MUST emit `("read", ops)`, with the operations that it gives.
-- DV-052: While a `select` with an emitter calls `next()` on the iterator of a slot, `source` of a `"reader"` registration and of an `"attach"` event MUST be the source of that slot.
+- DV-052: While a `select` with an emitter or a report hook calls `next()` on the iterator of a slot, `source` of a `"reader"` registration and of an `"attach"` event MUST be the source of that slot.
   At other times it MUST be `undefined`.
   A host pulls each component result as a slot source, so a debugger can tell which component instance opens a reader.
   Code after an `await` or a `yield*` runs outside the pull, so a reader that it opens has no source.

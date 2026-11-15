@@ -85,11 +85,13 @@ export declare namespace JSX {
 
 const SVG = "http://www.w3.org/2000/svg";
 // Children exist before their parent, so a tag alone picks the namespace.
+// The filter primitives are the tags that start with fe and an upper case letter.
 const SVG_TAGS = new Set(
-  "svg g defs symbol use image switch foreignObject desc metadata path rect circle ellipse line polyline polygon text tspan textPath linearGradient radialGradient stop pattern clipPath mask marker filter view animate animateMotion animateTransform set mpath feBlend feColorMatrix feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDistantLight feDropShadow feFlood feFuncA feFuncB feFuncG feFuncR feGaussianBlur feImage feMerge feMergeNode feMorphology feOffset fePointLight feSpecularLighting feSpotLight feTile feTurbulence".split(
-    " ",
+    "svg g defs symbol use image switch foreignObject desc metadata path rect circle ellipse line polyline polygon text tspan textPath linearGradient radialGradient stop pattern clipPath mask marker filter view animate animateMotion animateTransform set mpath".split(
+      " ",
+    ),
   ),
-);
+  isSvg = (tag: string) => SVG_TAGS.has(tag) || /^fe[A-Z]/.test(tag);
 /** Mounts children into parent, keeps dynamic children live, and gives a function that unmounts them. */
 export function mount(parent: Parent, ...children: Child[]): () => void {
   attach(parent, children, true);
@@ -119,7 +121,7 @@ export function jsx(
     return result;
   }
   const { xmlns } = props;
-  const html = typeof xmlns !== "string" && !SVG_TAGS.has(type),
+  const html = typeof xmlns !== "string" && !isSvg(type),
     element = html
       ? document.createElement(type)
       : document.createElementNS(typeof xmlns === "string" ? xmlns : SVG, type);

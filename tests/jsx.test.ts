@@ -95,12 +95,13 @@ test("JX-002 an event type keeps its case, unless the element has a handler prop
   );
 });
 
-test("JX-002 an object with no text of its own throws at an attribute", () => {
+test("JX-002 an object with no text of its own, and a symbol, throw at an attribute", () => {
   assert.throws(
     () => h("p", { style: { color: "red" } }),
     /TypeError: style does not take a plain object/,
   );
   assert.throws(() => h("p", { style: Object.create(null) }), TypeError);
+  assert.throws(() => h("p", { title: Symbol("t") }), TypeError);
   const url = { toString: () => "/x" };
   assert.equal(
     html(h("a", { href: url, rel: ["a", "b"], value: {} })),
@@ -112,9 +113,9 @@ test("JX-001 takes the namespace from xmlns, then from an SVG tag", () => {
   const SVG = "http://www.w3.org/2000/svg",
     XHTML = "http://www.w3.org/1999/xhtml",
     MATH = "http://www.w3.org/1998/Math/MathML";
-  for (const tag of ["svg", "path", "mpath", "feBlend", "feTurbulence"])
+  for (const tag of ["svg", "path", "mpath", "feBlend", "feTurbulence", "feX"])
     assert.equal(h(tag).namespaceURI, SVG, tag);
-  for (const tag of ["div", "a", "title", "fe", "feed", "x-feBlend"])
+  for (const tag of ["div", "a", "title", "fe", "feed", "feblend", "x-feBlend"])
     assert.equal(h(tag).namespaceURI, XHTML, tag);
   assert.equal(h("math", { xmlns: MATH }).namespaceURI, MATH);
   const link = h("a", { xmlns: SVG, href: "#x" });

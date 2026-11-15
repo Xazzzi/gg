@@ -42,7 +42,7 @@ export function iff<A, B = undefined>(
 
 export function spread<S>(snapshot: S): Spread<S>;
 
-type Entry<T> = T extends readonly (infer V)[] ? V : T[keyof T];
+type MirrorEntry<T> = T extends readonly (infer V)[] ? V : T[keyof T];
 
 export type ApplyOptions = {
   eager?: boolean;
@@ -52,7 +52,7 @@ export type ApplyOptions = {
 export function applyOps<T extends object>(
   target: T,
   ops: readonly Op[],
-  map?: (value: unknown, prev: Entry<T> | undefined) => Entry<T>,
+  map?: (value: unknown, prev: MirrorEntry<T> | undefined) => MirrorEntry<T>,
   options?: ApplyOptions,
 ): T;
 ```

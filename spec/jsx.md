@@ -147,7 +147,8 @@ The runtime uses the global `document` when it creates nodes.
   An object whose `toString` is `Object.prototype.toString` MUST throw a `TypeError`, because it has no text of its own.
   So `style` takes a string, and not an object.
   A function MUST throw a `TypeError`, because its text is its source code.
-  Other values MUST set the attribute to `String(value)`.
+  Other values MUST set the attribute to the text that `setAttribute` converts them to.
+  So a symbol throws a `TypeError`, as it does in the DOM.
   So an array sets its items with commas between them, as `accept` and `srcset` need, and as `setAttribute` does.
 - JX-003: `jsx` MUST mount `props.children` into the element, as `mount` does, except that the element waits to drive its dynamic children (JX-02B).
 - JX-004: `jsx` MUST ignore `key`.

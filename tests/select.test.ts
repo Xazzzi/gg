@@ -10,6 +10,7 @@ import {
   changes,
   feed,
   type Op,
+  outputs,
   select,
   spread,
   type Val,
@@ -3497,6 +3498,43 @@ test("SE-047 step 6 pulls async iterators in slot order", async () => {
   a.resolve({ value: 1, done: false });
   await setImmediate();
   assert.deepEqual(log, ["a", "b", "a", "b"]);
+  s[CHAN].close();
+});
+
+test("SE-047 object slot order is the key order of a plain object, at start and in step 6", async () => {
+  const log: string[] = [],
+    tag = Symbol("t"),
+    late = Symbol("u");
+  const source = (name: string) => ({
+    [Symbol.asyncIterator]: () => ({
+      next: () => (log.push(name), new Promise(() => {})),
+    }),
+  });
+  const s: any = select({ b: source("b"), [tag]: source("t") }, open);
+  s[late] = source("u");
+  s.a = source("a");
+  s[2] = source("2");
+  s[1] = source("1");
+  const reader = changes(s);
+  const { value: ops = [] } = await reader.next();
+  assert.deepEqual(
+    ops.map(op => (op as { key: PropertyKey }).key),
+    ["1", "2", "b", "a", tag, late],
+  );
+  assert.deepEqual(log, ["1", "2", "b", "a", "t", "u"]);
+  assert.deepEqual(Reflect.ownKeys(outputs(s)), [
+    "1",
+    "2",
+    "b",
+    "a",
+    tag,
+    late,
+  ]);
+  delete s.b;
+  s.b = source("b");
+  s[0] = source("0");
+  await setImmediate();
+  assert.deepEqual(log.slice(6), ["0", "b"]);
   s[CHAN].close();
 });
 

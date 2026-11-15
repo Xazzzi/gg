@@ -248,7 +248,7 @@ const OPEN = 0, // Idle, so a flush can pull it
 
 type Slot = {
   key?: PropertyKey;
-  index: number; // The position of an array slot, or the order of an object key in the map
+  index: number; // The position of an array slot, or the rank of an object key in slot order
   source: any;
   kind: number;
   method: any; // What detection read, by SE-016
@@ -261,6 +261,9 @@ type Slot = {
 
 /** Orders slots as the shape does. */
 const byIndex = (a: Slot, b: Slot) => a.index - b.index;
+// The first ranks of string and symbol keys, which come after the array index keys of a plain object (SE-047).
+const STRINGS = 2 ** 32,
+  SYMBOLS = 2 ** 52;
 
 /** Takes the slots of a worklist in shape order, and empties it. */
 const drain = (set: Set<Slot>) => {
@@ -422,7 +425,7 @@ class Select {
       for (const key of Reflect.ownKeys(target))
         this.#map.set(
           key,
-          this.#make(target[key], key, this.#keyOrder++, detect(target[key])),
+          this.#make(target[key], key, this.#rank(key), detect(target[key])),
         );
     }
     onEnd(channel, () => this.#abort());
@@ -558,7 +561,9 @@ class Select {
 
   /** Gives a copy of the slots in shape order. */
   #slots() {
-    return this.#isArray ? [...this.#array] : [...this.#map.values()];
+    return this.#isArray
+      ? [...this.#array]
+      : [...this.#map.values()].sort(byIndex);
   }
 
   /** Gives the output of a slot: its `Val`, or its value under `unwrap`. */
@@ -569,6 +574,14 @@ class Select {
   /** Records an operation, if anyone reads operations and the select started. */
   #record(op: () => Op) {
     if (this.#log.pending && this.#started) this.#log.pending.push(op()); // SE-10A
+  }
+
+  /** Gives the rank of a new object key, as a plain object orders its keys (SE-047). */
+  #rank(key: PropertyKey) {
+    const order = this.#keyOrder++;
+    return typeof key === "symbol"
+      ? SYMBOLS + order
+      : (toIndex(key) ?? STRINGS + order);
   }
 
   /** Gives the current key or index of a slot. */
@@ -961,7 +974,7 @@ class Select {
     const slot = this.#make(
       source,
       key,
-      old?.index ?? this.#keyOrder++,
+      old?.index ?? this.#rank(key),
       detected,
     ); // An array write always has an old slot
     const prev = old && this.#out(old);

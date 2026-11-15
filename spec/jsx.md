@@ -478,7 +478,7 @@ The scopes give a tree that needs no part of the generator.
 ## Example
 
 ```tsx
-import { Channel } from "@xazzzi/gg";
+import { Channel, mount } from "@xazzzi/gg";
 
 async function* Counter({ count }: { count: Channel<number> }) {
   const value = (<b>0</b>) as HTMLElement;
@@ -497,9 +497,9 @@ count.send(1);
 A list beside static siblings:
 
 ```tsx
-import { type Channel, select } from "@xazzzi/gg";
+import { each, type Item, mount, select } from "@xazzzi/gg";
 
-async function* Item({ name }: { name: Channel<string> }) {
+async function* Row({ name }: { name: Item<string> }) {
   const li = (<li />) as HTMLElement;
   yield li;
   for await (const value of name) li.textContent = value;
@@ -514,7 +514,7 @@ mount(
   <ul>
     <li>first</li>
     {each(names, name => (
-      <Item name={name} />
+      <Row name={name} />
     ))}
     <li>last</li>
   </ul>,

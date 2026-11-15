@@ -116,6 +116,10 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 
 - **Slot**: one key of the shape, with a source and a state.
   A slot keeps its identity when array operations move it.
+- **Slot order**: the order of the indexes of an array shape.
+  For an object shape, it is the key order of a plain object: array index keys in ascending order, then string keys, then symbol keys.
+  Keys of one kind keep the order in which they became slots.
+  So a snapshot, which is a plain object, has its keys in slot order.
 - **Source**: the value assigned to a slot.
 - **State**: the slot's current output.
   It is a `Val` for an asynchronous slot, and the source itself for a plain slot.
@@ -302,18 +306,19 @@ A flush runs these steps in order.
 - SE-046: A flush MUST do no more steps if the channel is terminal.
   It MUST check before each step, and before each iterator in steps 1, 5 and 6.
 - SE-047: Steps 1, 5 and 6 MUST pull iterators in slot order.
-  A replaced object key keeps its place in slot order, and a new key comes last.
+  A replaced object key keeps its place in slot order.
+  A new key, also one that a `delete` removed, comes after the keys of its kind, except an array index key.
 - SE-048: A flush SHOULD cost time for the slots that changed and the raw iterators, and not for the other slots.
   Publish builds a snapshot of all slots, so a select with no consumer and readers of operations get this cost.
 - SE-049: After the flush that reports its removal, `select` MUST NOT retain the source of a slot that left the shape.
 - SE-04A: Under `ackStyle: "any"`, a reader that reads operations, or that waits with no operation to read, MUST also end the wait of step 4.
-- SE-04B: A wait of step 4 that ended MUST NOT retain an object.
-  So a `select` that only consumers read grows no memory with each flush.
   A reader that does so in step 2 ends the wait before it starts.
   A slice reader whose slots did not change has no operation to read, so it does not stall the select.
-  Under `ackStyle: "all"`, only the channel ends the wait.
   So a select with only readers does not stall, and its sources still wait until a reader reads or waits.
+  Under `ackStyle: "all"`, only the channel ends the wait.
   The report hook does not end the wait.
+- SE-04B: A wait of step 4 that ended MUST NOT retain an object.
+  So a `select` that only consumers read grows no memory with each flush.
 
 ## Snapshots
 
@@ -492,12 +497,12 @@ A proxy read returns sources (SE-080), so a reader carries the `outputs` that it
 - SE-14B: The log MUST NOT retain an operation that each attached reader has read.
 - SE-14C: When no reader stays attached and the report hook does not exist, the log MUST drop its operations and build no more (SE-10A).
 - SE-14D: `outputs(state)` MUST return what `outputs` of a new reader holds at that call (SE-142), and MUST NOT make a reader.
+  So code reads the current outputs with no reader to finish (SE-13B).
+  It MUST throw a `TypeError` if `state` is not a proxy that `select` returned, as `changes` does (SE-140).
 - SE-14E: The log MUST NOT retain a reader that has no pending `next()`.
   So a reader that code drops does not retain operations, and a report does not wake it.
   The library cannot tell a dropped reader from one that code reads later, so only the garbage collector ends it.
   A reader with a pending `next()` MUST stay retained until that call settles, because code can hold only its promise.
-  So code reads the current outputs with no reader to finish (SE-14B).
-  It MUST throw a `TypeError` if `state` is not a proxy that `select` returned, as `changes` does (SE-140).
 
 ## Slice readers
 

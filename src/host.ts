@@ -17,6 +17,8 @@ export type Entry = Driven & {
   gate?: PromiseWithResolvers<void>; // Of a parked part
 };
 type Gated = { next(): unknown; return(): unknown };
+// A node whose children a host places: an element, or a shadow root (JX-02C).
+export type Parent = Element | ShadowRoot;
 // What adds a part to the drive of its entry, what takes it out, and what hands on a failure (JX-092).
 type Parts = {
   add(entry: Entry): void;
@@ -39,15 +41,79 @@ const SCRIPT =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the URL parser skips leading C0 controls
   /^[\u0000-\u001F ]*j[\t\n\r]*a[\t\n\r]*v[\t\n\r]*a[\t\n\r]*s[\t\n\r]*c[\t\n\r]*r[\t\n\r]*i[\t\n\r]*p[\t\n\r]*t[\t\n\r]*:/i;
 
-/** Gives the attribute text of a value, and throws for an object with no text of its own (JX-002) or a javascript: URL (JX-009). */
+/** Gives the attribute text of a value, and throws for a function or an object with no text of its own (JX-002), or a javascript: URL (JX-009). */
 export const attribute = (name: string, value: any): string => {
   if (value === true) return "";
+  if (typeof value === "function")
+    throw new TypeError(`${name} does not take a function`);
   if (value.toString === Object.prototype.toString)
     throw new TypeError(`${name} does not take a plain object`);
   const text = `${value}`;
   if (URLS.has(name.toLowerCase()) && SCRIPT.test(text))
     throw new TypeError(`${name} does not take a javascript: URL`);
   return text;
+};
+
+// The custom elements that jsx made, and the held values of those whose tag has no definition yet, in key order (JX-0B2).
+const customs = new WeakSet<Element>(),
+  held = new WeakMap<Element, Map<string, unknown>>(),
+  // Weak, so a hold retains no element (JX-0B4).
+  wanted = new Map<string, Set<WeakRef<Element>>>();
+/** Marks a value that a dynamic prop holds before its first output. */
+export const NONE: unique symbol = Symbol() as any;
+
+/** Tells if a prop of element is an own property of a custom element (JX-0B0, JX-0B1). */
+const own = (element: Element, name: string) =>
+  customs.has(element) && name in element && !(name in HTMLElement.prototype);
+
+/** Tells if a prop of element sets a property: a live one, or an own one of a custom element. */
+export const property = (element: Element, name: string) =>
+  LIVE.has(name) || own(element, name);
+
+/** Assigns a property, or sets or removes an attribute, as JX-063 and JX-064 say. */
+export const put = (element: Element, name: string, value: unknown) => {
+  if (property(element, name)) (element as any)[name] = value;
+  else if (value == null || value === false) element.removeAttribute(name);
+  else element.setAttribute(name, attribute(name, value));
+};
+
+/**
+ * Marks element as a custom element, and gives the map that holds its values when its tag has no definition yet (JX-0B2).
+ * The map lists the keys in order before any value arrives. */
+export const adopt = (element: Element, tag: string) => {
+  customs.add(element);
+  if (customElements.get(tag)) return undefined;
+  const values = new Map<string, unknown>();
+  held.set(element, values);
+  let refs = wanted.get(tag);
+  if (!refs) {
+    wanted.set(tag, (refs = new Set()));
+    // A rejection marks a name that is not valid, which upgrade leaves as it is.
+    const apply = () => defined(tag);
+    customElements.whenDefined(tag).then(apply, apply);
+  }
+  refs.add(new WeakRef(element));
+  return values;
+};
+
+/** Applies the held values of the elements of tag, and fails each error to the scope around its element (JX-0B5). */
+const defined = (tag: string) => {
+  const refs = wanted.get(tag) as Set<WeakRef<Element>>;
+  wanted.delete(tag);
+  for (const ref of refs) {
+    const element = ref.deref();
+    if (!element) continue;
+    const values = held.get(element) as Map<string, unknown>;
+    held.delete(element);
+    customElements.upgrade(element);
+    for (const [name, value] of values)
+      if (value !== NONE)
+        try {
+          put(element, name, value);
+        } catch (error) {
+          failIn(around(element), error);
+        }
+  }
 };
 
 /** Tells if a value renders as a `Text` node. */
@@ -121,7 +187,7 @@ const longest = (seq: number[]) => {
  * Gives the nodes that were not children, or undefined when a child outside that range is in want.
  * Moves only the nodes outside a longest run that keeps its order, so a swap moves two nodes. */
 const arrange = (
-  parent: Element,
+  parent: Parent,
   want: Node[],
   first: ChildNode | null,
   after: ChildNode | null,
@@ -176,7 +242,7 @@ const arrange = (
 /**
  * Puts the nodes of all entries into parent in order, removes other children, and gives the nodes that were not children.
  * Arranges only the nodes between the first and the last children that stay in place, so a change costs no walk of the rest. */
-const place = (parent: Element, entries: Entry[]): Node[] => {
+const place = (parent: Parent, entries: Entry[]): Node[] => {
   const want = entries.flatMap(entry => entry.nodes);
   let from = 0,
     to = want.length,
@@ -507,13 +573,24 @@ const wake = (node: Node) => {
     wake(child);
 };
 
+/** Gives the parent of node, or the host of a shadow root (JX-02C). */
+const above = (node: Node): Node | null =>
+  node.parentNode ?? (node.nodeType === 11 ? (node as ShadowRoot).host : null);
+/** Gives the scope at node or around it. */
+const around = (node: Node) => {
+  for (let at: Node | null = node; at; at = above(at)) {
+    const scope = scopes.get(at);
+    if (scope) return scope;
+  }
+};
+
 /** Gives the scope of node, and binds a new scope to the closest scope above it. */
 const enter = (node: Node): Scope => {
   let scope = scopes.get(node);
   if (scope) return scope;
   scope = { node, live: true };
   scopes.set(node, scope);
-  for (let top = node, at = node.parentNode; at; top = at, at = at.parentNode) {
+  for (let top = node, at = above(node); at; top = at, at = above(at)) {
     const up = scopes.get(at);
     if (!up) continue;
     Object.assign(scope, { up, top, live: up.live });
@@ -611,7 +688,7 @@ export const unmount = (node: Node) => {
   if (scope) clear(scope);
 };
 /** Places the entries of a host, resumes the nodes that come back, and wakes the nodes that were not its children (JX-02B). */
-const settleIn = (parent: Element, entries: Entry[], scope: Scope) => {
+const settleIn = (parent: Parent, entries: Entry[], scope: Scope) => {
   const added = place(parent, entries);
   for (const node of added) shift(node, false);
   if (scope.live && waits()) added.forEach(wake);
@@ -652,9 +729,10 @@ const applyProp = (
   if (state.status === "rejected") fail(state.reason);
   else if (!Object.is(value, entry.value))
     try {
-      if (LIVE.has(name)) (element as any)[name] = value;
-      else if (value == null || value === false) element.removeAttribute(name);
-      else element.setAttribute(name, attribute(name, value));
+      const values = held.get(element);
+      // A custom element of a tag with no definition holds the output (JX-0B2).
+      if (values) values.set(name, value);
+      else put(element, name, value);
       entry.value = value;
     } catch (error) {
       fail(error);
@@ -708,7 +786,7 @@ export const bind = (element: Element, props: [string, unknown][]) =>
 /**
  * Makes parent a host for children, with static runs and dynamic entries in order.
  * mount and jsx both call it, so the hook finds their caller at one depth (DV-003). */
-export const attach = (parent: Element, children: Child, placed: boolean) => {
+export const attach = (parent: Parent, children: Child, placed: boolean) => {
   let run: Entry = { nodes: [] };
   const entries = [run],
     dynamic: Entry[] = [];

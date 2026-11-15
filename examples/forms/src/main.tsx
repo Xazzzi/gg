@@ -7,6 +7,7 @@ import {
   use,
   watch,
 } from "@xazzzi/gg";
+import { ChipList } from "./chips.tsx";
 import {
   COUNTRIES,
   createForm,
@@ -262,6 +263,17 @@ mount(
           <span>Languages</span>
           <MultiChoice field="languages" options={LANGUAGES} />
         </label>
+        <div class="row">
+          <span>Chosen</span>
+          <chip-list
+            items={watch(form, "languages")}
+            onchipRemoved={(event: CustomEvent<string>) =>
+              (form.languages = form.languages.filter(
+                language => language !== event.detail,
+              ))
+            }
+          />
+        </div>
         <label class="check">
           <Toggle field="newsletter" />
           Newsletter
@@ -291,3 +303,6 @@ mount(
     </div>
   </Provide>,
 );
+
+// Defined after the mount, so chip-list holds its items until here, and then gets them as a property.
+customElements.define("chip-list", ChipList);

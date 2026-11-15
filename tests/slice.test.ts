@@ -507,6 +507,22 @@ test("SE-04A a waiting slice reader of an unchanged slot does not stall a flush"
   s[CHAN].close();
 });
 
+test("SE-04A a waiting slice reader of an unchanged slot does not stall a flush that a consumer has not read", async () => {
+  const s = select({ a: 1, b: 1 });
+  const r = changes(s, ["a"]);
+  await r.next();
+  await s[Symbol.asyncIterator]().next();
+  const read = r.next();
+  s.b = 2;
+  await setImmediate();
+  s.a = 2;
+  assert.deepEqual(await read, {
+    done: false,
+    value: [{ op: "set", key: "a", value: 2, prev: 1 }],
+  });
+  s[CHAN].close();
+});
+
 test("SE-04A a slice reader that waits later releases a flush", async () => {
   const s = select({ a: 1, b: 1 });
   const r = changes(s, ["a"]);

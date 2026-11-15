@@ -196,6 +196,20 @@ test("SE-007 options of the wrong type throw, and undefined selects the default"
   );
 });
 
+test("SE-002 firstReceive defaults to latest under another thenReceive", async () => {
+  const s = select({ a: 0 }, { ...open, thenReceive: "every" }),
+    a = iter(s),
+    b = iter(s);
+  await a.next();
+  for (const value of [1, 2]) {
+    s.a = value;
+    await setImmediate();
+    await a.next();
+  }
+  assert.deepEqual((await b.next()).value, { a: 2 });
+  s[Symbol.dispose]();
+});
+
 test("SE-003 invalid options reach the channel unchanged", () => {
   assert.throws(() => select({}, { firstReceive: null as any }), TypeError);
   assert.throws(() => select({}, { stopStyle: "x" as any }), TypeError);
@@ -2670,9 +2684,10 @@ test("SE-046 a flush stops before publish", async () => {
         },
       },
     );
+    const read = iter(s).next(); // An active consumer, so only SE-046 stops the snapshot
     await setImmediate();
     assert.ok(s[CHAN].signal.aborted);
-    assert.equal((await iter(s).next()).done, true);
+    assert.equal((await read).done, true);
   }
   assert.deepEqual([pulls, mapped], [0, 0]);
 });

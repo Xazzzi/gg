@@ -1,12 +1,16 @@
 import { register } from "./devtools.ts";
 import {
+  adopt,
   attach,
   attribute,
   bind,
   ends,
   guard,
   isDynamic,
-  LIVE,
+  NONE,
+  type Parent,
+  property,
+  put,
   quitSource,
   toNodes,
   unmount,
@@ -57,7 +61,17 @@ interface ElementProps<E> extends Handlers<E> {
 }
 type Tags = HTMLElementTagNameMap &
   Omit<SVGElementTagNameMap, keyof HTMLElementTagNameMap>;
-type Known = { [K in keyof Tags]: ElementProps<Tags[K]> };
+/** The own properties of a custom element, which take data (JX-0B0). */
+type OwnProps<E> = {
+  [K in Exclude<keyof E, keyof HTMLElement> as K extends `on${string}`
+    ? never
+    : K]?: Live<E[K]>;
+};
+type Known = {
+  [K in keyof Tags]: K extends `${string}-${string}`
+    ? ElementProps<Tags[K]> & OwnProps<Tags[K]>
+    : ElementProps<Tags[K]>;
+};
 
 export declare namespace JSX {
   type Element = Child;
@@ -77,7 +91,7 @@ const SVG_TAGS = new Set(
   ),
 );
 /** Mounts children into parent, keeps dynamic children live, and gives a function that unmounts them. */
-export function mount(parent: Element, ...children: Child[]): () => void {
+export function mount(parent: Parent, ...children: Child[]): () => void {
   attach(parent, children, true);
   let done = false;
   return () => {
@@ -105,13 +119,15 @@ export function jsx(
     return result;
   }
   const { xmlns } = props;
-  const element =
-    typeof xmlns === "string"
-      ? document.createElementNS(xmlns, type)
-      : SVG_TAGS.has(type)
-        ? document.createElementNS(SVG, type)
-        : document.createElement(type);
-  const live: [string, unknown][] = [],
+  const html = typeof xmlns !== "string" && !SVG_TAGS.has(type),
+    element = html
+      ? document.createElement(type)
+      : document.createElementNS(typeof xmlns === "string" ? xmlns : SVG, type);
+  const values =
+      html && type.includes("-") && globalThis.customElements
+        ? adopt(element, type)
+        : undefined,
+    live: [string, unknown][] = [],
     dynamic: [string, unknown][] = [];
   for (const name of Object.keys(props)) {
     const value = props[name];
@@ -120,17 +136,24 @@ export function jsx(
       if (name.startsWith("on"))
         throw new TypeError(`${name} does not take a dynamic value`);
       dynamic.push([name, value]);
+      values?.set(name, NONE);
     } else if (name.startsWith("on")) {
       // A text value would make an inline handler, which runs text as code (JX-008).
       if (typeof value !== "function")
         throw new TypeError(`${name} takes a function`);
-      element.addEventListener(name.slice(2).toLowerCase(), value as any);
-    } else if (LIVE.has(name)) live.push([name, value]);
+      // A custom event keeps its case, unless the element has a handler property for the lower case key.
+      const lower = name.toLowerCase();
+      element.addEventListener(
+        (lower in element ? lower : name).slice(2),
+        value as any,
+      );
+    } else if (values) values.set(name, value);
+    else if (property(element, name)) live.push([name, value]);
     else element.setAttribute(name, attribute(name, value));
   }
   attach(element, props.children, false);
   // After the children, so a select finds the option that its value names.
-  for (const [name, value] of live) (element as any)[name] = value;
+  for (const [name, value] of live) put(element, name, value);
   if (dynamic.length) bind(element, dynamic);
   return element;
 }

@@ -44,7 +44,10 @@ export const jsxs: typeof jsx;
 export const jsxDEV: typeof jsx;
 export function Fragment(props: { children?: Static }): DocumentFragment;
 export function Fragment(props: { children?: Child }): Child;
-export function mount(parent: Element, ...children: Child[]): () => void;
+export function mount(
+  parent: Element | ShadowRoot,
+  ...children: Child[]
+): () => void;
 export type Item<T> = AsyncIterable<T> & {
   readonly value: T;
   readonly signal: AbortSignal;
@@ -85,6 +88,7 @@ A listener at an `on` key of a DOM event takes that event, with the element as i
 A live property takes the type of that property of the element, or a number.
 `class`, `id`, `title` and `hidden` take a text value or a boolean, and `style` takes a string.
 Each of these props also takes `null`, `undefined` and a dynamic value.
+A custom element tag of `HTMLElementTagNameMap` also takes each own property of its element type, with the type of that property, or a dynamic value of it.
 Any other prop, and any prop of another tag, takes any value.
 A JSX expression has the type `Child`.
 An async iterable child can produce any `Child` in its type, so a component yields JSX with no cast.
@@ -117,6 +121,8 @@ The runtime uses the global `document` when it creates nodes.
 - **SVG tag**: `svg`, `g`, `defs`, `symbol`, `use`, `image`, `switch`, `foreignObject`, `desc`, `metadata`, `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `text`, `tspan`, `textPath`, `linearGradient`, `radialGradient`, `stop`, `pattern`, `clipPath`, `mask`, `marker`, `filter`, `view`, `animate`, `animateMotion`, `animateTransform`, `set` or `mpath`, or a tag that starts with `fe` and an upper case letter.
 - **Live property**: `value`, `checked`, `selected`, `indeterminate` or `muted`.
   Its attribute sets only the initial state, or it has no attribute.
+- **Custom element**: an element that `document.createElement` creates for a tag with a `-`, while `globalThis.customElements` exists.
+- **Own property**: a property that a custom element has, and that `HTMLElement.prototype` does not have.
 
 ## Elements
 
@@ -129,14 +135,18 @@ The runtime uses the global `document` when it creates nodes.
 - JX-002: For each own enumerable key of `props` other than `children`, `jsx` MUST apply the value in key order.
   A dynamic value makes a dynamic prop (JX-060).
   A function value at a key that starts with `on` MUST become a listener, with `addEventListener`.
-  The event type is the rest of the key in lower case.
+  If the element has a property at the key in lower case, such as `onclick`, the event type is the rest of the key in lower case.
+  Otherwise the event type is the rest of the key as it is.
+  So `onClick` listens to `click`, and `onitemSelected` listens to `itemSelected`, which a web component can dispatch.
   `null`, `undefined` and `false` MUST set nothing.
-  Another value at a live property MUST be assigned to the property of the element, after JX-003 mounts the children.
+  Another value at a live property, or at an own property (JX-0B0), MUST be assigned to the property of the element, after JX-003 mounts the children.
   So a `<select value>` finds its options.
   `true` MUST set the attribute to `""`.
   An object whose `toString` is `Object.prototype.toString` MUST throw a `TypeError`, because it has no text of its own.
   So `style` takes a string, and not an object.
+  A function MUST throw a `TypeError`, because its text is its source code.
   Other values MUST set the attribute to `String(value)`.
+  So an array sets its items with commas between them, as `accept` and `srcset` need, and as `setAttribute` does.
 - JX-003: `jsx` MUST mount `props.children` into the element, as `mount` does, except that the element waits to drive its dynamic children (JX-02B).
 - JX-004: `jsx` MUST ignore `key`.
 - JX-005: `jsx` with a function `type` MUST return `type(props)` unchanged.
@@ -153,6 +163,31 @@ The runtime uses the global `document` when it creates nodes.
   The check reads the text as the URL parser does: it skips leading C0 controls and spaces, and it skips tabs and newlines.
   A link from data then cannot run code when the user clicks it.
   A dynamic prop reports the error (JX-065).
+- JX-00A: A static prop that JX-002, JX-008 or JX-009 rejects MUST throw before the element takes its children.
+  So the children of a `jsx` call that throws stay where they were.
+
+## Custom elements
+
+A web component takes data through its properties, and an attribute takes only text.
+So the runtime assigns the properties that the class of a custom element defines, and JSX needs no syntax for them.
+
+- JX-0B0: At an own property of a custom element, JX-002 and JX-063 MUST assign the value to the property.
+  Another key follows JX-002 and JX-064, so `id`, `class`, `slot`, `style`, `aria-*` and `data-*` stay attributes.
+- JX-0B1: Each property that `HTMLElement.prototype` has, also from its prototypes, is not an own property.
+  So data cannot reach `innerHTML`, `outerHTML`, `textContent` or an `on` property, and JX-008 and JX-009 stay true.
+  What a class does with its own properties is the concern of that class.
+- JX-0B2: If the tag of a custom element has no definition when `jsx` creates it, the runtime MUST hold each value of its props other than `children` and the `on` keys.
+  When `customElements.whenDefined` resolves for the tag, the runtime MUST call `customElements.upgrade` on the element, and then apply the held values in key order.
+  A dynamic prop holds its last output, which applies as JX-063 or JX-064 says.
+  If `whenDefined` rejects, the runtime MUST apply the held values as for an element that is not a custom element.
+  So a prop gives the same result, whether the definition comes before or after the element.
+- JX-0B3: A hold MUST NOT delay the children, the listeners, the start (JX-02B), the drives or the stop of the element.
+  Only the writes of the held values wait.
+- JX-0B4: A hold MUST NOT retain the element.
+  So an element of a tag that has no definition yet can be collected.
+- JX-0B5: An error that a held value throws when it applies MUST go to the boundary of the closest scope at or around the element (JX-092), or to `globalThis.reportError` if no boundary takes it.
+  The other held values continue.
+
 ## Children
 
 The runtime converts a child to nodes by these rules, in order.
@@ -205,6 +240,9 @@ The runtime converts a child to nodes by these rules, in order.
   So it stops each element that started under `parent`, also one that is not in the tree at the time of the call.
   Its later calls MUST do nothing.
   To stop a drive, the runtime closes its `select`, so each unfinished child gets `return()` (SE-120).
+- JX-02C: `mount` MUST accept a `ShadowRoot` as `parent`.
+  To find the scope above a node (JX-080), the runtime MUST continue from the `host` of a `ShadowRoot`.
+  So a mount in the shadow root of an element stops with the scope that holds the element.
 - JX-02B: An element that `jsx` creates with a dynamic child MUST wait, and MUST NOT create its `select` until the runtime places it.
   The runtime places nodes when `mount` places its children, and when a started host places nodes that were not its children.
   For each node that it places, the runtime MUST start each waiting element in the node and its descendants, in tree order.
@@ -222,7 +260,7 @@ A dynamic prop changes with its source, so a component needs no code to update a
   This `select` is apart from the drive of the children, so `mount` into the element keeps its dynamic props (JX-020).
 - JX-062: A pending state, and an output that is the `Object.is` same as the last applied output, MUST change nothing.
   A new dynamic prop has `undefined` as its last applied output.
-- JX-063: An output at a live property MUST be assigned to the property of the element as it is.
+- JX-063: An output at a live property, or at an own property (JX-0B0), MUST be assigned to the property of the element as it is.
 - JX-064: Another output MUST set the attribute as JX-002 does, except that `null`, `undefined` and `false` MUST remove the attribute.
 - JX-065: A rejected state, and an error that applying an output throws, MUST call `globalThis.reportError`.
   The element keeps its attribute or property, and the other dynamic props continue.

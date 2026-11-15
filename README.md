@@ -2,8 +2,9 @@
 
 Zero-dependency concurrent primitives for JavaScript and TypeScript.
 `Channel` moves values, `feed` fills channels from sources, and `select` combines sources into one state.
+JSX DOM runtime lets you build reactive components on top.
 
-14kB gzipped, tree-shakeable.
+18kB gzipped with all features, tree-shakeable.
 Features 100% coverage, including Stryker mutation tests.
 Requires Node 24 or later, or a browser with `Promise.withResolvers`. ESM only, and `require` loads it too.
 The examples use `using`, which needs a transpiler in most browsers.
@@ -87,9 +88,10 @@ for await (const { title, users } of state) render(title, users);
 Without `unwrap`, each source appears as a `Val` with `status`, `value`, `reason` and `done`.
 A select records each change as an ordered operation, so arrays can be replayed without diffing.
 `changes(state)` gives a reader of those operations at any time, and each read takes all of them since the last read.
-`outputs(state)` gives the current outputs, with no reader to finish.
 `changes(state, keys)` reads only some slots, and `watch(state, key)` gives the values of one slot, so a reader of one field wakes only when that field changes.
-`sort` and `reverse` move slots without restarting sources, and `sort` compares sources.
+`outputs(state)` gives the current outputs, with no reader to receive futher updates or finish.
+`sort` and `reverse` on an array state move slots without restarting sources.
+`sort` compares sources.
 `sortOutputs` moves slots the same way, and compares outputs once.
 
 A select starts at its first observer, which is a `for await` or a read of `changes`, and stays open until code closes it.
@@ -131,6 +133,10 @@ A promise or an async iterable is a child, so a channel of strings is live text.
 A fragment takes such children too.
 Props set attributes, and `value`, `checked`, `selected`, `indeterminate` and `muted` set properties.
 An `on` prop takes only a function, and a URL attribute rejects a `javascript:` URL, so data in a prop cannot run code.
+A custom element gets the props that its class defines as properties, so a web component takes objects, arrays and functions with no extra syntax.
+Its other props stay attributes, and a tag with no definition yet holds its props until `customElements.define`.
+An `on` prop keeps the case of a custom event, such as `onitemSelected`, and `onClick` still listens to `click`.
+`mount` also takes a `ShadowRoot`, so a web component can render its shadow tree with JSX.
 Each HTML and SVG tag has typed listeners and live properties, and takes any other attribute.
 A promise or an async iterable prop is live, and sets its attribute or property with each value.
 SVG tags get the SVG namespace, and an `xmlns` prop sets any namespace.

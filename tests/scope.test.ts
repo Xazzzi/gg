@@ -4,11 +4,20 @@ import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
 import { Channel, derive, iff, select } from "../src/index.ts";
 import { Catch, each, type Item, jsx, mount } from "../src/jsx.ts";
-import { fakeDocument, html } from "./dom.ts";
+import { FakeElement, fakeDocument, html } from "./dom.ts";
 
 const el = (tag = "div") => fakeDocument.createElement(tag) as any;
 const h = (type: any, props: any = {}) => jsx(type, props) as any;
 const collect = globalThis.gc as () => void;
+// One gc may keep garbage, as Stryker runs show, so this collects until ref is empty, in a new job each time.
+const freed = async (ref: WeakRef<object>) => {
+  for (let i = 0; i < 20; i++) {
+    await setImmediate();
+    collect();
+    if (!ref.deref()) return true;
+  }
+  return false;
+};
 const reported: unknown[] = [];
 const latest = <T>() =>
   new Channel<T>({ firstReceive: "latest", thenReceive: "latest" });
@@ -106,17 +115,11 @@ test("JX-081 an element whose drives finish leaves its scope, and the scopes tha
   await show(s.view, [outer, alone]);
   await show(s.view, "gone");
   outer = alone = undefined;
-  await setImmediate();
-  collect();
   // The host of b still runs under p, so the scope of p stays, and the scope of i left.
-  assert.deepEqual(
-    refs.map(ref => !!ref.deref()),
-    [true, false],
-  );
+  assert.equal(await freed(refs[1]), true);
+  assert.notEqual(refs[0].deref(), undefined);
   gate.resolve("late");
-  await setImmediate();
-  collect();
-  assert.equal(refs[0].deref(), undefined);
+  assert.equal(await freed(refs[0]), true);
   s.unmount();
 });
 
@@ -809,9 +812,7 @@ test("JX-035 JX-070 an entry keeps no earlier node that holds no scope", async (
   await show(row, h("u", {}));
   assert.equal(html(parent), "<ul><u></u></ul>");
   first = undefined;
-  await setImmediate();
-  collect();
-  assert.equal(ref.deref(), undefined);
+  assert.equal(await freed(ref), true);
 });
 
 test("HE-059 JX-086 derive takes the component result that it stops out of the drive, and a later output makes a new part for it", async () => {
@@ -953,6 +954,81 @@ const reporting = () => {
 };
 const failed = (error: any) => `failed ${error.message}`;
 const boom = (message = "boom") => Promise.reject(new Error(message));
+
+class Box extends FakeElement {
+  items: unknown;
+}
+
+test("JX-0B5 a held value that fails goes to the boundary around the element, and the other values apply", async () => {
+  const list = reporting(),
+    node = h("x-box0", { data: () => {}, items: [1], id: "i" });
+  const parent = el();
+  mount(
+    parent,
+    h(Catch, { fallback: failed, children: h("section", { children: node }) }),
+  );
+  customElements.define("x-box0", Box as any);
+  await setImmediate();
+  assert.equal(
+    html(parent),
+    "<div><section>failed data does not take a function</section></div>",
+  );
+  assert.deepEqual(node.items, [1]);
+  assert.deepEqual([...node.attributes], [["id", "i"]]);
+  // With no boundary, the error goes to reportError.
+  h("x-box1", { data: () => {} });
+  customElements.define("x-box1", Box as any);
+  await setImmediate();
+  assert.match(String(list[0]), /data does not take a function/);
+  // Only a shadow root continues from its host (JX-02C), so a host field of an element leads to no scope.
+  const loose = h("x-box3", { data: () => {} }),
+    anchor = h("b", {}),
+    other = el();
+  mount(other, h(Catch, { fallback: failed, children: anchor }));
+  loose.host = anchor;
+  customElements.define("x-box3", Box as any);
+  await setImmediate();
+  assert.equal(html(other), "<div><b></b></div>");
+  assert.equal(list.length, 2);
+});
+
+test("JX-0B3 a hold does not delay the stop of the element", async () => {
+  const queue = counted(),
+    node = h("x-box2", { items: [1], children: queue.source });
+  const off = mount(el(), node);
+  await setImmediate();
+  assert.equal(queue.stats.pulls, 1);
+  off();
+  await setImmediate();
+  assert.equal(queue.stats.returns, 1);
+  customElements.define("x-box2", Box as any);
+  await setImmediate();
+  assert.deepEqual(node.items, [1]);
+});
+
+test("JX-02C a mount in a shadow root binds to the scope that holds its host, and stops with it", async () => {
+  const queue = counted(),
+    host = el("section"),
+    root = host.attachShadow({ mode: "open" }),
+    parent = el();
+  const off = mount(parent, host);
+  mount(root, h("p", { children: queue.source }));
+  queue.send("a");
+  await setImmediate();
+  assert.equal(html(root), "<p>a</p>");
+  off();
+  await setImmediate();
+  assert.equal(queue.stats.returns, 1);
+  // Only a shadow root continues from its host, so an element with a host property binds to no scope.
+  const other = counted(),
+    owner = el(),
+    loose = Object.assign(el(), { host: owner });
+  const stop = mount(el(), owner);
+  mount(loose, h("p", { children: other.source }));
+  stop();
+  await setImmediate();
+  assert.equal(other.stats.returns, 0);
+});
 
 test("JX-090 Catch needs one element child and a fallback function, and gives the element", () => {
   const div = el();

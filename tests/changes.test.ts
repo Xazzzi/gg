@@ -402,6 +402,35 @@ test("SE-04A a later read releases a waiting flush, and each flush waits for its
   s[CHAN].close();
 });
 
+test("SE-04A a reader releases a flush that a consumer has not read", async () => {
+  const s = select({ a: 1 });
+  const r = changes(s);
+  await r.next();
+  await s[Symbol.asyncIterator]().next();
+  s.a = 2;
+  assert.deepEqual(await r.next(), set(2, 1));
+  s.a = 3;
+  assert.deepEqual(await r.next(), set(3, 2));
+  s[CHAN].close();
+});
+
+test("SE-04A under ackStyle all, a reader does not release a flush that a consumer has not read", async () => {
+  const s = select({ a: 1 }, { ackStyle: "all" });
+  const r = changes(s);
+  await r.next();
+  const consumer = s[Symbol.asyncIterator]();
+  await consumer.next();
+  s.a = 2;
+  assert.deepEqual(await r.next(), set(2, 1));
+  s.a = 3;
+  const read = r.next();
+  await setImmediate();
+  assert.ok(pending(read));
+  await consumer.next();
+  assert.deepEqual(await read, set(3, 2));
+  s[CHAN].close();
+});
+
 test("SE-04A under ackStyle all, only a snapshot consumer releases a flush", async () => {
   const s = select({ a: 1 }, { ackStyle: "all" });
   const r = changes(s);

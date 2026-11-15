@@ -168,6 +168,10 @@
     return `${path}:${match[2]}:${match[3]}`;
   };
 
+  // The parent of a node, or the host of a shadow root, so a mount in a shadow root hangs under its host.
+  const above = (node: any) =>
+    node.parentNode ?? (node.nodeType === 11 ? node.host : null);
+
   const tagOf = (node: any) => {
     const id = node.id ? `#${node.id}` : "",
       classes = node.classList?.length
@@ -584,8 +588,9 @@
     };
     // A mount of static children registers nothing, so the walk starts at the closest node around all hosts.
     let root: Node | null | undefined;
+    // A mount in a shadow root is not in the document tree, and hangs under its host.
     for (const [target] of mounts)
-      if ((target as Node).isConnected)
+      if ((target as Node).getRootNode?.() === document)
         for (root ??= target as Node; root && !root.contains(target as Node); )
           root = root.parentNode;
     if (root && root.nodeType !== 1) root = document.body;
@@ -608,7 +613,7 @@
       const self = e.kind === "mount" && shown.get(t);
       if (self) parent.set(e.id, self.id);
       else
-        for (let x = t.parentNode; x; x = x.parentNode) {
+        for (let x = above(t); x; x = above(x)) {
           const up = shown.get(x) ?? mounts.get(x);
           if (up && up !== e) {
             parent.set(e.id, up.id);
@@ -1008,7 +1013,7 @@
   // The component that shows a node, or a node around it, as for the node that the Elements panel selects.
   hook.ownerOf = (node: Node | null | undefined) => {
     const { shown } = scan();
-    for (let x = node; x; x = x.parentNode) {
+    for (let x: any = node; x; x = above(x)) {
       const e = shown.get(x);
       if (e) return e.id;
     }
@@ -1040,7 +1045,7 @@
     // The walk runs now, so a node past the limit has its row before this returns.
     focus = node ? new WeakRef(node) : undefined;
     if (wantTree && wantElements) elements(), (sentTree = ""), schedule();
-    for (let x = node; x; x = x.parentNode) {
+    for (let x: any = node; x; x = above(x)) {
       const id = nodeIds.get(x);
       if (id && walkedNodes.has(id)) return id;
     }

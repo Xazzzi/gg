@@ -1022,6 +1022,12 @@ test("DV-051 each ends its reader of state when it stops", async () => {
     off();
     await setImmediate();
     assert.ok(events.includes("end"));
+    // With no mount, no scope binds the reader, so each ends it.
+    events.length = 0;
+    const it = each(state, () => el());
+    await it.next();
+    await it.return(undefined);
+    assert.deepEqual(events, ["end"]);
   } finally {
     delete g[HOOK];
   }

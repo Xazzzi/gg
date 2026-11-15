@@ -82,10 +82,50 @@ export class FakeElement extends FakeNode {
   addEventListener(type: string, listener: unknown) {
     this.listeners.push([type, listener]);
   }
+  attachShadow() {
+    return Object.assign(new FakeNode(11), { host: this });
+  }
 }
+// The browser has a handler property for each DOM event on the prototype of an element.
+for (const type of ["click", "dblclick", "input", "change", "keydown", "blur"])
+  Object.defineProperty(FakeElement.prototype, `on${type}`, {
+    value: null,
+    writable: true,
+  });
+
+// A registry of custom elements: an element of a defined tag is made by its class, which takes the tag.
+const classes = new Map<string, typeof FakeElement>(),
+  definitions = new Map<string, PromiseWithResolvers<void>>();
+const definition = (tag: string) => {
+  let wait = definitions.get(tag);
+  if (!wait) definitions.set(tag, (wait = Promise.withResolvers()));
+  return wait;
+};
+export const fakeCustomElements = {
+  define(tag: string, type: typeof FakeElement) {
+    classes.set(tag, type);
+    definition(tag).resolve();
+  },
+  get: (tag: string) => classes.get(tag),
+  // A name that the HTML standard reserves, such as font-face, is not valid.
+  whenDefined: (tag: string) =>
+    tag === "font-face"
+      ? Promise.reject(new SyntaxError(`${tag} is not a valid name`))
+      : definition(tag).promise,
+  // Gives an element made before the definition of its tag the class, with the fields of that class, and leaves an element of no definition.
+  upgrade(node: FakeElement) {
+    const { tagName } = node,
+      type = classes.get(tagName);
+    if (!type) return;
+    Object.setPrototypeOf(node, type.prototype);
+    const fresh: any = new type(tagName);
+    for (const key of Object.keys(fresh))
+      if (!Object.hasOwn(node, key)) (node as any)[key] = fresh[key];
+  },
+};
 
 export const fakeDocument = {
-  createElement: (tag: string) => new FakeElement(tag),
+  createElement: (tag: string) => new (classes.get(tag) ?? FakeElement)(tag),
   createElementNS: (namespace: string, tag: string) =>
     new FakeElement(tag, namespace),
   createTextNode: (data: string) => new FakeText(data),
@@ -104,3 +144,5 @@ export const html = (node: any): string =>
           .join("")}>${node.childNodes.map(html).join("")}</${node.tagName}>`;
 
 (globalThis as any).document = fakeDocument;
+(globalThis as any).customElements = fakeCustomElements;
+(globalThis as any).HTMLElement = FakeElement;

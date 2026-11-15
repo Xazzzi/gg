@@ -1030,7 +1030,8 @@ class Select {
     const length = +(value as number), // Unlike Number(), this throws on a BigInt
       size = this.#target.length;
     if (length >>> 0 !== length) throw new RangeError("Invalid array length");
-    if (length < size) this.#splice(length, size, []);
+    // Stryker disable next-line EqualityOperator,ArithmeticOperator: an equal length splices nothing on either branch, and splice clamps a larger count
+    if (length < size) this.#splice(length, size - length, []);
     else this.#splice(size, 0, blanks(length - size));
   }
 

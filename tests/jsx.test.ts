@@ -54,7 +54,7 @@ test("JX-002 applies props in key order", () => {
   const node = h("input", {
     onClick: click,
     onkeydown: undefined,
-    data: fn,
+    data: "x",
     a: null,
     b: undefined,
     c: false,
@@ -67,13 +67,32 @@ test("JX-002 applies props in key order", () => {
   assert.deepEqual(
     [...node.attributes],
     [
-      ["data", `${fn}`],
+      ["data", "x"],
       ["d", ""],
       ["e", "0"],
       ["f", "s"],
     ],
   );
   assert.equal(html(h("a", { href: "x", children: "t" })), '<a href="x">t</a>');
+  assert.throws(
+    () => h("p", { data: fn }),
+    /TypeError: data does not take a function/,
+  );
+});
+
+test("JX-002 an event type keeps its case, unless the element has a handler property for the lower case key", () => {
+  const listen = () => {};
+  const node = h("div", {
+    onClick: listen,
+    onDblClick: listen,
+    onitemSelected: listen,
+    "onsl-change": listen,
+    onDOMContentLoaded: listen,
+  });
+  assert.deepEqual(
+    node.listeners.map(([type]: [string]) => type),
+    ["click", "dblclick", "itemSelected", "sl-change", "DOMContentLoaded"],
+  );
 });
 
 test("JX-002 an object with no text of its own throws at an attribute", () => {
@@ -1753,6 +1772,191 @@ test("JX-089 a promise row that rejects after its item leaves reports the error"
   assert.deepEqual(reported, [failure]);
 });
 
+// A card defines items and render as fields, and label and note as accessors, which log each assignment with the count of children.
+class Card extends FakeElement {
+  items: unknown = "none";
+  render: unknown;
+  log: string[] = [];
+  get label() {
+    return this.log.at(-1);
+  }
+  set label(value: unknown) {
+    this.log.push(`label ${value} ${this.childNodes.length}`);
+  }
+  get note() {
+    return this.log.at(-1);
+  }
+  set note(value: unknown) {
+    this.log.push(`note ${value} ${this.childNodes.length}`);
+  }
+}
+let tags = 0;
+/** Gives a new tag, which a test can define when it chooses. */
+const tag = () => `x-card${tags++}`;
+/** Defines a new tag as a Card, and gives it. */
+const card = () => {
+  const name = tag();
+  customElements.define(name, Card as any);
+  return name;
+};
+// Each own property of a fake element, and a sink of the prototype of each element.
+Object.defineProperty(FakeElement.prototype, "innerHTML", {
+  set(value) {
+    this.sunk = value;
+  },
+});
+
+test("JX-0B0 a custom element gets its own properties as properties after its children, and attributes for the rest", () => {
+  const items = [1, 2],
+    render = () => "r";
+  const node = h(card(), {
+    items,
+    label: { text: "l" },
+    render,
+    id: "i",
+    class: "c",
+    "data-x": 1,
+    slot: null,
+    children: "t",
+  });
+  assert.ok(node instanceof Card);
+  assert.equal(node.items, items);
+  assert.deepEqual(node.log, ["label [object Object] 1"]);
+  assert.equal(node.render, render);
+  assert.deepEqual(
+    [...node.attributes],
+    [
+      ["id", "i"],
+      ["class", "c"],
+      ["data-x", "1"],
+    ],
+  );
+  // An element of a dashed tag with no customElements is not a custom element.
+  const registry = globalThis.customElements;
+  delete (globalThis as any).customElements;
+  try {
+    assert.throws(() => h("x-plain", { items: {} }), TypeError);
+  } finally {
+    (globalThis as any).customElements = registry;
+  }
+  // xmlns makes an element that is not a custom element.
+  assert.throws(() => h(card(), { xmlns: "urn:x", items: {} }), TypeError);
+  // A field of an element that is not a custom element stays an attribute.
+  assert.deepEqual(
+    [...h("div", { tagName: "x" }).attributes],
+    [["tagName", "x"]],
+  );
+});
+
+test("JX-0B0 JX-063 a dynamic prop assigns an own property as it is", async () => {
+  const source = latest<unknown>(),
+    node = h(card(), { items: source });
+  mount(el(), node);
+  source.send([1]);
+  await setImmediate();
+  assert.deepEqual(node.items, [1]);
+  source.send(null);
+  await setImmediate();
+  assert.equal(node.items, null);
+  assert.deepEqual([...node.attributes], []);
+});
+
+test("JX-0B1 a property of HTMLElement.prototype is no own property, so data reaches no sink", () => {
+  const node = h(card(), { innerHTML: "<b>x</b>", title: "t" });
+  assert.equal(node.sunk, undefined);
+  assert.deepEqual(
+    [...node.attributes],
+    [
+      ["innerHTML", "<b>x</b>"],
+      ["title", "t"],
+    ],
+  );
+  assert.throws(() => h(card(), { onclick: "alert(1)" }), TypeError);
+});
+
+test("JX-0B2 JX-0B3 a custom element of a tag with no definition holds its values, and applies them in key order after the definition", async () => {
+  const name = tag(),
+    source = latest<unknown>(),
+    note = latest<unknown>(),
+    clicks: unknown[] = [];
+  const node = h(name, {
+    note,
+    label: "a",
+    items: source,
+    id: "i",
+    onClick: (event: unknown) => clicks.push(event),
+    children: [h("p", { children: latest<string>() }), "t"],
+  });
+  assert.ok(!(node instanceof Card));
+  assert.deepEqual([...node.attributes], []);
+  assert.equal(node.listeners.length, 1);
+  const parent = el();
+  mount(parent, node);
+  source.send("x");
+  source.send([2]);
+  note.send("n");
+  await setImmediate();
+  // The children and the drives run while the values wait.
+  assert.equal(html(parent), `<div><${name}><p></p>t</${name}></div>`);
+  assert.deepEqual([...node.attributes], []);
+  const other = h(name, { label: "b" });
+  customElements.define(name, Card as any);
+  await setImmediate();
+  assert.ok(node instanceof Card);
+  // The note comes first in key order, though its output came after the label.
+  assert.deepEqual(node.log, ["note n 2", "label a 2"]);
+  assert.deepEqual(other.log, ["label b 0"]);
+  assert.deepEqual(node.items, [2]);
+  assert.deepEqual([...node.attributes], [["id", "i"]]);
+  source.send([3]);
+  await setImmediate();
+  assert.deepEqual(node.items, [3]);
+});
+
+test("JX-0B2 a dynamic prop with no output before the definition keeps the field of the class", async () => {
+  const name = tag(),
+    node = h(name, { items: latest<unknown>() });
+  mount(el(), node);
+  customElements.define(name, Card as any);
+  await setImmediate();
+  assert.equal(node.items, "none");
+});
+
+test("JX-0B2 a tag that whenDefined rejects applies its values as attributes", async () => {
+  reported.length = 0;
+  const node = h("font-face", { label: "a", items: () => {}, id: "i" });
+  await setImmediate();
+  assert.deepEqual(
+    [...node.attributes],
+    [
+      ["label", "a"],
+      ["id", "i"],
+    ],
+  );
+  assert.match(String(reported[0]), /items does not take a function/);
+  assert.equal(reported.length, 1);
+  // A later element of the tag waits for whenDefined again.
+  const next = h("font-face", { id: "j" });
+  await setImmediate();
+  assert.deepEqual([...next.attributes], [["id", "j"]]);
+});
+
+test("JX-0B4 a hold retains no element, and a definition skips a collected one", async () => {
+  const registry = new FinalizationRegistry<() => void>(done => done()),
+    name = tag();
+  let collected = false;
+  (() => {
+    registry.register(h(name, { items: [1] }), () => (collected = true));
+  })();
+  for (let i = 0; i < 20 && !collected; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  assert.ok(collected);
+  customElements.define(name, Card as any);
+  await setImmediate();
+});
+
 test("JX-008 a value at an on key that is no function throws", () => {
   for (const value of ["alert(1)", true, 0])
     assert.throws(
@@ -1786,6 +1990,18 @@ test("JX-009 a javascript: URL throws at a URL attribute, as the URL parser read
   });
   assert.equal(safe.attributes.get("href"), "/javascript:x");
   assert.equal(safe.attributes.get("title"), "javascript:x");
+});
+
+test("JX-00A a rejected static prop throws before the element takes its children", () => {
+  for (const props of [
+    { href: "javascript:x" },
+    { title: {} },
+    { onclick: "x" },
+  ]) {
+    const child = el("b");
+    assert.throws(() => h("a", { ...props, children: child }), TypeError);
+    assert.equal(child.parentNode, null);
+  }
 });
 
 test("JX-009 JX-065 a dynamic javascript: URL reports a TypeError, and keeps the attribute", async () => {

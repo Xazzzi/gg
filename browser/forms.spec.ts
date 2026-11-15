@@ -131,3 +131,17 @@ test("a write to the state sets each control", async ({ page }) => {
   await expect.poll(async () => (await state(page)).name).toBe("Ada");
   await expect.poll(() => controls(page)).toEqual(await state(page));
 });
+
+test("a web component takes the languages as a property, and its custom event writes the state", async ({
+  page,
+}) => {
+  const chips = page.locator("chip-list button");
+  await expect(chips).toHaveText(["TypeScript"]);
+  await row(page, "Languages")
+    .locator("select")
+    .selectOption(["TypeScript", "Go"]);
+  await expect(chips).toHaveText(["TypeScript", "Go"]);
+  await chips.first().click();
+  await expect(chips).toHaveText(["Go"]);
+  expect((await state(page)).languages).toEqual(["Go"]);
+});

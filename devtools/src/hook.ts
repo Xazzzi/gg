@@ -27,6 +27,8 @@
     hidden?: boolean;
     via?: number; // The component that holds the item of this channel, which names a reader with no own frame
     type?: WeakRef<(...args: never) => unknown>; // A component's function, which the panel can inspect
+    drive?: boolean; // A select that a host made, which no app code holds
+    place?: Entry; // The mount of the element that a component returned, which leaves with the component
   };
 
   const session = Math.random().toString(36).slice(2);
@@ -36,6 +38,7 @@
   // The component props that hold each object, so an item that registers later can link them to its channel.
   const holders = new WeakMap<object, [Entry, number][]>();
   const removed: [number, number][] = [];
+  let trimmed = 0; // The seq of the last removal that the cap of removed dropped
   let seq = 0,
     nextId = 1,
     sentSeq = 0,
@@ -57,9 +60,11 @@
     if (!e) return;
     if (owner) (owner.items as number)--, touch(owner);
     entries.delete(id);
+    if (e.place) drop(e.place.id);
     removed.push([id, ++seq]);
     schedule();
-    if (removed.length > 1000) removed.shift();
+    if (removed.length > 1000)
+      trimmed = (removed.shift() as [number, number])[1];
   };
   const gone = new FinalizationRegistry<number>(drop);
   const readerGone = new FinalizationRegistry<[number, number]>(([id, r]) =>
@@ -262,6 +267,15 @@
       touch(e);
       record(e, "detach", "", { reader: reader.id });
     } else if (event === "end") {
+      const select = e.owner ? entries.get(e.owner) : undefined;
+      // A stopped drive does no more work, so it leaves now, as an ended derive does, unless the panel shows it.
+      if (select?.drive && inspect !== e.id && inspect !== select.id) {
+        const host = select.owner ? entries.get(select.owner) : undefined;
+        // A host stops its drives only when its element leaves the runtime, so the element leaves too.
+        if (host?.kind === "mount" && host.id !== inspect) drop(host.id);
+        else if (host?.select === select.id) host.select = undefined;
+        return (drop(select.id), drop(e.id));
+      }
       e.state = a ? "failed" : "closed";
       e.result = preview(b);
       record(e, "end", `${e.state} ${e.result}`);
@@ -324,6 +338,7 @@
       e.hidden = true;
       const inner = byTarget.get(target);
       if (kind === "component" && inner?.kind === "component") e.inner = inner;
+      if (kind === "component" && inner?.kind === "mount") e.place = inner;
       byTarget.set(target, e);
       e.state = "live";
       if (kind === "mount") e.sourceText = tagOf(target);
@@ -346,6 +361,8 @@
         e.state = "static";
       return (event: string) => {
         if (event !== "end") return;
+        // Only each ends a static result, when its row leaves with the nodes, so it leaves now unless the panel shows it.
+        if (e.state === "static" && e.id !== inspect) return drop(e.id);
         e.state = "ended";
         record(e, "end", "");
       };
@@ -382,6 +399,7 @@
       inspectors.set(target, detail.slots);
       e.state = "waiting";
       e.reports = 0;
+      e.drive = !!detail.owner; // Only a drive registers a select under an owner
       e.options = [detail.array ? "array" : "object", detail.unwrap && "unwrap"]
         .filter(Boolean)
         .join(", ");
@@ -658,6 +676,8 @@
       hidden,
       label,
       via,
+      drive,
+      place,
       ...rest
     } = e;
     let consumers = 0;
@@ -827,6 +847,8 @@
   const treeKind = (e: Entry) =>
     e.kind === "component" || e.kind === "each" || e.kind === "mount";
   const poll = (since: number): GG.Poll => {
+    // A panel that missed removals that the cap dropped cannot apply a diff, so it gets a full batch.
+    if (since < trimmed) since = 0;
     if (!since) (siteIds = new Map()), (newSites = []);
     const shown = entries.get(inspect),
       details = [

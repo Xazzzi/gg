@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "js-framework-benchmark": {
-    "frameworkVersion": "0.2.0",
+    "frameworkVersion": "0.3.0",
     "frameworkHomeURL": "https://github.com/Xazzzi/gg",
     "language": "TypeScript",
     "repoURL": "https://github.com/Xazzzi/gg"

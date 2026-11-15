@@ -925,6 +925,36 @@ test("DV-001 DV-002 iff registers as a derive with its source and map", () => {
   }
 });
 
+test("DV-045 each ends a static result of an item that leaves, and the rest when it stops", async () => {
+  const counts = ends();
+  try {
+    const state = select(["a", "b", "c"], open);
+    await setImmediate();
+    const results: object[] = [];
+    const Row = (_: { item: unknown }) => el();
+    mount(
+      el(),
+      each(state, item => {
+        const result = jsx(Row, { item }) as object;
+        results.push(result);
+        return result as Child;
+      }),
+    );
+    await setImmediate();
+    const [a, b, c] = results;
+    assert.equal(counts.size, 0);
+    state.splice(1, 1);
+    await setImmediate();
+    assert.equal(counts.get(b), 1);
+    assert.equal(counts.get(a), undefined);
+    state[CHAN].close();
+    await setImmediate();
+    for (const result of [a, b, c]) assert.equal(counts.get(result), 1);
+  } finally {
+    delete g[HOOK];
+  }
+});
+
 test("DV-045 a row that leaves ends a finished part of its child one time", async () => {
   const counts = ends();
   try {
@@ -952,6 +982,26 @@ test("DV-045 a row that leaves ends a finished part of its child one time", asyn
     state.pop();
     await setImmediate();
     assert.equal(counts.get(result), 1);
+  } finally {
+    delete g[HOOK];
+  }
+});
+
+test("DV-051 each ends its reader of state when it stops", async () => {
+  const events: string[] = [];
+  g[HOOK] = (kind: string) =>
+    kind === "reader" ? (event: string) => events.push(event) : undefined;
+  try {
+    const state = select(["a"], open),
+      off = mount(
+        el(),
+        each(state, () => el()),
+      );
+    await setImmediate();
+    assert.ok(!events.includes("end"));
+    off();
+    await setImmediate();
+    assert.ok(events.includes("end"));
   } finally {
     delete g[HOOK];
   }

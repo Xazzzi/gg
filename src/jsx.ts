@@ -4,6 +4,7 @@ import {
   attribute,
   bind,
   ends,
+  guard,
   isDynamic,
   LIVE,
   quitSource,
@@ -71,7 +72,7 @@ export declare namespace JSX {
 const SVG = "http://www.w3.org/2000/svg";
 // Children exist before their parent, so a tag alone picks the namespace.
 const SVG_TAGS = new Set(
-  "svg g defs symbol use image switch foreignObject desc metadata path rect circle ellipse line polyline polygon text tspan textPath linearGradient radialGradient stop pattern clipPath mask marker filter view animate animateMotion animateTransform set mpath".split(
+  "svg g defs symbol use image switch foreignObject desc metadata path rect circle ellipse line polyline polygon text tspan textPath linearGradient radialGradient stop pattern clipPath mask marker filter view animate animateMotion animateTransform set mpath feBlend feColorMatrix feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDistantLight feDropShadow feFlood feFuncA feFuncB feFuncG feFuncR feGaussianBlur feImage feMerge feMergeNode feMorphology feOffset fePointLight feSpecularLighting feSpotLight feTile feTurbulence".split(
     " ",
   ),
 );
@@ -107,7 +108,7 @@ export function jsx(
   const element =
     typeof xmlns === "string"
       ? document.createElementNS(xmlns, type)
-      : SVG_TAGS.has(type) || /^fe[A-Z]/.test(type)
+      : SVG_TAGS.has(type)
         ? document.createElementNS(SVG, type)
         : document.createElement(type);
   const live: [string, unknown][] = [],
@@ -132,6 +133,22 @@ export function jsx(
   for (const [name, value] of live) (element as any)[name] = value;
   if (dynamic.length) bind(element, dynamic);
   return element;
+}
+
+/** Makes its one element child a boundary, which shows fallback in place of what is inside it after a failure (JX-090). */
+export function Catch({
+  fallback,
+  children,
+}: {
+  fallback: (error: unknown) => Child;
+  children?: Child;
+}): Element {
+  if ((children as Node | undefined)?.nodeType !== 1)
+    throw new TypeError("Catch needs one element child");
+  if (typeof fallback !== "function")
+    throw new TypeError("Catch fallback must be a function");
+  guard(children as Element, fallback);
+  return children as Element;
 }
 
 export const jsxs = jsx,

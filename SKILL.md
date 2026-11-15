@@ -113,6 +113,17 @@ async function* Title({ title }: { title: Channel<string> }) {
 - Provide a `Channel` or a `select` for a value that changes.
 - Pass app state through context instead of module-level constants, so a test mounts a component under its own provider.
 
+## Errors
+
+- `<Catch fallback={error => <p>Failed</p>}><section>…</section></Catch>` makes its one element child a boundary (JX-090).
+- A failure inside it is a rejected child or prop, a bad output, or a drive that throws (JX-092).
+  The boundary stops what it holds, and mounts `fallback(error)` into its element (JX-093).
+- A boundary takes one failure, so a failure of its fallback goes to the boundary above.
+- With no boundary, a failure goes to `reportError`, and the other entries continue.
+- A failure of a row that left `each` only goes to `reportError` (JX-094).
+- Wrap the element of a row in `Catch` to keep a failing row from replacing the whole list.
+- A component cannot catch the failure of a view that it yielded (JX-041), so use `Catch` or `catching`.
+
 ## Lists with each
 
 - `each(state, render)` needs a select proxy with an array shape (JX-030).

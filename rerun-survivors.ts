@@ -1,4 +1,4 @@
-// Reruns Stryker on the lines of the surviving mutants of the last report, and on the src lines changed since HEAD.
+// Reruns Stryker on the lines of the surviving mutants of the last report, and on the src lines changed since HEAD, or in HEAD when none changed.
 // A survivor line that an edit changed is found again by its text, or else left to the changed lines.
 import { execSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -31,7 +31,10 @@ for (const [file, info] of Object.entries<any>(report.files)) {
 }
 
 // Each hunk of a zero-context diff names the new lines as +start,count.
-const diff = execSync("git diff -U0 HEAD -- src", { encoding: "utf8" });
+// With no src change since HEAD, the lines of the last commit rerun.
+const changed = (base: string) =>
+  execSync(`git diff -U0 ${base} -- src`, { encoding: "utf8" });
+const diff = changed("HEAD") || changed("HEAD^");
 let file = "";
 for (const line of diff.split("\n")) {
   if (line.startsWith("+++ ")) file = line.slice(6);

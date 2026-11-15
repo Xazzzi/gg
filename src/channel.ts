@@ -166,6 +166,7 @@ export class Channel<T, TReturn = undefined>
     this.#then = thenReceive;
     this.#stops = stopStyle === "stop";
     if (ackStyle === "all") this.#readers = new Set();
+    // Stryker disable next-line ConditionalExpression,StringLiteral,ArrayDeclaration: without the queue each consumer wakes, and all but one block again, so only the work differs
     if (thenReceive === "unread") this.#queue = [];
     if (firstReceive === "first" || firstReceive === "unread")
       this.#anchor = this.#tail;

@@ -130,7 +130,8 @@ async function* RowView({ row }: { row: Item<Row> }) {
   ) as HTMLTableRowElement;
   yield tr;
   for await (const item of row) {
-    label.textContent = item.label;
+    // A new text node relays out the whole table, so an unchanged label stays.
+    if (label.textContent !== item.label) label.textContent = item.label;
     tr.className = item.selected ? "danger" : "";
   }
 }

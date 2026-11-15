@@ -1102,6 +1102,15 @@ test("CH-073 return and throw end a pending next at once, which reads no value",
   assert.deepEqual(await iter(ch).next(), val(2));
 });
 
+test("CH-073 return ends a pending next at once on a channel that wakes all consumers", async () => {
+  const ch = new Channel<number>({ thenReceive: "every" }),
+    it = iter(ch),
+    pending = it.next();
+  await setImmediate();
+  assert.deepEqual(await it.return(undefined), end());
+  assert.deepEqual(await pending, end());
+});
+
 test("CH-074 break detaches", async () => {
   const ch = new Channel<number>();
   ch.send(1);
@@ -1396,4 +1405,17 @@ test("CH-075 a consumer that ends with no value to read wakes no one, so the que
   assert.deepEqual(await reads[1], val(1));
   assert.ok(isPending(reads[2] as Promise<unknown>));
   ch.close();
+});
+
+test("CH-075 close ends the consumers that block, and skips the ones that halted", async () => {
+  const ch = new Channel<number>(QUEUE),
+    a = iter(ch),
+    b = iter(ch),
+    first = a.next(),
+    second = b.next();
+  await setImmediate();
+  await a.return(undefined);
+  assert.deepEqual(await first, end());
+  ch.close();
+  assert.deepEqual(await second, end());
 });

@@ -465,3 +465,28 @@ test("SE-14E a reader that the collector took before the registry ran is skipped
   assert.deepEqual(await kept.next(), set(1, 0));
   assert.deepEqual(await kept.next(), done);
 });
+
+test("SE-14E a reader whose read settled is not retained", async () => {
+  const keys = await started(select({ a: 0 as unknown }, open));
+  (() => void changes(keys).next())();
+  keys.a = 1;
+  await setImmediate();
+  assert.ok(await collected(value => ((keys.a = value), (keys.a = 0))));
+});
+
+test("SE-14E SE-14C a log whose last reader the collector took drops its operations", async () => {
+  const s = select({ a: 0 as unknown }, { autoStart: true, autoClose: false });
+  await s[Symbol.asyncIterator]().next(); // The next flush blocks at publish, so operations would collect
+  s.a = 1;
+  await setImmediate();
+  let gone = false;
+  const registry = new FinalizationRegistry<number>(() => (gone = true));
+  (() => registry.register(changes(s), 0))();
+  for (let i = 0; i < 20 && !gone; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  await setImmediate(); // The registry of the log may run after this one
+  assert.ok(gone);
+  assert.ok(await collected(value => ((s.a = value), (s.a = 2))));
+});

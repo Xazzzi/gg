@@ -60,8 +60,8 @@ These words have one meaning in all specs:
 - `Channel` has no buffer limit. A limit is not a concern of the producer, and a producer MUST NOT see a different behaviour because of one. A producer that must not run ahead awaits `asend`.
 - `break` detaches one consumer and leaves the sources open, because a channel cannot know that no other consumer attaches later. `using` or `close` ends them. The library gives no warning for a state that code abandons.
 - One failure ends a state: a rejection under `unwrap` and a throw of `mapSnapshot` fail the channel. Code that must continue reads `Val`s without `unwrap`, or wraps the source with `catching`.
-- The JSX runtime has no error boundary. A component uses `try` around the source that it reads, or `catching`.
-- A failure that no code can catch is loud. The runtime reports it with `reportError`, and a drive that fails to apply a report stops (JX-088, JX-089).
+- The JSX runtime has error boundaries along scopes (JX-090). A component cannot catch the failure of a view that it yielded, because an async generator queues `throw()` behind a pending `next()` (JX-041). A component that must continue after an error uses `try` around the source that it reads, or `catching`.
+- A failure that no code can catch is loud. The nearest boundary takes it, or the runtime reports it with `reportError`, and a drive that fails to apply a report stops (JX-088, JX-092). An error of a child that no view shows goes only to `reportError` (JX-094).
 - `jsx` follows the DOM, except that it rejects a text at an `on` key and a `javascript:` URL (JX-008, JX-009). These are the two ways in which data in a prop runs code. Other risks, such as `srcdoc`, a `script` child or a tag name from data, stay with the code that passes the data.
 - The package has one entry for the primitives and the JSX runtime, while a bundler can drop the runtime. The runtime adds about 3.3 kB gzipped. A separate entry is due only if it adds more than 4 kB.
 - A proxy read returns a source, because `State` keeps the input types.
@@ -118,10 +118,10 @@ The `./jsx-runtime` and `./jsx-dev-runtime` entries MUST export the names of `js
 No other name is public.
 The package MUST set `sideEffects: false`, so that a bundler can remove unused helpers.
 
-| Spec         | Values                                                                                             | Types                                                                                             |
-| ------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `channel.md` | `Channel`, `latest`, `StopError`                                                                   | `ChannelOptions`, `FirstReceive`, `ThenReceive`, `StopStyle`, `AckStyle`                          |
-| `feed.md`    | `feed`                                                                                             | `Source`, `FeedOptions`                                                                           |
-| `select.md`  | `select`, `changes`, `outputs`, `watch`, `CHAN`                                                    | `SelectShape`, `SelectOptions`, `Snapshot`, `Unwrapped`, `State`, `Val`, `Op`, `Changes`, `Watch` |
-| `helpers.md` | `abortable`, `applyOps`, `catching`, `derive`, `iff`, `isVal`, `spread`                            | `Caught`, `Derived`, `Spread`                                                                     |
-| `jsx.md`     | `jsx`, `jsxs`, `jsxDEV`, `Fragment`, `mount`, `each`, `createContext`, `Provide`, `consume`, `use` | `Static`, `Dynamic`, `Child`, `Props`, `Item`, `Context`, `JSX` (also entry `./jsx-runtime`)      |
+| Spec         | Values                                                                                                      | Types                                                                                             |
+| ------------ | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `channel.md` | `Channel`, `latest`, `StopError`                                                                            | `ChannelOptions`, `FirstReceive`, `ThenReceive`, `StopStyle`, `AckStyle`                          |
+| `feed.md`    | `feed`                                                                                                      | `Source`, `FeedOptions`                                                                           |
+| `select.md`  | `select`, `changes`, `outputs`, `watch`, `CHAN`                                                             | `SelectShape`, `SelectOptions`, `Snapshot`, `Unwrapped`, `State`, `Val`, `Op`, `Changes`, `Watch` |
+| `helpers.md` | `abortable`, `applyOps`, `catching`, `derive`, `iff`, `isVal`, `spread`                                     | `Caught`, `Derived`, `Spread`                                                                     |
+| `jsx.md`     | `jsx`, `jsxs`, `jsxDEV`, `Fragment`, `mount`, `each`, `createContext`, `Provide`, `consume`, `use`, `Catch` | `Static`, `Dynamic`, `Child`, `Props`, `Item`, `Context`, `JSX` (also entry `./jsx-runtime`)      |

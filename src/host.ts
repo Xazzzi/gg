@@ -16,8 +16,12 @@ export type Entry = Driven & {
   gate?: PromiseWithResolvers<void>; // Of a parked part
 };
 type Gated = { next(): unknown; return(): unknown };
-// What adds a part to the drive of its entry, and what takes it out.
-type Parts = { add(entry: Entry): void; quit(entry: Entry): void };
+// What adds a part to the drive of its entry, what takes it out, and what hands on a failure (JX-092).
+type Parts = {
+  add(entry: Entry): void;
+  quit(entry: Entry): void;
+  fail(error: unknown): void;
+};
 type Prop = Driven & { name: string };
 // Properties whose attribute sets only the initial state, or that have no attribute.
 export const LIVE = new Set([
@@ -201,6 +205,8 @@ export const converted = new WeakSet<Node[]>();
 
 // What a drive tells each source when it parks or resumes, so an each parks the drive of its rows (JX-084).
 export const PARK: unique symbol = Symbol() as any;
+// What a drive gives each source, so an each hands the failures of its rows to the host that drives it (JX-092).
+export const ROUTE: unique symbol = Symbol() as any;
 // What takes the part of a source out of its drive, for the builder that owns the source (HE-059).
 const evict = new WeakMap<object, () => void>();
 
@@ -270,7 +276,7 @@ export const applyOutput = (
   host: Parts,
 ): boolean => {
   if (state.status === "rejected") {
-    reportError(state.reason);
+    host.fail(state.reason);
     return false;
   }
   const { value } = state;
@@ -315,7 +321,7 @@ export const applyOutput = (
       entry.nodes = nodes;
       entry.text = isText(value) ? (entry.nodes[0] as Text) : undefined;
     } catch (error) {
-      reportError(error);
+      host.fail(error);
       return false;
     }
   entry.value = value;
@@ -346,13 +352,18 @@ export const drive = <E extends Driven>(
   apply: (entry: E, state: Val<unknown>, parts: Parts) => unknown, // Tells if the nodes changed
   changed: () => void,
   autoClose: boolean,
+  route: (error: unknown) => void, // Hands a failure to a boundary
   done?: (entry: E) => void,
   over?: () => void,
 ) => {
   const keyed = new Map<string, E>();
   let id = 0,
     parked = false,
+    stopped = false,
     gate: PromiseWithResolvers<void> | undefined;
+  // A drive that stopped shows nothing, so no boundary takes its failure (JX-094).
+  const fail = (error: unknown) =>
+    stopped ? reportError(error) : route(error);
   const sources = owned(owner, () =>
     select({} as Record<string, unknown>, {
       autoStart: true,
@@ -368,6 +379,11 @@ export const drive = <E extends Driven>(
               entry = keyed.get(key),
               state = (op as { value: Val<unknown> }).value;
             if (!entry) continue;
+            // A boundary can stop the drive in this report, so the rest only reports (JX-094).
+            if (stopped) {
+              if (state.status === "rejected") reportError(state.reason);
+              continue;
+            }
             if (apply(entry, state, parts)) moved = true;
             if (state.done) {
               end(entry.source);
@@ -377,10 +393,10 @@ export const drive = <E extends Driven>(
               if (!keyed.size) over?.();
             }
           }
-          if (moved) changed();
+          if (moved && !stopped) changed();
         } catch (error) {
-          // The select has no consumer to get the error, so the drive reports it, and SE-110 stops it (JX-088).
-          reportError(error);
+          // The select has no consumer to get the error, so the drive hands it on, and SE-110 stops it (JX-088).
+          fail(error);
           throw error;
         }
         // A parked drive applies the outputs that it has, and pulls no more until it resumes (JX-083).
@@ -402,9 +418,10 @@ export const drive = <E extends Driven>(
     // Stryker disable next-line UpdateOperator: keys only need to differ
     entry.key = `${id++}`;
     keyed.set(entry.key, entry as E);
+    (entry.source as any)[ROUTE]?.(fail);
     sources[entry.key] = entry.via ?? entry.source;
   };
-  const parts: Parts = { add, quit };
+  const parts: Parts = { add, quit, fail };
   return {
     add: add as (entry: E) => void,
     remove: quit as unknown as (entry: E) => void,
@@ -417,6 +434,7 @@ export const drive = <E extends Driven>(
         if (!(entry as Driven as Entry).gate) (entry.source as any)[PARK]?.(on);
     },
     stop() {
+      stopped = true;
       sources[Symbol.dispose]();
       for (const entry of keyed.values()) end(entry.source);
     },
@@ -434,12 +452,15 @@ type Scope = {
   props?: Driving; // The drive of the dynamic props
   off?: boolean; // A place removed top
   live: boolean;
+  guard?: true; // A boundary, which stays a scope (JX-091)
+  fallback?: (error: unknown) => Child; // Of a boundary that takes no failure yet
 };
 const scopes = new WeakMap<Node, Scope>(),
   under = new WeakMap<Node, Set<Scope>>(); // The scopes that a top holds
 // What starts when a runtime placement first reaches a node: a host (JX-02B), or the wait of use (JX-054).
 export const waiting = new WeakMap<Node, () => void>(),
-  binding = new WeakMap<Node, () => void>(); // The dynamic props, which start after the host (JX-061)
+  binding = new WeakMap<Node, () => void>(), // The dynamic props, which start after the host (JX-061)
+  guarding = new WeakMap<Node, () => void>(); // A boundary, which starts before what is inside it (JX-091)
 type Wait = (() => void) & { ref: WeakRef<Node> };
 // The nodes of the waits that are not started, so a placement walks no node when there is none.
 const unstarted = new Set<WeakRef<Node>>();
@@ -474,6 +495,7 @@ const waits = () => {
 };
 /** Starts the waiting hosts and dynamic props in node and its descendants, in tree order. */
 const wake = (node: Node) => {
+  guarding.get(node)?.();
   waiting.get(node)?.();
   binding.get(node)?.();
   for (let child = node.firstChild; child; child = child.nextSibling)
@@ -517,7 +539,8 @@ const stop = (scope: Scope) => {
 };
 /** Takes out a scope that drives nothing and holds no scope, and then the scopes above that it leaves empty. */
 const tidy = (scope: Scope) => {
-  if (scope.host || scope.props || scope.kids?.size || !scope.up) return;
+  if (scope.host || scope.props || scope.kids?.size || !scope.up || scope.guard)
+    return;
   leave(scope);
   tidy(scope.up);
 };
@@ -561,6 +584,7 @@ export const holds = (node: Node) => !!under.get(node)?.size;
 export const stopIn = (node: Node) => under.get(node)?.forEach(stop);
 /** Ends the waits of node and stops its scope, for the builder that owns it (HE-059). */
 const quit = (node: Node) => {
+  settle(guarding, node);
   settle(waiting, node);
   settle(binding, node);
   const scope = scopes.get(node);
@@ -578,11 +602,39 @@ const settleIn = (parent: Element, entries: Entry[], scope: Scope) => {
   if (scope.live && waits()) added.forEach(wake);
 };
 
+/** Makes element a boundary when a runtime placement first reaches it (JX-091). */
+export const guard = (element: Element, fallback: (error: unknown) => Child) =>
+  defer(guarding, element, () => {
+    Object.assign(enter(element), { guard: true, fallback });
+  });
+
+/** Hands a failure to the nearest armed boundary at or above scope, which shows its fallback, or reports it (JX-092, JX-093). */
+const failIn = (scope: Scope | undefined, error: unknown) => {
+  for (let at = scope; at; at = at.up) {
+    const { fallback } = at;
+    if (!fallback) continue;
+    at.fallback = undefined; // A boundary takes one failure, so a failure of its fallback goes up
+    clear(at);
+    try {
+      attach(at.node as Element, fallback(error), true);
+    } catch (thrown) {
+      failIn(at, thrown);
+    }
+    return;
+  }
+  reportError(error);
+};
+
 /** Applies an output of a dynamic prop to its element, and changes no node (JX-062 to JX-065). */
-const applyProp = (element: Element, entry: Prop, state: Val<unknown>) => {
+const applyProp = (
+  element: Element,
+  entry: Prop,
+  state: Val<unknown>,
+  fail: (error: unknown) => void,
+) => {
   const { value } = state,
     name = entry.name as string;
-  if (state.status === "rejected") reportError(state.reason);
+  if (state.status === "rejected") fail(state.reason);
   else if (!Object.is(value, entry.value))
     try {
       if (LIVE.has(name)) (element as any)[name] = value;
@@ -590,19 +642,21 @@ const applyProp = (element: Element, entry: Prop, state: Val<unknown>) => {
       else element.setAttribute(name, attribute(name, value));
       entry.value = value;
     } catch (error) {
-      reportError(error);
+      fail(error);
     }
 };
 
 /** Makes the dynamic props of an element wait until the runtime places it, and then drives them (JX-061). */
 export const bind = (element: Element, props: [string, unknown][]) =>
   defer(binding, element, () => {
-    const host = driveIn(element, "props", (_, over) =>
+    const host = driveIn(element, "props", (scope, over) =>
       drive(
         element,
-        (entry: Prop, state) => applyProp(element, entry, state),
+        (entry: Prop, state, parts) =>
+          applyProp(element, entry, state, parts.fail),
         noop,
         true,
+        error => failIn(scope, error),
         undefined,
         over,
       ),
@@ -628,6 +682,7 @@ export const attach = (parent: Element, children: Child, placed: boolean) => {
     },
   );
   if (placed) {
+    guarding.get(parent)?.(); // A mount into a boundary keeps it a boundary
     settle(waiting, parent);
     const scope = enter(parent);
     clear(scope);
@@ -646,6 +701,7 @@ export const attach = (parent: Element, children: Child, placed: boolean) => {
         applyOutput,
         () => settleIn(parent, entries, scope),
         true,
+        error => failIn(scope, error),
         undefined,
         over,
       ),

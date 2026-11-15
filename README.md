@@ -131,6 +131,8 @@ SVG tags get the SVG namespace, and an `xmlns` prop sets any namespace.
 An element runs its dynamic children only once `mount` or a host places it, so a detached element costs nothing.
 `<Provide context={Key} value={v}>` gives a value to the components inside it, and a component reads it with `const v = yield* use(Key)`.
 It uses the `context-request` event of the web components community protocol, so it works with other libraries that follow it.
+`<Catch fallback={error => <p>Failed</p>}>` makes its one element child a boundary: a failure inside it stops what it holds, and shows the fallback in that element.
+A failure with no boundary above goes to `reportError`.
 
 ```tsx
 import { type Channel, each, mount, select } from "@xazzzi/gg";

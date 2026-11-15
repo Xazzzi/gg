@@ -84,6 +84,7 @@ So this spec defines only the contract with that extension.
   The owner of the select that drives the items of `each`, of each item channel, and of its reader of `state`, is the iterator.
 - DV-044: The library MUST ignore what the hook returns for `"mount"`, `"each"`, `"item"` and `"part"`.
 - DV-045: A host MUST emit `("end")` once to the emitter of a component result that it drives, when the result finishes or fails, leaves the host, or the host stops.
+  `each` MUST also emit it once to a component result that `render` gives as static nodes, when its entry leaves or `each` stops, so a panel can forget the component.
 
 - DV-046: The first iteration of an `Item` MUST register `"item"` after it creates its channel (JX-03F).
   Its owner is the iterator of `each`, which owns the channel too (DV-043).

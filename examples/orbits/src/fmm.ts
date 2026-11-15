@@ -118,7 +118,14 @@ export const pull = (
   for (let l = 2; l <= top; l++) {
     const w = 2 ** l,
       h = side / w,
-      table = shifts(h);
+      table = shifts(h),
+      // A far box sits 2 or 3 boxes away on an axis, so 49 offsets cover each translation of a level.
+      far = Array.from({ length: 49 }, (_, o) => {
+        const dr = ((o % 7) - 3) * h,
+          di = (((o / 7) | 0) - 3) * h,
+          dd = dr * dr + di * di;
+        return powers(dr / (dd || 1), -di / (dd || 1), 2 * P); // The center is never far
+      });
     for (let b = 0; b < w * w; b++) {
       const bx = b % w,
         by = (b / w) | 0,
@@ -151,10 +158,7 @@ export const pull = (
               sy = 2 * qy + (q >> 1);
             if (Math.abs(sx - bx) <= 1 && Math.abs(sy - by) <= 1) continue;
             const source = sy * w + sx,
-              dr = (bx - sx) * h,
-              di = (by - sy) * h,
-              dd = dr * dr + di * di,
-              [ir, ii] = powers(dr / dd, -di / dd, 2 * P);
+              [ir, ii] = far[(by - sy + 3) * 7 + bx - sx + 3];
             for (let m = 0; m < P; m++)
               for (let k = 0; k < P; k++) {
                 // The term is a[k] (-1)^m C(k + m, m) / d^(k + m + 1).

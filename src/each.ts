@@ -6,9 +6,11 @@ import {
   converted,
   drive,
   type Entry,
+  end,
   holds,
   isDynamic,
   PARK,
+  ROUTE,
   stopIn,
   toNodes,
 } from "./host.ts";
@@ -24,6 +26,7 @@ type Kept = Entry & {
   sent?: boolean;
   round?: number; // The last structural read that kept the entry
   past?: Set<Node>; // Earlier nodes that hold a scope, which stops when the entry leaves (JX-035)
+  view?: unknown; // A static result of render, which ends when the entry leaves (DV-045)
 };
 
 /** The item that `each` gives `render`, with its current value, its later values and its end. */
@@ -117,6 +120,10 @@ export function each<T>(
   );
   // The drive of the rows parks with the host that holds each (JX-084).
   (iterator as any)[PARK] = (on: boolean) => rows.park?.(on);
+  // The failures of the rows go to the drive of the host that holds each (JX-092).
+  (iterator as any)[ROUTE] = (fail: (error: unknown) => void) => {
+    rows.fail = fail;
+  };
   // A generator queues return() behind a pending next(), so the abort wakes the wait first (JX-03B).
   const finish = iterator.return.bind(iterator);
   iterator.return = value => {
@@ -128,7 +135,10 @@ export function each<T>(
 }
 
 // The park function of the drive of the rows, which exists after the first `next()`.
-type Rows = { park?: (on: boolean) => void };
+type Rows = {
+  park?: (on: boolean) => void;
+  fail?: (error: unknown) => void; // The failure route of the host that drives each
+};
 
 /** Replays the changes of state onto the entries of each, and yields their nodes when they change. */
 async function* replay<T>(
@@ -171,6 +181,7 @@ async function* replay<T>(
       wake();
     },
     false,
+    error => (rows.fail ?? reportError)(error),
     (entry: Kept) => {
       if (!entry.sent) entry.finished = true;
       else {
@@ -189,13 +200,18 @@ async function* replay<T>(
   /** Renders the item into the entry, which keeps its nodes until a dynamic child outputs. */
   const start = (entry: Entry & { item: unknown }): Kept => {
     const handle = new Handle(entry.item, self),
-      kept = Object.assign(entry, { handle, finished: false, sent: false }),
+      kept: Kept = Object.assign(entry, {
+        handle,
+        finished: false,
+        sent: false,
+      }),
       child = render(handle as Item<T>);
     if (isDynamic(child)) {
       kept.source = child;
       fresh.push(kept);
     } else {
       const old = kept.nodes;
+      kept.view = child;
       kept.nodes = toNodes(child);
       keep(kept, old);
     }
@@ -237,6 +253,7 @@ async function* replay<T>(
     for (const entry of before)
       if (entry.round !== round) {
         leave(entry.handle);
+        end(entry.view);
         host.remove(entry);
         entry.nodes.forEach(stopIn);
         entry.past?.forEach(stopIn);
@@ -293,7 +310,7 @@ async function* replay<T>(
     }
   } finally {
     reader[Symbol.dispose]();
-    for (const entry of entries) leave(entry.handle);
+    for (const entry of entries) leave(entry.handle), end(entry.view);
     host.stop();
   }
 }

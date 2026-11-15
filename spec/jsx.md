@@ -61,6 +61,10 @@ export function Provide<T>(props: {
   children?: Child;
 }): Element;
 export function consume<T>(node: Node, context: Context<T>): T;
+export function Catch(props: {
+  fallback: (error: unknown) => Child;
+  children?: Child;
+}): Element;
 export function use<T>(context: Context<T>): AsyncGenerator<Comment, T, unknown>;
 
 export declare namespace JSX {
@@ -98,6 +102,10 @@ The runtime uses the global `document` when it creates nodes.
 - **Output**: the last value that the source of a dynamic entry produced.
 - **Part**: a dynamic child in an output, which the host of the entry drives.
 - **Scope**: a `mount`, or a started element, with the elements that started under it.
+- **Boundary**: an element that `Catch` returns, which takes the failures of the scopes under it (JX-090).
+- **Failure**: an error that JX-028, JX-065, JX-087 or JX-088 reports for a drive.
+  The scope of a failure is the scope of that drive.
+  The drive of an `each` belongs to the scope of the host that drives the `each`.
 - **Park**: pull a source no more, and not return it.
   A parked drive resumes.
 - **Stop**: close the `select` of a drive, so each unfinished source gets `return()`.
@@ -349,6 +357,38 @@ Provide a `Channel` or a `select` for a value that changes.
 - JX-054: `use(context)` MUST return an async generator that yields one new empty `Comment`, waits until the runtime places that comment (JX-02B), and returns `consume(comment, context)`.
   So `const value = yield* use(context)` in a component yields a placeholder, and the next yield of the component replaces it (JX-027).
   A component in an element that the runtime never places waits.
+
+## Boundaries
+
+A boundary takes the failures of the scopes under it, so that one broken view does not break the page, and the app shows a fallback in its place.
+Boundaries follow the scopes, and not the components.
+An async generator queues `throw()` behind a pending `next()` (JX-041), and a host always has a `next()` pending on a component.
+So a component cannot catch the failure of a view that it yielded.
+The scopes give a tree that needs no part of the generator.
+
+- JX-090: `Catch` MUST throw a `TypeError` if `children` is not one element, or if `fallback` is not a function.
+  Otherwise it MUST make that element a boundary, and return it.
+- JX-091: A boundary MUST wait as JX-02B says, and its start MUST make it a scope with no drive (JX-080).
+  JX-02B starts the nodes in tree order, so the elements inside a boundary bind to it.
+  JX-081 MUST NOT end the binding of a boundary that drives nothing and holds no scope.
+  A boundary scope ends when the scope above it stops.
+  So an element that starts inside it later still binds to it.
+- JX-092: The runtime MUST hand a failure to the nearest armed boundary, at the scope of the failure or above it, by the bindings of JX-080.
+  The boundary then takes the failure, and the runtime MUST NOT call `globalThis.reportError` for it.
+  Without an armed boundary, the rule of the failure applies, and the runtime calls `globalThis.reportError`.
+  A boundary is armed from its start until it takes a failure.
+- JX-093: A boundary that takes a failure MUST stop the drive of its children and each scope bound to it, as the unmount function does (JX-02A).
+  It MUST keep its dynamic props, and stay a scope.
+  It MUST then call `fallback` with the unchanged error, and mount the result into its element as `mount` does (JX-020).
+  If `fallback` throws, the runtime MUST hand that error to the boundary above, as a failure of the scope of the boundary.
+  A boundary takes one failure, so a failure in its fallback goes to the boundary above.
+- JX-094: The runtime MUST NOT hand these errors to a boundary, and MUST call `globalThis.reportError` with them:
+  an error of JX-089, because it comes from a child that its drive removed or stopped, so no view shows that child;
+  and a failure of a drive whose scope stopped, for example a later output of the report in which the boundary took a failure.
+- JX-095: A boundary that takes a failure while its scope is parked mounts the fallback parked (JX-082).
+  The fallback starts when the scope resumes.
+- JX-096: A synchronous error of `jsx`, `mount` or a conversion in `mount` MUST throw to the caller, and MUST NOT go to a boundary.
+  The caller can catch it with `try`.
 
 ## Limits
 

@@ -476,9 +476,12 @@ export class Reader implements Changes<unknown> {
       keys,
       source: pulledSource(),
     });
-    if (slice?.spent?.())
+    if (slice?.spent?.()) {
       this.#end(); // SE-156 finishes a reader that names no slot
-    else if (!terminal(channel)) {
+      return;
+    }
+    // Stryker disable next-line ConditionalExpression: a terminal select reports nothing, and the reader ends at its first read
+    if (!terminal(channel)) {
       this.#at += log.pending?.length ?? 0;
       log.pending ??= [];
       log.add(this, this.#ref, slice?.names);

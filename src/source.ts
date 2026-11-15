@@ -81,6 +81,7 @@ export const chunked = <V>(
 ) => {
   // Stryker disable next-line ConditionalExpression,EqualityOperator: the parts give the same calls, with one copy
   if (items.length <= CHUNK) return void use(items as V[]);
+  // Stryker disable next-line EqualityOperator: one more part is empty, and use adds nothing for it
   for (let at = 0; at < items.length; at += CHUNK)
     use(items.slice(at, at + CHUNK));
 };

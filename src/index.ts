@@ -28,6 +28,7 @@ export type {
   Static,
 } from "./jsx.ts";
 export {
+  Catch,
   consume,
   createContext,
   each,

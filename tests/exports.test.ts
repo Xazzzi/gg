@@ -6,6 +6,7 @@ import * as root from "../src/index.ts";
 test("Package exports the root exports the public names", () => {
   assert.deepEqual(Object.keys(root).sort(), [
     "CHAN",
+    "Catch",
     "Channel",
     "Fragment",
     "Provide",
@@ -53,6 +54,7 @@ test("Package exports set sideEffects false, with the root and the JSX runtime a
 test("JSX runtime exports its public names, which the root exports too", async () => {
   const runtime = await import("../src/jsx.ts");
   assert.deepEqual(Object.keys(runtime).sort(), [
+    "Catch",
     "Fragment",
     "Provide",
     "consume",

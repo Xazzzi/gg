@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
 import { Channel, derive, iff, select } from "../src/index.ts";
-import { each, type Item, jsx, mount } from "../src/jsx.ts";
+import { Catch, each, type Item, jsx, mount } from "../src/jsx.ts";
 import { fakeDocument, html } from "./dom.ts";
 
 const el = (tag = "div") => fakeDocument.createElement(tag) as any;
@@ -941,4 +941,333 @@ test("JX-081 an element whose children finish keeps its scope while its dynamic 
   assert.deepEqual(aborted(channels), [true, false]);
   s.unmount();
   assert.deepEqual(aborted(channels), [true, true]);
+});
+
+// Records reportError, and gives a fallback that shows the message of the error.
+const reporting = () => {
+  const list: unknown[] = [];
+  (globalThis as any).reportError = (error: unknown) => list.push(error);
+  return list;
+};
+const failed = (error: any) => `failed ${error.message}`;
+const boom = (message = "boom") => Promise.reject(new Error(message));
+
+test("JX-090 Catch needs one element child and a fallback function, and gives the element", () => {
+  const div = el();
+  assert.equal(h(Catch, { fallback: failed, children: div }), div);
+  assert.throws(
+    () => h(Catch, { fallback: failed, children: "x" }),
+    /TypeError: Catch needs one element child/,
+  );
+  assert.throws(
+    () => h(Catch, { fallback: failed }),
+    /TypeError: Catch needs one element child/,
+  );
+  assert.throws(
+    () => h(Catch, { children: el() }),
+    /TypeError: Catch fallback must be a function/,
+  );
+});
+
+test("JX-092 JX-093 a boundary takes a failure inside it, stops what is under it, and shows the fallback", async () => {
+  const list = reporting(),
+    queue = counted();
+  const view = h(Catch, {
+    fallback: failed,
+    children: h("section", {
+      children: [
+        h("p", { children: boom() }),
+        h("b", { children: queue.source }),
+      ],
+    }),
+  });
+  const parent = el();
+  mount(parent, "a", view);
+  await setImmediate();
+  await setImmediate();
+  assert.equal(html(parent), "<div>a<section>failed boom</section></div>");
+  assert.equal(queue.stats.returns, 1);
+  assert.deepEqual(list, []);
+});
+
+test("JX-092 a boundary takes the failures of its own children and props, and keeps its props", async () => {
+  const list = reporting(),
+    title = latest<any>();
+  title.send("t");
+  const view = h(Catch, {
+    fallback: failed,
+    children: h("div", { title, children: boom("own") }),
+  });
+  const parent = el();
+  mount(parent, view);
+  await setImmediate();
+  assert.equal(html(parent), '<div><div title="t">failed own</div></div>');
+  title.send("u");
+  await setImmediate();
+  assert.equal(view.attributes.get("title"), "u");
+  const other = h(Catch, {
+    fallback: failed,
+    children: h("div", { title: boom("prop") }),
+  });
+  mount(el(), other);
+  await setImmediate();
+  assert.equal(html(other), "<div>failed prop</div>");
+  assert.deepEqual(list, []);
+});
+
+test("JX-093 a boundary takes one failure, so a failure of its fallback goes to the boundary above", async () => {
+  const list = reporting();
+  const inner = h(Catch, {
+    fallback: () => boom("fallback"),
+    children: h("p", { children: boom("inner") }),
+  });
+  const outer = h(Catch, {
+    fallback: failed,
+    children: h("div", { children: inner }),
+  });
+  mount(el(), outer);
+  for (let i = 0; i < 3; i++) await setImmediate();
+  assert.equal(html(outer), "<div>failed fallback</div>");
+  const throwing = h(Catch, {
+    fallback: () => {
+      throw new Error("thrown");
+    },
+    children: h("p", { children: boom() }),
+  });
+  const top = h(Catch, {
+    fallback: failed,
+    children: h("div", { children: throwing }),
+  });
+  mount(el(), top);
+  for (let i = 0; i < 3; i++) await setImmediate();
+  assert.equal(html(top), "<div>failed thrown</div>");
+  const alone = h(Catch, {
+    fallback: () => boom("last"),
+    children: h("p", { children: boom() }),
+  });
+  mount(el(), alone);
+  for (let i = 0; i < 3; i++) await setImmediate();
+  assert.equal((list[0] as Error).message, "last");
+  assert.equal(list.length, 1);
+});
+
+test("JX-092 a failure with no armed boundary reports, as before", async () => {
+  const list = reporting(),
+    parent = el();
+  mount(parent, h("p", { children: boom("plain") }));
+  await setImmediate();
+  assert.equal(html(parent), "<div><p></p></div>");
+  assert.equal((list[0] as Error).message, "plain");
+});
+
+test("JX-088 JX-092 a place that throws under a boundary goes to the boundary", async () => {
+  const list = reporting(),
+    values = latest<any>(),
+    bad = el("b"),
+    inner = h("p", { children: values }),
+    insert = inner.insertBefore,
+    failure = new Error("place");
+  inner.insertBefore = function (node: any, ref: any) {
+    if (node === bad) throw failure;
+    return insert.call(this, node, ref);
+  };
+  const view = h(Catch, {
+    fallback: failed,
+    children: h("div", { children: inner }),
+  });
+  mount(el(), view);
+  await setImmediate();
+  values.send(bad);
+  await setImmediate();
+  assert.equal(html(view), "<div>failed place</div>");
+  assert.deepEqual(list, []);
+});
+
+test("JX-091 a boundary stays a scope when what is under it finishes, so a later start binds to it", async () => {
+  const list = reporting(),
+    p = h("p", { children: Promise.resolve("done") }),
+    view = h(Catch, {
+      fallback: failed,
+      children: h("section", { children: p }),
+    });
+  mount(el(), view);
+  for (let i = 0; i < 3; i++) await setImmediate();
+  mount(p, boom("later"));
+  await setImmediate();
+  assert.equal(html(view), "<section>failed later</section>");
+  assert.deepEqual(list, []);
+});
+
+test("JX-092 an each under a boundary hands the failure of a row to it, and JX-094 a row that left only reports", async () => {
+  const list = reporting(),
+    rows = select(["a", "b"]),
+    late = Promise.withResolvers<string>();
+  const view = h(Catch, {
+    fallback: failed,
+    children: h("ul", {
+      children: each(rows, item =>
+        item.value === "b" ? late.promise : h("li", { children: item.value }),
+      ),
+    }),
+  });
+  mount(el(), view);
+  await setImmediate();
+  rows.pop();
+  await setImmediate();
+  late.reject(new Error("left"));
+  await setImmediate();
+  assert.equal(html(view), "<ul><li>a</li></ul>");
+  assert.equal((list[0] as Error).message, "left");
+  const fresh = select(["a"]);
+  const second = h(Catch, {
+    fallback: failed,
+    children: h("ul", { children: each(fresh, () => boom("row")) }),
+  });
+  mount(el(), second);
+  for (let i = 0; i < 3; i++) await setImmediate();
+  assert.equal(html(second), "<ul>failed row</ul>");
+  assert.equal(list.length, 1);
+});
+
+test("JX-095 a parked boundary mounts its fallback parked, and starts it when it comes back", async () => {
+  reporting();
+  const s = stage(),
+    gate = Promise.withResolvers<string>(),
+    queue = counted();
+  const view = h(Catch, {
+    fallback: () => h("i", { children: queue.source }),
+    children: h("div", { children: gate.promise }),
+  });
+  await show(s.view, view);
+  await show(s.view, "away");
+  gate.reject(new Error("parked"));
+  await setImmediate();
+  await setImmediate();
+  assert.equal(queue.stats.opened, 0);
+  await show(s.view, view);
+  queue.send("q");
+  await setImmediate();
+  await setImmediate();
+  assert.equal(queue.stats.opened, 1);
+  assert.equal(html(view), "<div><i>q</i></div>");
+  s.unmount();
+});
+
+test("JX-096 a synchronous error of mount throws to the caller, also under a boundary", () => {
+  reporting();
+  const view = h(Catch, { fallback: failed, children: h("div") });
+  assert.throws(() => mount(view, {} as any), TypeError);
+});
+
+test("JX-094 a failure of a drive that the boundary stopped in the same report only reports", async () => {
+  const list = reporting();
+  const view = h(Catch, {
+    fallback: failed,
+    children: h("div", {
+      children: [boom("first"), Promise.resolve("ok"), boom("second")],
+    }),
+  });
+  mount(el(), view);
+  await setImmediate();
+  assert.equal(html(view), "<div>failed first</div>");
+  assert.deepEqual(
+    list.map(error => (error as Error).message),
+    ["second"],
+  );
+  const rows = select(["a", "b"]);
+  const ul = h(Catch, {
+    fallback: failed,
+    children: h("ul", { children: each(rows, item => boom(item.value)) }),
+  });
+  mount(el(), ul);
+  for (let i = 0; i < 3; i++) await setImmediate();
+  assert.equal(html(ul), "<ul>failed a</ul>");
+  assert.deepEqual(
+    list.map(error => (error as Error).message),
+    ["second", "b"],
+  );
+});
+
+test("JX-091 a mount into a boundary that did not start keeps it a boundary", async () => {
+  const list = reporting(),
+    view = h(Catch, { fallback: failed, children: h("div") });
+  mount(view, boom());
+  await setImmediate();
+  assert.equal(html(view), "<div>failed boom</div>");
+  assert.deepEqual(list, []);
+});
+
+test("JX-094 a drive that a boundary stopped applies no later output of the same report", async () => {
+  const list = reporting(),
+    fail = Promise.withResolvers<never>(),
+    later = Promise.withResolvers<IteratorResult<string>>();
+  let first = true;
+  // Its next value settles in the same tick as the failure, so both land in one report.
+  const values = {
+    [Symbol.asyncIterator]: () => ({
+      next: () =>
+        first
+          ? ((first = false), Promise.resolve({ value: "a", done: false }))
+          : later.promise,
+    }),
+  };
+  const view = h(Catch, {
+    fallback: failed,
+    children: h("div", { children: [fail.promise, values] }),
+  });
+  mount(el(), view);
+  await setImmediate();
+  const text = view.lastChild;
+  assert.equal(text.data, "a");
+  fail.reject(new Error("first"));
+  later.resolve({ value: "b", done: false });
+  await setImmediate();
+  assert.equal(html(view), "<div>failed first</div>");
+  assert.equal(text.data, "a");
+  assert.deepEqual(list, []);
+});
+
+test("JX-093 a fallback that throws with no boundary above reports, and leaves what the boundary held stopped", async () => {
+  const list = reporting(),
+    values = latest<string>(),
+    thrown = new Error("fallback"),
+    fail = Promise.withResolvers<never>();
+  values.send("a");
+  const view = h(Catch, {
+    fallback: () => {
+      throw thrown;
+    },
+    children: h("div", { children: [fail.promise, values] }),
+  });
+  mount(el(), view);
+  await setImmediate();
+  const text = view.lastChild;
+  fail.reject(new Error("first"));
+  await setImmediate();
+  values.send("b");
+  await setImmediate();
+  assert.equal(html(view), "<div>a</div>");
+  assert.equal(text.data, "a");
+  assert.deepEqual(list, [thrown]);
+});
+
+test("JX-091 a boundary that a builder let go before a placement reached it never arms", async () => {
+  const list = reporting(),
+    gate = latest<boolean>();
+  let built: any;
+  gate.send(true);
+  mount(
+    el(),
+    derive(gate, on => {
+      if (on) built = h(Catch, { fallback: failed, children: h("section") });
+      return `${on}`;
+    }),
+  );
+  await setImmediate();
+  gate.send(false);
+  await setImmediate();
+  mount(built, boom());
+  await setImmediate();
+  assert.equal(html(built), "<section></section>");
+  assert.equal((list[0] as Error).message, "boom");
 });

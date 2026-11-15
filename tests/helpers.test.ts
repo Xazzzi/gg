@@ -762,6 +762,15 @@ test("HE-044 splice takes more values than a call has arguments", () => {
       options,
     );
     assert.equal(target.length, values.length);
+    target.splice(0, Infinity, -1, -2);
+    applyOps(
+      target,
+      [{ op: "splice", start: 1, removed: [], added: values }],
+      undefined,
+      options,
+    );
+    assert.deepEqual([target[0], target[1], target.at(-1)], [-1, 0, -2]);
+    assert.equal(target.length, values.length + 2);
   }
 });
 

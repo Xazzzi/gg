@@ -77,7 +77,7 @@ test("JX-080 JX-081 an element that left the tree stops with the mount under whi
 
 test("JX-080 an element binds to the closest started element above it, and stops with it", async () => {
   const text = latest<string>(),
-    items = select(["a"], { autoStart: true, nonYielding: true });
+    items = select(["a"], { autoStart: true, backPressure: false });
   text.send("t");
   const inner = h("i", { children: text }),
     row = h("li", { title: text, children: h("span", { children: inner }) });
@@ -257,7 +257,7 @@ test("JX-082 a mount into a parked element pulls nothing until the element resum
 
 test("JX-084 an each parks the drive of its rows with its host, and starts in a parked host only at the resume", async () => {
   const s = stage(),
-    items = select(["a"], { autoStart: true, nonYielding: true }),
+    items = select(["a"], { autoStart: true, backPressure: false }),
     row = counted(),
     list = h("ul", { children: each(items, () => row.source) });
   await show(s.view, list);
@@ -297,7 +297,7 @@ test("JX-084 an each parks the drive of its rows with its host, and starts in a 
 test("JX-035 an entry that leaves stops the elements under the nodes that its child gave before", async () => {
   const text = latest<string>(),
     swap = latest<number>(),
-    items = select(["a"], { autoStart: true, nonYielding: true });
+    items = select(["a"], { autoStart: true, backPressure: false });
   text.send("t");
   const tops = [
     h("li", { children: h("b", { children: text }) }),
@@ -419,7 +419,7 @@ test("JX-087 an output that holds its own source, or a bad child after a dynamic
 });
 
 test("JX-085 JX-035 a row that leaves or renders again returns the parts of its outputs", async () => {
-  const items = select(["a", "b"], { autoStart: true, nonYielding: true }),
+  const items = select(["a", "b"], { autoStart: true, backPressure: false }),
     parts = [counted(), counted()],
     old = counted(),
     once = latest<any>();
@@ -566,7 +566,7 @@ test("HE-059 a repeat of the last output keeps its elements, a finished source k
   assert.equal(none.length, 0);
 });
 
-test("HE-059 derive returns the component result that map built, in its host or by itself", async () => {
+test("HE-059 JX-041 derive returns the component result that map built, in its host or by itself", async () => {
   const n = latest<number>(),
     wake = latest<number>(),
     log: string[] = [];
@@ -587,12 +587,14 @@ test("HE-059 derive returns the component result that map built, in its host or 
   assert.equal(html(s.parent), "<div>view 1</div>");
   await show(n, 2);
   assert.equal(html(s.parent), "<div>view 2</div>");
-  // The read of the first view pends, so its return waits for the next value (JX-041).
-  assert.equal(log.length, 0);
+  // The first view opened its read in a pull, so the host ends that read, and the view ends at once (JX-041).
+  assert.equal(log.join(), "end 1");
   await show(wake, 1);
   assert.equal(log.join(), "end 1");
   assert.equal(html(s.parent), "<div>view 2 again</div>");
   s.unmount();
+  await setImmediate();
+  assert.equal(log.join(), "end 1,end 2"); // The unmount ends the read of view 2 too
   // With no host, derive calls return on the result, also for a result with no return.
   const alone = new Channel<number>(),
     bare = { [Symbol.asyncIterator]: () => ({}) },
@@ -601,10 +603,10 @@ test("HE-059 derive returns the component result that map built, in its host or 
   alone.send(1), alone.send(2), alone.send(3);
   await plain.next();
   await plain.next();
-  assert.equal(log.join(), "end 1,returned");
+  assert.equal(log.join(), "end 1,end 2,returned");
   await plain.next();
   await plain.return();
-  assert.equal(log.join(), "end 1,returned");
+  assert.equal(log.join(), "end 1,end 2,returned");
 });
 
 test("HE-060 HE-061 iff gives a branch at each change of the truthiness, and calls a function branch", async () => {
@@ -659,7 +661,7 @@ test("HE-061 HE-059 iff stops the view of a function branch at the next change, 
 
 test("JX-084 JX-086 a parked part parks an each in it, and a row with an Item reads on", async () => {
   const s = stage(),
-    items = select(["a"], { autoStart: true, nonYielding: true }),
+    items = select(["a"], { autoStart: true, backPressure: false }),
     row = counted();
   const list = each(items, (_: Item<string>) => row.source);
   await show(s.view, [list]);
@@ -682,7 +684,7 @@ test("JX-035 JX-085 an entry that leaves stops the elements under the nodes that
   const text = latest<string>(),
     inner = latest<any>(),
     row = latest<any>(),
-    items = select(["a"], { autoStart: true, nonYielding: true });
+    items = select(["a"], { autoStart: true, backPressure: false });
   text.send("t");
   row.send(["<", inner, ">"]);
   const parent = el("ul");
@@ -705,7 +707,7 @@ test("JX-084 JX-086 a host that resumes keeps an each parked in a part that left
   const s = stage(),
     box = el("section"),
     inner = latest<any>(),
-    items = select(["a"], { autoStart: true, nonYielding: true }),
+    items = select(["a"], { autoStart: true, backPressure: false }),
     row = counted(),
     list = each(items, () => row.source);
   await show(s.view, box);
@@ -732,7 +734,7 @@ test("JX-085 JX-086 a part that a parked part outputs starts parked, also an eac
   (globalThis as any).reportError = (error: unknown) => reported.push(error);
   const s = stage(),
     inner = latest<any>(),
-    items = select(["a"], { autoStart: true, nonYielding: true });
+    items = select(["a"], { autoStart: true, backPressure: false });
   await show(s.view, ["<", inner, ">"]);
   await show(s.view, "none");
   await show(inner, ["[", each(items, ({ value }) => value), "]"]);
@@ -745,7 +747,7 @@ test("JX-085 JX-086 a part that a parked part outputs starts parked, also an eac
 });
 
 test("JX-086 a parked part that changes its nodes does not change the nodes of each", async () => {
-  const items = select(["a"], { autoStart: true, nonYielding: true }),
+  const items = select(["a"], { autoStart: true, backPressure: false }),
     inner = latest<unknown>(),
     row = latest<any>();
   row.send(["<", inner, ">"]);
@@ -770,7 +772,7 @@ test("JX-086 a parked part that changes its nodes does not change the nodes of e
 
 test("JX-035 an entry that renders a static child again stops the elements under the nodes of its finished child", async () => {
   const text = latest<string>(),
-    items = select(["a"], { autoStart: true, nonYielding: true });
+    items = select(["a"], { autoStart: true, backPressure: false });
   text.send("t");
   let renders = 0;
   async function* Once() {
@@ -794,7 +796,7 @@ test("JX-035 an entry that renders a static child again stops the elements under
 });
 
 test("JX-035 JX-070 an entry keeps no earlier node that holds no scope", async () => {
-  const items = select(["a"], { autoStart: true, nonYielding: true }),
+  const items = select(["a"], { autoStart: true, backPressure: false }),
     row = latest<any>(),
     parent = el("ul");
   mount(

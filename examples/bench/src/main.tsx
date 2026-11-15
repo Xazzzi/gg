@@ -71,18 +71,13 @@ const build = (count: number) =>
     }),
   );
 
-// Only each reads the rows, so the select runs with no snapshot consumer.
-const rows = select([] as Row[], {
-  autoStart: true,
-  nonYielding: true,
-});
+// Only each reads the rows, so the select builds no snapshot.
+const rows = select([] as Row[], { autoStart: true });
 let selected = 0;
 
 const find = (id: number) => rows.findIndex(row => row.id === id);
-// A splice that replaces all rows reuses entries by position, so the rows leave first.
 const replace = (count: number) => {
-  rows.length = 0;
-  rows.push(...build(count));
+  rows.splice(0, rows.length, ...build(count));
 };
 const actions = {
   run: () => replace(1_000),
@@ -95,10 +90,9 @@ const actions = {
   clear: () => {
     rows.length = 0;
   },
-  // One splice keeps all values, so applyOps moves the two rows by value (HE-04H).
+  // A row belongs to its value, so the two sets move the two rows (HE-04H).
   swaprows: () => {
-    if (rows.length > 998)
-      rows.splice(1, 998, rows[998], ...rows.slice(2, 998), rows[1]);
+    if (rows.length > 998) [rows[1], rows[998]] = [rows[998], rows[1]];
   },
 };
 const choose = (id: number) => {
@@ -114,14 +108,17 @@ const remove = (id: number) => {
 
 // A row builds its nodes from the first value, and changes them on each later value.
 async function* RowView({ row }: { row: Item<Row> }) {
-  const { id } = row.value;
-  const label = (<a onclick={() => choose(id)} />) as HTMLAnchorElement;
+  // The handlers read the current id, because a row can take another item at its index.
+  const label = (
+      <a onclick={() => choose(row.value.id)} />
+    ) as HTMLAnchorElement,
+    cell = (<td class="col-md-1" />) as HTMLTableCellElement;
   const tr = (
     <tr>
-      <td class="col-md-1">{id}</td>
+      {cell}
       <td class="col-md-4">{label}</td>
       <td class="col-md-1">
-        <a onclick={() => remove(id)}>
+        <a onclick={() => remove(row.value.id)}>
           <span class="glyphicon glyphicon-remove" aria-hidden="true" />
         </a>
       </td>
@@ -130,7 +127,8 @@ async function* RowView({ row }: { row: Item<Row> }) {
   ) as HTMLTableRowElement;
   yield tr;
   for await (const item of row) {
-    // A new text node relays out the whole table, so an unchanged label stays.
+    // A new text node relays out the whole table, so an unchanged text stays.
+    if (cell.textContent !== `${item.id}`) cell.textContent = `${item.id}`;
     if (label.textContent !== item.label) label.textContent = item.label;
     tr.className = item.selected ? "danger" : "";
   }
@@ -171,9 +169,13 @@ mount(
     </div>
     <table class="table table-hover table-striped test-data">
       <tbody>
-        {each(rows, row => (
-          <RowView row={row} />
-        ))}
+        {each(
+          rows,
+          row => (
+            <RowView row={row} />
+          ),
+          { key: row => row.id },
+        )}
       </tbody>
     </table>
     <span class="preloadicon glyphicon glyphicon-remove" aria-hidden="true" />

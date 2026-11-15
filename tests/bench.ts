@@ -25,7 +25,7 @@ const report = (name: string, start: number) =>
     `${name.padEnd(34)} ${(performance.now() - start).toFixed(1).padStart(8)}ms`,
   );
 
-const rows = select([] as Row[], { autoStart: true, nonYielding: true });
+const rows = select([] as Row[], { autoStart: true, backPressure: false });
 async function* RowView({ row }: { row: Item<Row> }) {
   const { id } = row.value;
   const label: any = jsx("a", { onclick: () => {} });
@@ -142,7 +142,7 @@ await watchers(
   "2k index watchers, 2k sets",
   select(new Array(keys.length).fill(0), {
     autoStart: true,
-    nonYielding: true,
+    backPressure: false,
   }),
   keys,
 );
@@ -150,12 +150,12 @@ await watchers(
   "2k key watchers, 2k sets",
   select(Object.fromEntries(keys.map(i => [`k${i}`, 0])), {
     autoStart: true,
-    nonYielding: true,
+    backPressure: false,
   }),
   keys.map(i => `k${i}`),
 );
 {
-  const s = select(build(10000), { autoStart: true, nonYielding: true });
+  const s = select(build(10000), { autoStart: true, backPressure: false });
   await settle();
   let start = performance.now();
   for (let i = 0; i < 100; i++) s.findIndex(row => row.id === -1);

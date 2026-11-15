@@ -175,4 +175,4 @@ export {
   Provide,
   use,
 } from "./context.ts";
-export { each, type Item } from "./each.ts";
+export { type EachOptions, each, type Item } from "./each.ts";

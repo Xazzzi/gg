@@ -41,7 +41,7 @@ await within("asend backlog drain", 3000, async () => {
 });
 
 await within("select large array", 3000, () => {
-  const s = select(new Array(size).fill(0), { nonYielding: true });
+  const s = select(new Array(size).fill(0), { backPressure: false });
   s.length = size * 2;
   s.shift();
   s[Symbol.dispose]();
@@ -51,7 +51,7 @@ await within("SE-048 single writes in a large array", 1000, async () => {
   const s = select(new Array(size).fill(0), {
     autoStart: true,
     autoClose: false,
-    nonYielding: true,
+    backPressure: false,
     [REPORT]: () => {},
   });
   await new Promise(resolve => setTimeout(resolve));
@@ -71,7 +71,7 @@ await within("SE-048 settles in a large array", 1000, async () => {
     gates.map(gate => gate.promise),
     {
       autoStart: true,
-      nonYielding: true,
+      backPressure: false,
       [REPORT]: ops => {
         if (ops.length === gates.length) resolve();
       },
@@ -90,7 +90,7 @@ await within(
     const keys = Array.from({ length: 4000 }, (_, i) => `k${i}`);
     const s = select(Object.fromEntries(keys.map(key => [key, 0])), {
       autoStart: true,
-      nonYielding: true,
+      backPressure: false,
     });
     for (const key of keys)
       (async () => {
@@ -119,7 +119,7 @@ await within(
 
 {
   (globalThis as any).document = fakeDocument;
-  const list = select([] as number[], { nonYielding: true });
+  const list = select([] as number[], { backPressure: false });
   const stop = mount(
     fakeDocument.createElement("ul") as any,
     each(list, item => jsx("li", { children: `${item.value}` })),

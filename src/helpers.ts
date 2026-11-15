@@ -12,32 +12,16 @@ import {
   building,
   checkOptions,
   detectStream,
+  noop,
   open,
   PROMISE,
   quiet,
   quietReturn,
   relocate,
   replace,
+  SHARE,
   VAL,
 } from "./source.ts";
-
-/** Settles as the promise does, or rejects with the signal reason when the signal aborts first. */
-export function abortable<T>(
-  promise: PromiseLike<T>,
-  signal: AbortSignal,
-): Promise<T> {
-  if (signal.aborted) {
-    quiet(promise);
-    return Promise.reject(signal.reason);
-  }
-  const { promise: result, resolve, reject } = Promise.withResolvers<T>();
-  const onAbort = () => reject(signal.reason);
-  const remove = () => signal.removeEventListener("abort", onAbort);
-  signal.addEventListener("abort", onAbort);
-  Promise.resolve(promise).then(resolve, reject);
-  result.then(remove, remove);
-  return result;
-}
 
 export interface Caught<T> extends AsyncIterableIterator<T, unknown, void> {
   return(value?: unknown): Promise<IteratorResult<T, unknown>>;
@@ -135,6 +119,124 @@ const drop = (stops: (() => void)[]) => {
   for (const stop of stops) stop();
 };
 
+// A result of a hub: a value, the end of its source, or the failure of its source.
+type Result = { value?: unknown; done?: true; failed?: true; error?: unknown };
+type Hub = { subscribe(take: (result: Result) => void): () => void };
+
+/**
+ * Makes one reader of open for all subscribers, which opens at the first subscriber and returns after the last (HE-05A).
+ * A new subscriber gets the newest result at once. */
+const hub = (open: () => AsyncIterator<unknown>): Hub => {
+  const takers = new Set<(result: Result) => void>();
+  let iterator: AsyncIterator<unknown> | undefined,
+    newest: Result | undefined,
+    run = 0;
+  const send = (result: Result) => {
+    newest = result;
+    for (const take of [...takers]) take(result);
+  };
+  /** Reads the source until it finishes or fails, or until the last subscriber leaves. */
+  const pump = async (mine: number) => {
+    for (;;) {
+      let result: Result;
+      try {
+        const read = await (iterator as AsyncIterator<unknown>).next();
+        result = read.done ? { done: true } : { value: read.value };
+      } catch (error) {
+        result = { failed: true, error };
+      }
+      if (mine !== run) return; // The last subscriber left, so a later run owns the hub
+      send(result);
+      if (result.done || result.failed) return;
+    }
+  };
+  return {
+    subscribe(take) {
+      takers.add(take);
+      if (newest) take(newest);
+      else if (!iterator) {
+        iterator = open();
+        // Stryker disable next-line UpdateOperator: runs only need to differ
+        void pump(++run);
+      }
+      return () => {
+        // A finished source keeps its last result, so a later subscriber gets it.
+        if (
+          !takers.delete(take) ||
+          takers.size ||
+          newest?.done ||
+          newest?.failed
+        )
+          return;
+        // Stryker disable next-line UpdateOperator: runs only need to differ
+        run++;
+        void quietReturn(iterator);
+        iterator = undefined;
+        newest = undefined;
+      };
+    },
+  };
+};
+
+// The hubs of object slots by state and key, and of shared sources (HE-05A).
+const slotHubs = new WeakMap<object, Map<PropertyKey, Hub>>(),
+  sourceHubs = new WeakMap<object, Hub>();
+/** Gives the hub of one slot of an object select, or of a shared source, or undefined for any other source. */
+const hubOf = (source: any, keyed: boolean, key: unknown) => {
+  if (keyed) {
+    // An array slot moves, so a later derive of an index can name another slot.
+    if (Array.isArray(source)) return undefined;
+    let byKey = slotHubs.get(source);
+    if (!byKey) slotHubs.set(source, (byKey = new Map()));
+    let made = byKey.get(key as PropertyKey);
+    if (!made)
+      byKey.set(
+        key as PropertyKey,
+        (made = hub(() => watch(source, key as PropertyKey))),
+      );
+    return made;
+  }
+  if (!source[SHARE]) return undefined;
+  let made = sourceHubs.get(source);
+  if (!made)
+    sourceHubs.set(source, (made = hub(() => source[Symbol.asyncIterator]())));
+  return made;
+};
+
+/** Reads a hub as an async iterator of its newest value, as a reader of a watch or of an item reads. */
+const reading = (from: Hub): AsyncIterable<unknown> => ({
+  [Symbol.asyncIterator](): any {
+    let held: Result | undefined, // The newest value that next() did not give
+      end: Result | undefined,
+      wake: (() => void) | undefined,
+      off: (() => void) | undefined;
+    const take = (result: Result) => {
+      if (result.done || result.failed) end = result;
+      else held = result;
+      wake?.();
+    };
+    return {
+      async next(): Promise<IteratorResult<unknown>> {
+        off ??= from.subscribe(take);
+        while (!held && !end)
+          await new Promise<void>(resolve => (wake = resolve));
+        wake = undefined;
+        if (held) {
+          const { value } = held;
+          held = undefined;
+          return { done: false, value };
+        }
+        if ((end as Result).failed) throw (end as Result).error;
+        return { done: true, value: undefined };
+      },
+      // mapped opens this iterator only to call next(), so off exists here, and it uses no result of return().
+      return() {
+        (off as () => void)();
+      },
+    };
+  },
+});
+
 /** Maps each output of one slot of a select, from `watch`, so the map runs only when that slot changes (HE-054). */
 export function derive<O, K extends Keys<O>, R>(
   state: Reads<O>,
@@ -157,10 +259,13 @@ export function derive(
     throw new TypeError("derive source is not an async iterable");
   if (typeof map !== "function")
     throw new TypeError("derive map must be a function");
-  if (keyed) source = watch(source, keyOrMap as PropertyKey); // SE-160 checks the state and the key
-  const box: { emit?: Emit } = {},
-    derived = mapped(source, map, box);
-  box.emit = register("derive", derived, { source, map }); // Here, so the hook finds the caller at its fixed depth (DV-003)
+  // SE-160 checks the state and the key, and the watch opens only for a slot that no hub shares.
+  const checked = keyed ? watch(source, keyOrMap as PropertyKey) : source,
+    shared = hubOf(source, keyed, keyOrMap);
+  const from = shared ? reading(shared) : checked,
+    box: { emit?: Emit } = {},
+    derived = mapped(from, map, box, undefined, shared);
+  box.emit = register("derive", derived, { source: from, map }); // Here, so the hook finds the caller at its fixed depth (DV-003)
   return derived;
 }
 
@@ -193,6 +298,7 @@ const mapped = (
   map: (value: unknown) => unknown,
   box: { emit?: Emit },
   pass?: (value: unknown) => boolean,
+  shared?: Hub,
 ): Derived<unknown> => {
   const pending: PromiseWithResolvers<IteratorResult<unknown, void>>[] = [];
   let iterator: any,
@@ -282,8 +388,67 @@ const mapped = (
       return this;
     },
   };
+  if (shared)
+    (derived as any)[BIND] = (sink: Sink, parked: boolean): Bound => {
+      started = true;
+      box.emit?.("start");
+      let held: Result | undefined, // The newest value while parked
+        turn = 0,
+        off = noop;
+      /**
+       * Maps a value and gives the output to the sink, unless a later value or a stop came first.
+       * A prop shows no node, so a binding owns nothing that map builds (JX-067). */
+      const apply = async (value: unknown) => {
+        // Stryker disable next-line UpdateOperator: turns only need to differ
+        const mine = ++turn;
+        try {
+          const settled = await map(value);
+          if (finished || mine !== turn) return;
+          box.emit?.("value", settled); // DV-061
+          sink.value(settled);
+        } catch (error) {
+          if (finished || mine !== turn) return;
+          finish();
+          off();
+          sink.fail(error);
+        }
+      };
+      const take = (result: Result) => {
+        if (finished) return;
+        if (result.failed) {
+          finish();
+          sink.fail(result.error);
+        } else if (result.done)
+          finish(); // The prop keeps its last output (JX-066), and the binding stays until its scope stops
+        else if (parked) held = result;
+        else void apply(result.value);
+      };
+      off = shared.subscribe(take);
+      return {
+        park(on) {
+          parked = on;
+          if (on || !held) return;
+          const { value } = held;
+          held = undefined;
+          void apply(value);
+        },
+        stop() {
+          if (finished) return;
+          finish();
+          off();
+        },
+      };
+    };
   return derived;
 };
+
+// What binds a derive with a shared source to a host, which then gives its outputs to sink with no drive (JX-067).
+export const BIND: unique symbol = Symbol() as any;
+type Sink = {
+  value(output: unknown): void;
+  fail(error: unknown): void;
+};
+type Bound = { park(on: boolean): void; stop(): void };
 
 /** Tells if a value is a `Val` that select made. */
 export function isVal(value: unknown): value is Val<unknown> {
@@ -386,21 +551,19 @@ const store = (target: any, key: PropertyKey, value: unknown) => {
   else target[key] = value;
 };
 
-// An array fold links each fresh cell to the cell it took over in prev, and gives a leaving cell the output it had.
+// A cell of an array fold: an entry from before the call, or a fresh value that landed.
+// A fresh cell links to the cell that it updates, and an entry that leaves keeps the output it had (HE-04H).
 type Cell = {
   entry?: unknown;
   value?: unknown;
-  prev?: any;
+  link?: Cell;
+  spot?: Cell; // The cell at the index where a fresh value landed, which it takes over when nothing matches it
   fresh?: boolean;
   taken?: boolean;
+  changed?: boolean; // An update changed the output of the entry before it left
 };
+type Match = (output: unknown) => unknown;
 
-/** Makes a cell for a value that lands, with what it replaces. */
-const incoming = (value: unknown, prev: unknown): Cell => ({
-  fresh: true,
-  value,
-  prev,
-});
 const MINUS_ZERO = Symbol();
 /** Gives a Map key that tells -0 from 0, as `Object.is` does. */
 // Stryker disable next-line UnaryOperator: a symbol key for 0 instead of -0 tells them apart too
@@ -443,100 +606,177 @@ export const untouched = (ops: readonly Op[], size: number) => {
   return [head, tail] as const;
 };
 
+/** Tells if a set updates what its index holds: a slot that stays, the same output, or the same key (HE-04H). */
+const updates = (op: Extract<Op, { op: "set" }>, match?: Match) =>
+  !!op.kept ||
+  Object.is(op.value, op.prev) ||
+  (!!match && Object.is(match(op.value), match(op.prev)));
+
 /**
- * Folds ops that are all sets, and reads only the indexes that they name.
- * An index keeps its entry when its last value is the output that it had (HE-04H). */
-const foldSets = (target: any[], ops: readonly Op[], map: any) => {
-  const had = new Map<number, unknown>(),
-    values = new Map<number, unknown>();
-  for (const op of ops as Extract<Op, { op: "set" }>[]) {
-    checkFit(op, true);
-    const index = op.key as number;
-    if (!values.has(index)) had.set(index, op.prev);
-    values.set(index, op.value);
+ * Replays ops onto cells, and gives the entries that left, in leaving order.
+ * cell gives the cell at an index, which a fold of sets makes when it first needs it. */
+const play = (
+  cells: (Cell | undefined)[],
+  ops: readonly Op[],
+  cell: (at: number) => Cell | undefined,
+  head: number,
+  match?: Match,
+) => {
+  const left: Cell[] = [];
+  /** Gives the entry that a leaving cell holds or updates the output it had, and a fresh cell with no link has none. */
+  const leave = (at: Cell | undefined, value: unknown) => {
+    const changed = !!at?.fresh;
+    while (at?.fresh) at = at.link;
+    if (at) {
+      at.value = value;
+      at.changed = changed;
+      left.push(at);
+    }
+  };
+  for (const op of ops) {
+    if (op.op === "set") {
+      const at = (op.key as number) - head,
+        old = cell(at),
+        update = updates(op, match);
+      leave(old, op.prev); // An update claims its entry first, so no value matches it (HE-04H)
+      cells[at] = update
+        ? { fresh: true, value: op.value, link: old }
+        : { fresh: true, value: op.value, spot: old };
+    } else if (op.op === "move")
+      relocate(cells, op.order); // A move leaves no entry untouched, so cells hold the whole target
+    else {
+      const { start, removed, added } = op as Extract<Op, { op: "splice" }>,
+        at = start - head,
+        gone = cells.slice(at, at + removed.length);
+      gone.forEach((cell, index) => {
+        leave(cell, removed[index]);
+      });
+      replace(
+        cells,
+        at,
+        removed.length,
+        added.map((value, index) => ({
+          fresh: true,
+          value,
+          spot: gone[index],
+        })),
+      );
+    }
   }
-  const items = [...values.keys()]
-    .sort((a, b) => a - b)
-    .map(index => {
-      const value = values.get(index),
-        prev = own(target, index);
-      return Object.hasOwn(target, index) && Object.is(had.get(index), value)
-        ? prev
-        : map(value, prev);
-    });
-  [...values.keys()]
-    .sort((a, b) => a - b)
-    .forEach((index, i) => {
-      if (index >= target.length || !Object.is(target[index], items[i]))
-        target[index] = items[i];
-    });
+  return left;
+};
+
+/**
+ * Gives the entry of each final cell, in index order (HE-04B, HE-04H).
+ * An update takes the entry that it updates, then each other value takes the first leaving entry with its match. */
+const settle = (
+  finals: (Cell | undefined)[],
+  left: Cell[],
+  map: any,
+  match?: Match,
+  eager = false,
+) => {
+  const from: (Cell | undefined)[] = [],
+    pending: number[] = [],
+    byMatch = new Map<unknown, Cell[]>();
+  finals.forEach((cell, i) => {
+    if (!cell?.fresh) return;
+    let root = cell.link;
+    while (root?.fresh) root = root.link;
+    if (!root) {
+      pending.push(i);
+      return;
+    }
+    root.taken = true;
+    from[i] = root;
+  });
+  const matchOf = (value: unknown) => keyOf(match ? match(value) : value);
+  for (const cell of left) {
+    const key = matchOf(cell.value);
+    byMatch.get(key)?.push(cell) ?? byMatch.set(key, [cell]);
+  }
+  const unmatched: number[] = [];
+  for (const i of pending) {
+    const list = byMatch.get(matchOf((finals[i] as Cell).value));
+    for (let cell: Cell | undefined; (cell = list?.shift()); )
+      if (!cell.taken) {
+        cell.taken = true;
+        from[i] = cell;
+        break;
+      }
+    if (!from[i]) unmatched.push(i);
+  }
+  // Without key, a value that matches nothing takes over the entry that left its index, if no value took it.
+  if (!match)
+    for (const i of unmatched) {
+      let spot = (finals[i] as Cell).spot;
+      while (spot?.fresh) spot = spot.link ?? spot.spot;
+      // Each cell lands at most once on another, so no two values share a spot.
+      if (spot && !spot.taken) from[i] = spot;
+    }
+  // A hole in the cells reads as an undefined entry (HE-04G).
+  return Array.from(finals, (cell, i) => {
+    if (!cell?.fresh) return cell?.entry;
+    const prev = from[i];
+    return !eager &&
+      prev &&
+      !cell.link &&
+      !prev.changed &&
+      Object.is(prev.value, cell.value)
+      ? prev.entry
+      : map(cell.value, prev?.entry);
+  });
+};
+
+/** Folds ops that are all sets, and reads only the indexes that they name (HE-04I). */
+const foldSets = (
+  target: any[],
+  ops: readonly Op[],
+  map: any,
+  match?: Match,
+) => {
+  const cells: (Cell | undefined)[] = [];
+  for (const op of ops) checkFit(op, true);
+  const left = play(
+    cells,
+    ops,
+    at =>
+      cells[at] ??
+      (at < target.length ? (cells[at] = { entry: target[at] }) : undefined),
+    0,
+    match,
+  );
+  const named = Object.keys(cells).map(Number),
+    items = settle(
+      named.map(at => cells[at]),
+      left,
+      map,
+      match,
+    );
+  named.forEach((index, i) => {
+    if (index >= target.length || !Object.is(target[index], items[i]))
+      target[index] = items[i];
+  });
   return target;
 };
 
 /**
- * Replays ops onto cells first, so each value that lands takes over a leaving cell by value (HE-04H) or by position.
- * Then reuses the entry of a value that comes back, and maps each other value one time. */
-const foldArray = (target: any[], ops: readonly Op[], map: any) => {
+ * Replays ops onto cells first, so each value that lands takes over a leaving entry (HE-04H).
+ * Then maps each value that reuses no entry one time. */
+const foldArray = (
+  target: any[],
+  ops: readonly Op[],
+  map: any,
+  match?: Match,
+) => {
   // Only the entries between the untouched ones get a cell, so a short change of a long array stays short.
   const [head, tail] = untouched(ops, target.length),
     was = target.length - head - tail,
-    cells: Cell[] = target.slice(head, head + was).map(entry => ({ entry })),
-    left = new Map<unknown, Cell[]>();
-  /** Gives a cell that leaves its index the output it had, which for a fresh cell is its own value. */
-  const leave = (cell: Cell | undefined, value: unknown) => {
-    if (cell) cell.value = value;
-    return cell;
-  };
-  /** Marks a cell as taken over by a value that lands. */
-  const take = (cell?: Cell) => {
-    if (cell) cell.taken = true;
-    return cell;
-  };
-  /** Takes the first leaving cell with this value, in leaving order. */
-  const match = (value: unknown) => {
-    const list = left.get(keyOf(value));
-    for (let cell: Cell | undefined; (cell = list?.shift()); )
-      if (!cell.taken) return take(cell);
-  };
-  for (const op of ops) {
-    if (op.op === "set") {
-      const at = (op.key as number) - head;
-      cells[at] = incoming(op.value, take(leave(cells[at], op.prev)));
-    } else if (op.op === "move")
-      relocate(cells, op.order); // A move leaves no entry untouched, so cells hold the whole target
-    else {
-      const { removed, added } = op as Extract<Op, { op: "splice" }>,
-        start = (op as Extract<Op, { op: "splice" }>).start - head,
-        count = removed.length,
-        gone = cells.slice(start, start + count);
-      gone.forEach((cell, index) => {
-        if (!leave(cell, removed[index])) return;
-        const key = keyOf(cell.value);
-        left.get(key)?.push(cell) ?? left.set(key, [cell]);
-      });
-      // Values claim by value first, so a position gives only a cell that no value takes.
-      const found = added.map(match);
-      const items = added.map((value, index) => {
-        const at = gone[index];
-        return incoming(
-          value,
-          found[index] ?? (at?.taken ? undefined : take(at)),
-        );
-      });
-      replace(cells, start, count, items);
-    }
-  }
-  /** Gives the original cell at the start of a chain of fresh cells. */
-  const origin = (cell: Cell): Cell | undefined =>
-    cell?.fresh ? origin(cell.prev) : cell;
-  // A hole in the cells reads as an undefined entry (HE-04G).
-  const items = Array.from(cells, cell => {
-    if (!cell?.fresh) return cell?.entry;
-    const from = origin(cell.prev);
-    return from && Object.is(from.value, cell.value)
-      ? from.entry
-      : map(cell.value, from?.entry);
-  });
+    cells: (Cell | undefined)[] = target
+      .slice(head, head + was)
+      .map(entry => ({ entry }));
+  const left = play(cells, ops, at => cells[at], head, match),
+    items = settle(cells, left, map, match);
   const common = Math.min(was, items.length);
   for (let i = 0; i < common; i++)
     if (!Object.is(target[head + i], items[i])) target[head + i] = items[i];
@@ -547,13 +787,14 @@ const foldArray = (target: any[], ops: readonly Op[], map: any) => {
 
 /** Replays ops onto an object, maps each key that ends set one time, and keeps the final key order. */
 const foldObject = (target: any, ops: readonly Op[], map: any) => {
-  const sets = new Map<PropertyKey, Cell>(),
+  const sets = new Map<PropertyKey, { value: unknown; prev: unknown }>(),
     gone = new Set<PropertyKey>();
   for (const op of ops) {
     checkFit(op, false);
     const { key } = op as Extract<Op, { key: unknown }>,
       name = typeof key === "number" ? `${key}` : key;
-    if (op.op === "set") sets.set(name, incoming(op.value, own(target, name)));
+    if (op.op === "set")
+      sets.set(name, { value: op.value, prev: own(target, name) });
     else {
       gone.add(name);
       sets.delete(name);
@@ -566,7 +807,10 @@ const foldObject = (target: any, ops: readonly Op[], map: any) => {
   const entries = Reflect.ownKeys(order)
     .filter(key => sets.has(key))
     .map(key => {
-      const { value, prev } = sets.get(key) as Cell;
+      const { value, prev } = sets.get(key) as {
+        value: unknown;
+        prev: unknown;
+      };
       return [key, map(value, prev)] as const;
     });
   for (const key of gone) delete target[key];
@@ -574,25 +818,32 @@ const foldObject = (target: any, ops: readonly Op[], map: any) => {
   return target;
 };
 
+/** The options of `applyOps`. */
+export type ApplyOptions = {
+  eager?: boolean;
+  key?: (output: any) => unknown;
+};
+
 /** Replays select operations onto a mirror, and derives each entry that lands with map. */
 export function applyOps<T extends object>(
   target: T,
   ops: readonly Op[],
   map?: (value: unknown, prev: Entry<T> | undefined) => Entry<T>,
-  options?: { eager?: boolean },
+  options?: ApplyOptions,
 ): T;
 export function applyOps(
   target: any,
   ops: readonly Op[],
   map: any = same,
-  options: { eager?: boolean } = {},
+  options: ApplyOptions = {},
 ) {
   if (Object(target) !== target)
     throw new TypeError("applyOps target must be an object");
   if (typeof map !== "function")
     throw new TypeError("applyOps map must be a function");
-  checkOptions(options, { eager: "boolean" });
-  const array = Array.isArray(target);
+  checkOptions(options, { eager: "boolean", key: "function" });
+  const array = Array.isArray(target),
+    match = options.key;
   if (!options.eager)
     return (
       !array
@@ -600,20 +851,44 @@ export function applyOps(
         : ops.every(op => op.op === "set")
           ? foldSets
           : foldArray
-    )(target, ops, map);
+    )(target, ops, map, match);
   for (const op of ops) {
     checkFit(op, array);
     if (op.op === "set")
-      store(target, op.key, map(op.value, own(target, op.key)));
+      store(
+        target,
+        op.key,
+        map(
+          op.value,
+          !array || !match || updates(op, match)
+            ? own(target, op.key)
+            : undefined,
+        ),
+      );
     else if (op.op === "delete") delete target[op.key];
     else if (op.op === "move") relocate(target, op.order);
     else {
       const { start, removed, added } = op as Extract<Op, { op: "splice" }>,
-        count = removed.length;
-      const items = added.map((value, index) =>
-        map(value, index < count ? target[start + index] : undefined),
+        gone = removed.map((output, index) => ({
+          entry: target[start + index],
+          value: output,
+        }));
+      replace(
+        target,
+        start,
+        removed.length,
+        settle(
+          added.map((value, index) => ({
+            fresh: true,
+            value,
+            spot: gone[index],
+          })),
+          gone,
+          map,
+          match,
+          true,
+        ),
       );
-      replace(target, start, count, items);
     }
   }
   return target;

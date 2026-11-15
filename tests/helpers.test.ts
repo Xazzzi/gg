@@ -1,16 +1,13 @@
 import assert from "node:assert/strict";
-import { getEventListeners } from "node:events";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
 import {
-  abortable,
   applyOps,
   CHAN,
   Channel,
   catching,
   derive,
-  isVal,
   type Op,
   select,
   spread,
@@ -22,77 +19,6 @@ const val = (value: unknown) => ({ value, done: false });
 const isPending = (promise: Promise<unknown>) =>
   inspect(promise).includes("<pending>");
 const noop = () => {};
-
-const listening = (signal: AbortSignal) =>
-  getEventListeners(signal, "abort").length;
-
-test("HE-001 settles as the promise settles", async () => {
-  const { signal } = new AbortController();
-  assert.equal(await abortable(Promise.resolve(1), signal), 1);
-  const failure = new Error("x");
-  await assert.rejects(
-    abortable(Promise.reject(failure), signal),
-    e => e === failure,
-  );
-});
-
-test("HE-002 HE-005 an abort wins, and a late rejection is handled", async () => {
-  const control = new AbortController();
-  const source = Promise.withResolvers<number>();
-  const result = abortable(source.promise, control.signal);
-  control.abort("why");
-  await assert.rejects(result, e => e === "why");
-  source.reject(new Error("late"));
-  await setImmediate();
-});
-
-test("HE-003 HE-005 an aborted signal rejects without calling then", async () => {
-  const signal = AbortSignal.abort("why");
-  let calls = 0;
-  await assert.rejects(
-    abortable(
-      {
-        then() {
-          calls++;
-        },
-      } as any,
-      signal,
-    ),
-    e => e === "why",
-  );
-  assert.equal(calls, 0);
-  await assert.rejects(
-    abortable(Promise.reject(new Error("x")), signal),
-    e => e === "why",
-  );
-  await setImmediate();
-});
-
-test("HE-004 the listener goes once settled", async () => {
-  const control = new AbortController();
-  const running = abortable(new Promise(noop), control.signal);
-  assert.equal(listening(control.signal), 1);
-  await abortable(Promise.resolve(1), control.signal);
-  await abortable(Promise.reject(new Error("x")), control.signal).catch(noop);
-  const failure = new Error("y");
-  await assert.rejects(
-    abortable(
-      {
-        then() {
-          throw failure;
-        },
-      } as any,
-      control.signal,
-    ),
-    e => e === failure,
-  );
-  await setImmediate();
-  assert.equal(listening(control.signal), 1);
-  control.abort("why");
-  await assert.rejects(running, e => e === "why");
-  await setImmediate();
-  assert.equal(listening(control.signal), 0);
-});
 
 test("HE-010 onError is required", () => {
   assert.throws(() => catching([1], undefined as any), TypeError);
@@ -550,7 +476,8 @@ test("HE-01A return during onError leaves next with onError", async () => {
   assert.deepEqual(await late, end());
 });
 
-test("HE-020 isVal reads the brand only", async () => {
+test("HE-020 spread takes a Val by its brand only", async () => {
+  const isVal = (value: unknown) => "xLoading" in spread({ x: value });
   const s = select(
     { a: Promise.resolve(1) },
     { autoClose: true, autoStart: true, backPressure: false },
@@ -685,7 +612,7 @@ test("HE-040 a mirror equals the outputs of a real select", async () => {
   const state = select([3, 1], {
     autoStart: true,
     autoClose: false,
-    nonYielding: true,
+    backPressure: false,
     [REPORT]: ops => applyOps(mirror, ops),
   });
   await setImmediate();
@@ -730,24 +657,35 @@ test("HE-042 delete removes the key without map", () => {
   assert.deepEqual(target, { b: 2 });
 });
 
-test("HE-043 splice maps in order, pairing removed entries by index", () => {
-  const seen: unknown[][] = [];
-  const target = ["x", "A", "B", "y"];
-  applyOps(
-    target,
-    [{ op: "splice", start: 1, removed: [0, 0], added: ["p", "q", "r"] }],
-    (value, prev) => {
-      seen.push([value, prev, target.length]);
-      return value as string;
-    },
-    eager,
-  );
-  assert.deepEqual(seen, [
-    ["p", "A", 4],
-    ["q", "B", 4],
-    ["r", undefined, 4],
-  ]);
-  assert.deepEqual(target, ["x", "p", "q", "r", "y"]);
+test("HE-043 splice maps in order, pairing removed entries by match", () => {
+  for (const [options, prevs] of [
+    [eager, ["B", undefined, "A"]],
+    [{ ...eager, key: (value: string) => value[0] }, ["B", "A", undefined]],
+  ] as const) {
+    const seen: unknown[][] = [];
+    const target = ["x", "A", "B", "y"];
+    applyOps(
+      target,
+      [
+        {
+          op: "splice",
+          start: 1,
+          removed: ["a", "b"],
+          added: ["b", "a2", "a"],
+        },
+      ],
+      (value, prev) => {
+        seen.push([value, prev, target.length]);
+        return value as string;
+      },
+      options,
+    );
+    assert.deepEqual(
+      seen,
+      ["b", "a2", "a"].map((value, i) => [value, prevs[i], 4]),
+    );
+    assert.deepEqual(target, ["x", "b", "a2", "a", "y"]);
+  }
 });
 
 test("HE-044 splice takes more values than a call has arguments", () => {
@@ -979,23 +917,29 @@ test("HE-04B lazy keeps a symbol key after the string keys", () => {
   assert.equal(target[key], 1);
 });
 
-test("HE-04C prev follows the position through moves and repeat writes", () => {
+test("HE-04C an update follows its entry through moves and repeat writes", () => {
   const seen: unknown[][] = [];
-  applyOps(
+  const kept = (key: number, value: unknown, prev: unknown): Op => ({
+    op: "set",
+    key,
+    value,
+    prev,
+    kept: true,
+  });
+  const target = applyOps(
     ["A", "B", "C"],
     [
       { op: "move", order: [2, 1, 0] },
-      set(0, 1),
-      set(0, 2),
-      cut(1, 2, 3, 4, 5),
+      kept(0, "c2", "c"),
+      kept(0, "c3", "c2"),
+      splice(1, ["b", "a"], ["a", "x", "b"]),
     ],
     tag(seen),
   );
+  assert.deepEqual(target, ["c3!", "A", "x!", "B"]);
   assert.deepEqual(seen, [
-    [2, "C"],
-    [3, "B"],
-    [4, "A"],
-    [5, undefined],
+    ["c3", "C"],
+    ["x", undefined],
   ]);
 });
 
@@ -1022,7 +966,7 @@ test("HE-04C a key removed and set again inherits its entry, once", () => {
   assert.deepEqual(fresh, [[1, undefined]]);
 });
 
-test("HE-04C a splice value past the removed range has no prev", () => {
+test("HE-04C a value that matches nothing takes over the entry that left its index, and one past the removed range has no prev", () => {
   const seen: unknown[][] = [];
   const target = applyOps(["A", "B"], [cut(0, 1, 1, 2)], tag(seen));
   assert.deepEqual(seen, [
@@ -1112,6 +1056,7 @@ test("HE-04B HE-04C HE-04H lazy sets map in index order, one time for each index
     ],
     map,
   );
+  // "b" comes back to index 1, so it keeps its entry, and the other values take over the entries of their indexes.
   assert.deepEqual(calls, [
     ["y", "a"],
     ["z", "c"],
@@ -1282,7 +1227,7 @@ test("HE-04H equal values take entries in leaving order, and -0 differs from 0",
   assert.deepEqual(target, ["minus", "d1", "zero", "d2"]);
 });
 
-test("HE-04H a value that left and was taken over by position is not taken again", () => {
+test("HE-04H a value that left is taken over by its match, and not by position", () => {
   const seen: unknown[][] = [];
   const target = applyOps(
     ["a!"],
@@ -1290,10 +1235,7 @@ test("HE-04H a value that left and was taken over by position is not taken again
     tag(seen),
   );
   assert.deepEqual(target, ["x!", "a!"]);
-  assert.deepEqual(seen, [
-    ["x", "a!"],
-    ["a", undefined],
-  ]);
+  assert.deepEqual(seen, [["x", undefined]]);
 });
 
 test("HE-04H a value traces back through sets, and reuses an entry with the same output", () => {
@@ -1303,6 +1245,7 @@ test("HE-04H a value traces back through sets, and reuses an entry with the same
     key,
     value,
     prev,
+    ...(key === 0 && { kept: true as const }),
   });
   const target = applyOps(
     ["a!", "b!", "c!"],
@@ -1316,6 +1259,128 @@ test("HE-04H a value traces back through sets, and reuses an entry with the same
   );
   assert.deepEqual(target, ["b!", "a2!", "c!"]);
   assert.deepEqual(seen, [["a2", "a!"]]);
+});
+
+test("HE-04H two sets that swap values move their entries, with no map", () => {
+  const a = { id: 1 },
+    b = { id: 2 },
+    seen: unknown[][] = [];
+  const target = applyOps(
+    ["A", "x", "B"],
+    [
+      { op: "set", key: 0, value: b, prev: a },
+      { op: "set", key: 2, value: a, prev: b },
+    ],
+    tag(seen),
+  );
+  assert.deepEqual(target, ["B", "x", "A"]);
+  assert.deepEqual(seen, []);
+});
+
+test("HE-04H a set of a new value takes over the entry at its index, and a set of the same value updates it", () => {
+  const a = { id: 1 },
+    copy = { ...a },
+    seen: unknown[][] = [];
+  const target = applyOps(
+    ["A", "B"],
+    [
+      { op: "set", key: 0, value: copy, prev: a },
+      { op: "set", key: 1, value: "b", prev: "b" },
+    ],
+    (value, prev) => (seen.push([value, prev]), "new"),
+  );
+  assert.deepEqual(target, ["new", "new"]);
+  assert.deepEqual(seen, [
+    [copy, "A"],
+    ["b", "B"],
+  ]);
+});
+
+test("HE-04H with key, a value takes over the entry with its key, and a new key replaces", () => {
+  const key = (row: { id: number }) => row.id,
+    rows = [1, 2, 3].map(id => ({ id, v: 0 })),
+    seen: unknown[][] = [];
+  const map = (value: any, prev: unknown) => (
+    seen.push([value.id, prev]), `${value.id}:${value.v}`
+  );
+  for (const options of [{ key }, { key, eager: true }]) {
+    seen.length = 0;
+    const target = applyOps(
+      ["1", "2", "3"],
+      [
+        { op: "set", key: 0, value: { id: 1, v: 1 }, prev: rows[0] },
+        { op: "set", key: 1, value: { id: 9, v: 0 }, prev: rows[1] },
+        splice(2, [rows[2]], [{ id: 3, v: 2 }]),
+      ],
+      map,
+      options,
+    );
+    assert.deepEqual(target, ["1:1", "9:0", "3:2"]);
+    assert.deepEqual(seen, [
+      [1, "1"],
+      [9, undefined],
+      [3, "3"],
+    ]);
+  }
+  // With key, a value with the same output and key moves its entry, with no map.
+  const target = applyOps(
+    ["1", "2"],
+    [splice(0, rows.slice(0, 2), [rows[1], rows[0]])],
+    () => assert.fail("map ran"),
+    { key },
+  );
+  assert.deepEqual(target, ["2", "1"]);
+});
+
+test("HE-04H an update claims its entry, so a value that matches the output it left with takes no entry", () => {
+  const seen: unknown[][] = [];
+  const target = applyOps(
+    ["A"],
+    [
+      { op: "set", key: 0, value: "a2", prev: "a", kept: true },
+      splice(1, [], ["a"]),
+    ],
+    tag(seen),
+  );
+  assert.deepEqual(target, ["a2!", "a!"]);
+  assert.deepEqual(seen, [
+    ["a2", "A"],
+    ["a", undefined],
+  ]);
+});
+
+test("HE-04H HE-04I a set past the end leaves no entry for another value to match", () => {
+  for (const past of [1, 2]) {
+    const seen: unknown[][] = [];
+    applyOps(
+      ["A"],
+      [
+        { op: "set", key: past, value: "x", prev: undefined },
+        { op: "set", key: 0, value: undefined, prev: "a" },
+      ],
+      tag(seen),
+    );
+    assert.deepEqual(seen, [
+      [undefined, "A"],
+      ["x", undefined],
+    ]);
+  }
+});
+
+test("HE-041 under eager, an array set without key passes the entry at its index", () => {
+  const seen: unknown[][] = [];
+  applyOps(
+    ["A"],
+    [{ op: "set", key: 0, value: "x", prev: "a" }],
+    tag(seen),
+    eager,
+  );
+  assert.deepEqual(seen, [["x", "A"]]);
+});
+
+test("HE-049 key must be a function", () => {
+  for (const key of [1, "id", null])
+    assert.throws(() => applyOps([], [], undefined, { key } as any), TypeError);
 });
 
 test("HE-050 derive checks its source and map", () => {

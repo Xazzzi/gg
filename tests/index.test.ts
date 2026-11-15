@@ -1,3 +1,4 @@
+import "./binding.test.ts";
 import "./changes.test.ts";
 import "./channel.test.ts";
 import "./devtools.test.ts";

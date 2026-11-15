@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
+import { isVal } from "../src/helpers.ts";
 import {
   CHAN,
   Channel,
   catching,
+  changes,
   feed,
-  isVal,
   type Op,
   select,
   spread,
@@ -116,7 +117,7 @@ test("Examples catching keeps one source quiet under unwrap", async () => {
 test("Examples replay array changes", async () => {
   const log = opLog();
   const s = select([] as string[], {
-    nonYielding: true,
+    backPressure: false,
     autoClose: false,
     autoStart: true,
     ...log,
@@ -174,13 +175,7 @@ test("SE-008 an unlisted option key throws, and channel option keys pass", () =>
 });
 
 test("SE-007 options of the wrong type throw, and undefined selects the default", async () => {
-  for (const key of [
-    "autoStart",
-    "autoClose",
-    "backPressure",
-    "nonYielding",
-    "unwrap",
-  ])
+  for (const key of ["autoStart", "autoClose", "backPressure", "unwrap"])
     for (const value of [1, "yes", null, {}])
       assert.throws(() => select({}, { [key]: value } as any), TypeError);
   for (const value of [1, "x", null, {}])
@@ -189,7 +184,6 @@ test("SE-007 options of the wrong type throw, and undefined selects the default"
     autoStart: undefined,
     autoClose: undefined,
     backPressure: undefined,
-    nonYielding: undefined,
     unwrap: undefined,
     mapSnapshot: undefined,
   };
@@ -481,11 +475,12 @@ test("SE-022 a slot keeps its state between results", async () => {
       firstReceive: "first",
     },
   );
+  const it = iter(s),
+    first = it.next();
   await setImmediate();
   other.resolve(2);
   await setImmediate();
-  const it = iter(s);
-  await it.next();
+  await first;
   await it.next();
   const { value } = await it.next();
   assert.deepEqual(value, { source: ok(1, false), other: ok(2) });
@@ -953,6 +948,7 @@ test("SE-040 changes in one run publish once", async () => {
     { a: 1 },
     { ...open, mapSnapshot: snap => (published++, snap) },
   );
+  void iter(s).next();
   await setImmediate();
   s.a = 2;
   s.b = 3;
@@ -1158,7 +1154,7 @@ test("SE-015 a raw async iterator is pulled after the publish is read", async ()
   s[CHAN].close();
 });
 
-test("SE-045 nonYielding sends nothing and skips step 4", async () => {
+test("SE-045 a flush with no consumer builds no snapshot", async () => {
   let mapped = 0;
   const raw = (async function* () {
     yield 1;
@@ -1170,17 +1166,129 @@ test("SE-045 nonYielding sends nothing and skips step 4", async () => {
     {
       autoClose: true,
       autoStart: true,
-      nonYielding: true,
+      backPressure: false,
       mapSnapshot: () => void mapped++,
       ...log,
     },
   );
   await setImmediate();
   await setImmediate();
-  assert.equal(mapped, 0);
   assert.ok(s[CHAN].signal.aborted);
   assert.deepEqual(replay(log.ops, {}), { raw: ok(2) });
+  // A select with a report hook builds no snapshot at auto close either.
+  assert.equal(mapped, 0);
   assert.equal((await iter(s).next()).done, true);
+  // Without one, the auto close builds one snapshot, for a late consumer.
+  const t = select(
+    { raw: [1, 2][Symbol.iterator]() },
+    {
+      autoClose: true,
+      autoStart: true,
+      backPressure: false,
+      mapSnapshot: () => void mapped++,
+    },
+  );
+  await setImmediate();
+  assert.equal(mapped, 1);
+  const it = iter(t);
+  assert.deepEqual(await it.next(), { value: undefined, done: false });
+  assert.equal((await it.next()).done, true);
+});
+
+test("SE-045 a consumer that attaches after a change with no consumer reads the current snapshot", async () => {
+  const s: any = select({ a: 1 }, { autoStart: true });
+  const a = iter(s);
+  assert.deepEqual((await a.next()).value, { a: 1 });
+  await a.return();
+  s.a = 2;
+  await setImmediate();
+  s.a = 3;
+  await setImmediate();
+  const b = iter(s);
+  assert.deepEqual((await b.next()).value, { a: 3 });
+  s.a = 4;
+  assert.deepEqual((await b.next()).value, { a: 4 });
+  s[CHAN].close();
+});
+
+test("SE-045 with backPressure and no observer, a flush waits for an attach", async () => {
+  let pulls = 0;
+  const source = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.resolve({ value: ++pulls, done: false }),
+    }),
+  };
+  const s: any = select({ source }, { autoStart: true });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(pulls, 0);
+  const it = iter(s);
+  assert.equal((await it.next()).value.source.status, "pending");
+  assert.deepEqual((await it.next()).value, { source: ok(1, false) });
+  s[CHAN].close();
+});
+
+test("SE-045 SE-04A with no consumer, a reader ends the wait under any, and only an attach under all", async () => {
+  for (const ackStyle of ["any", "all"] as const) {
+    let pulls = 0;
+    // A source that is always ready runs on microtasks only (SE-137), so it ends.
+    const source = {
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.resolve({ value: ++pulls, done: pulls > 3 }),
+      }),
+    };
+    const s: any = select({ source }, { autoStart: true, ackStyle });
+    const reader = changes(s);
+    void (async () => {
+      for await (const _ of reader);
+    })();
+    await setImmediate();
+    await setImmediate();
+    await setImmediate();
+    assert.equal(pulls, ackStyle === "any" ? 4 : 0);
+    await iter(s).next();
+    await setImmediate();
+    assert.ok(pulls > 0);
+    s[CHAN].close();
+  }
+});
+
+test("SE-045 a close ends the wait of a flush with no observer", async () => {
+  let pulls = 0,
+    returns = 0;
+  const source = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.resolve({ value: ++pulls, done: false }),
+      return: () => (
+        returns++, Promise.resolve({ value: undefined, done: true })
+      ),
+    }),
+  };
+  const s: any = select({ source }, { autoStart: true });
+  await setImmediate();
+  s[CHAN].close();
+  await setImmediate();
+  assert.deepEqual([pulls, returns], [0, 1]);
+  assert.equal((await iter(s).next()).done, true);
+});
+
+test("SE-045 a mapSnapshot that throws at an attach fails the channel", async () => {
+  const error = new Error("map");
+  let fail = false;
+  const s: any = select(
+    { a: 1 },
+    {
+      autoStart: true,
+      backPressure: false,
+      mapSnapshot: snap => {
+        if (fail) throw error;
+        return snap;
+      },
+    },
+  );
+  await setImmediate();
+  fail = true;
+  await assert.rejects(iter(s).next(), e => e === error);
 });
 
 test("SE-050 SE-053 unwrap snapshot, in slot order", async () => {
@@ -1421,12 +1529,11 @@ test("SE-074 a shape with no sources closes after its first flush", async () => 
   }
 });
 
-test("SE-075 collected changes keep the channel open", async () => {
+test("SE-075 SE-045 collected changes keep the channel open, and a late consumer reads them once", async () => {
   const s: any = select({ a: 1 }, { autoClose: true, autoStart: true });
   await setImmediate();
   s.b = 2;
   const it = iter(s);
-  assert.deepEqual((await it.next()).value, { a: 1 });
   assert.deepEqual((await it.next()).value, { a: 1, b: 2 });
   assert.equal((await it.next()).done, true);
 });
@@ -2013,6 +2120,7 @@ test("SE-09B a moved slot's updates reach its new index", async () => {
     key: 2,
     value: 7,
     prev: undefined,
+    kept: true,
   });
   assert.deepEqual(replay(log.ops, []), [2, 1, 7]);
   s[CHAN].close();
@@ -2296,7 +2404,7 @@ test("SE-098 length writes follow Array", async () => {
   assert.deepEqual([...s], [1, undefined, undefined]);
 });
 
-test("SE-100 SE-101 SE-103 SE-106 operations stay ordered and unmerged", async () => {
+test("SE-100 SE-101 SE-103 SE-106 SE-10C operations stay ordered and unmerged, and an assignment is not kept", async () => {
   const log = opLog();
   const s: any = select(["a", "b"], { ...open, ...log });
   await setImmediate();
@@ -2314,7 +2422,7 @@ test("SE-100 SE-101 SE-103 SE-106 operations stay ordered and unmerged", async (
   ]);
 });
 
-test("SE-102 operations hold outputs", async () => {
+test("SE-102 SE-10C operations hold outputs, and a state change is kept", async () => {
   const log = opLog();
   const p = Promise.withResolvers<number>();
   const s: any = select([p.promise], { ...open, ...log });
@@ -2325,7 +2433,7 @@ test("SE-102 operations hold outputs", async () => {
   assert.deepEqual(log.ops, [
     { op: "splice", start: 0, removed: [], added: [pendingVal] },
     { op: "splice", start: 0, removed: [], added: [0] },
-    { op: "set", key: 1, value: ok(1), prev: pendingVal },
+    { op: "set", key: 1, value: ok(1), prev: pendingVal, kept: true },
   ]);
   const unwrapLog = opLog();
   const u: any = select(
@@ -2532,6 +2640,7 @@ test("SE-112 SE-113 a stop while publishing ends quietly", async () => {
         mapSnapshot: snap => (c[CHAN].close(), snap),
       },
     );
+    void iter(c).next();
     await setImmediate();
     assert.ok(c[CHAN].signal.aborted);
     assert.equal((await iter(c).next()).done, true);
@@ -2549,12 +2658,12 @@ test("SE-046 a flush stops before publish", async () => {
       },
     }),
   };
-  for (const nonYielding of [false, true]) {
+  for (const backPressure of [false, true]) {
     const s: any = select(
       { source },
       {
         autoStart: true,
-        nonYielding,
+        backPressure,
         mapSnapshot: () => void mapped++,
         [REPORT]() {
           s[CHAN].close();
@@ -2892,6 +3001,7 @@ test("SE-043 a snapshot can include a change the next flush reports", async () =
       },
     },
   );
+  void iter(s).next();
   await setImmediate();
   assert.deepEqual(seen[0], { a: 1, b: 2 });
   assert.deepEqual(log[1], [
@@ -3034,7 +3144,7 @@ test("spread as mapSnapshot", async () => {
 const size = 300_000;
 
 test("SE-010 an array shape has no argument limit", { timeout: 3000 }, () => {
-  const s = select(new Array(size).fill(0), { ...open, nonYielding: true });
+  const s = select(new Array(size).fill(0), { ...open, backPressure: false });
   assert.equal(s.length, size);
   s[CHAN].close();
 });
@@ -3042,7 +3152,7 @@ test("SE-010 an array shape has no argument limit", { timeout: 3000 }, () => {
 test("SE-098 a length write has no argument limit", {
   timeout: 3000,
 }, async () => {
-  const s = select([] as unknown[], { ...open, nonYielding: true });
+  const s = select([] as unknown[], { ...open, backPressure: false });
   await setImmediate();
   s.length = size;
   assert.equal(s.length, size);
@@ -3054,7 +3164,7 @@ test("SE-098 a length write has no argument limit", {
 });
 
 test("SE-091 mutators have no argument limit", { timeout: 3000 }, async () => {
-  const s = select([1, 2] as unknown[], { ...open, nonYielding: true });
+  const s = select([1, 2] as unknown[], { ...open, backPressure: false });
   await setImmediate();
   s[size] = 3;
   assert.equal(s.length, size + 1);
@@ -3094,7 +3204,7 @@ test("SE-034 SE-035 a mutator keeps a Promise whose then throws", async () => {
   const { ops, [REPORT]: hook } = opLog();
   const s = select([] as unknown[], {
     ...open,
-    nonYielding: true,
+    backPressure: false,
     [REPORT]: hook,
   });
   await setImmediate();
@@ -3105,6 +3215,7 @@ test("SE-034 SE-035 a mutator keeps a Promise whose then throws", async () => {
     key: 0,
     value: bad(boom),
     prev: pendingVal,
+    kept: true,
   });
   s[CHAN].close();
 });
@@ -3193,7 +3304,6 @@ test("SE-136 a value pulled for a removed slot never gets to another consumer", 
       autoStart: true,
       autoClose: false,
       backPressure: false,
-      nonYielding: true,
     },
   );
   await setImmediate();
@@ -3218,7 +3328,6 @@ test("SE-136 next on a removed iterator gets the value after the one in progress
       autoStart: true,
       autoClose: false,
       backPressure: false,
-      nonYielding: true,
     },
   );
   await setImmediate();
@@ -3243,7 +3352,6 @@ test("SE-137 an always-ready async source starves the event loop", async () => {
       autoClose: true,
       autoStart: true,
       backPressure: false,
-      nonYielding: true,
     },
   );
   await new Promise(resolve =>
@@ -3414,7 +3522,7 @@ test("SE-04C a flush waits for a promise from the report hook before it pulls", 
     { a: source },
     {
       autoStart: true,
-      nonYielding: true,
+      backPressure: false,
       [REPORT]: ops => {
         seen.push(...ops.map(op => (op as any).value.value));
         return gate?.promise;

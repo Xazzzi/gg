@@ -707,7 +707,7 @@ const setup = (initial: string[] = []) => {
   const items = select(initial, {
     autoStart: true,
     autoClose: false,
-    nonYielding: true,
+    backPressure: false,
   });
   const list = each(items, item => (renders++, h(Row, { item })));
   return { parent, log, items, list, renders: () => renders };
@@ -719,7 +719,7 @@ const plain = (initial: string[] = []) => {
   const items = select(initial, {
       autoStart: true,
       autoClose: false,
-      nonYielding: true,
+      backPressure: false,
     }),
     seen: Item<string>[] = [];
   const list = each(items, item => (seen.push(item), el("li")));
@@ -819,7 +819,7 @@ test("JX-028 JX-037 an item that rejects or gives a bad child does not make each
       items = select(["a"], {
         autoStart: true,
         autoClose: false,
-        nonYielding: true,
+        backPressure: false,
       }),
       list = each(items, () => gate.promise as any);
     await setImmediate();
@@ -854,6 +854,89 @@ test("JX-037 a busy host gets one output for all reads since its last pull", asy
   assert.equal((await next).done, true);
 });
 
+test("JX-033 JX-03G JX-037 a swap by two sets moves the rows, and a new value at an index goes to its row", async () => {
+  const s = mounted(["a", "b", "c"]);
+  await setImmediate();
+  reset(s.parent);
+  [s.items[0], s.items[2]] = [s.items[2], s.items[0]];
+  await setImmediate();
+  assert.equal(html(s.parent), rows("c", "b", "a"));
+  assert.equal(s.renders(), 3);
+  assert.deepEqual(s.log, ["a", "b", "c"]);
+  assert.deepEqual(s.parent.counts, { insert: 2, remove: 0 });
+  s.items[1] = "x";
+  await setImmediate();
+  assert.equal(html(s.parent), rows("c", "x", "a"));
+  assert.equal(s.renders(), 3);
+  assert.deepEqual(s.log, ["a", "b", "c", "x"]);
+});
+
+test("JX-037 JX-03G a read of sets that replaces one row of several places the nodes", async () => {
+  const parent = el("ul"),
+    items = select(["a1", "b1"], { autoStart: true });
+  mount(
+    parent,
+    each(items, item => h("li", { children: item.value }), {
+      key: value => value[0],
+    }),
+  );
+  await setImmediate();
+  items[0] = "c1";
+  items[1] = "b2";
+  await setImmediate();
+  assert.equal(html(parent), "<ul><li>c1</li><li>b1</li></ul>");
+  items[CHAN].close();
+});
+
+test("JX-03G a slot that gives the same value again gives it to its item again", async () => {
+  const row = { v: 1 },
+    source = latest<typeof row>(),
+    items = select([source], { autoStart: true, unwrap: true }),
+    values: unknown[] = [];
+  source.send(row);
+  mount(
+    el("ul"),
+    each(items, item => {
+      void (async () => {
+        for await (const value of item) values.push(value && { ...value });
+      })();
+      return el("li");
+    }),
+  );
+  await setImmediate();
+  row.v = 2;
+  source.send(row);
+  await setImmediate();
+  assert.deepEqual(values.at(-1), { v: 2 });
+  assert.ok(values.length >= 2);
+  items[CHAN].close();
+});
+
+test("JX-03G with key, a value with the key of an item updates its row, and a new key renders a new row", async () => {
+  const parent = el("ul"),
+    items = select(
+      [
+        { id: 1, v: "a" },
+        { id: 2, v: "b" },
+      ],
+      { autoStart: true },
+    ),
+    seen: Item<{ id: number; v: string }>[] = [];
+  mount(
+    parent,
+    each(items, item => (seen.push(item), el("li")), { key: row => row.id }),
+  );
+  await setImmediate();
+  items[0] = { id: 1, v: "a2" };
+  items[1] = { id: 3, v: "c" };
+  await setImmediate();
+  assert.equal(seen.length, 3);
+  assert.equal(seen[0].value.v, "a2");
+  assert.ok(seen[1].signal.aborted);
+  assert.equal(seen[2].value.v, "c");
+  assert.throws(() => each(items, () => null, { key: 1 } as any), TypeError);
+});
+
 test("JX-033 a splice that keeps items keeps their instances, and moves their nodes", async () => {
   const s = mounted(["a", "b", "c"]);
   await setImmediate();
@@ -886,7 +969,7 @@ test("JX-035 an entry that leaves stops the hosts and the dynamic props that sta
   const items = select(["a", "b"], {
     autoStart: true,
     autoClose: false,
-    nonYielding: true,
+    backPressure: false,
   });
   const row = () =>
     h("li", {
@@ -922,7 +1005,7 @@ test("JX-046 JX-080 a started element that code moves stays bound to the entry u
   const items = select(["a"], {
     autoStart: true,
     autoClose: false,
-    nonYielding: true,
+    backPressure: false,
   });
   const channels = await selects(async () => {
     mount(
@@ -1088,7 +1171,7 @@ test("JX-032 a static render result, and its removal", async () => {
     items = select(["a", "b"], {
       autoStart: true,
       autoClose: false,
-      nonYielding: true,
+      backPressure: false,
     });
   mount(
     parent,
@@ -1110,7 +1193,7 @@ test("JX-036 JX-037 a dynamic item that settles later makes each yield again", a
     items = select(["a"], {
       autoStart: true,
       autoClose: false,
-      nonYielding: true,
+      backPressure: false,
     });
   mount(
     parent,
@@ -1166,7 +1249,7 @@ test("JX-03A an error from render ends each, and ends the items", async () => {
     items = select(["a"], {
       autoStart: true,
       autoClose: false,
-      nonYielding: true,
+      backPressure: false,
     });
   const list = each(items, item => {
     if (seen.push(item) > 1) throw failure;
@@ -1184,7 +1267,7 @@ test("JX-03A a render result with a nested dynamic child ends each", async () =>
   const items = select(["a"], {
     autoStart: true,
     autoClose: false,
-    nonYielding: true,
+    backPressure: false,
   });
   const list = each(items, () => [Promise.resolve("x")]);
   await setImmediate();
@@ -1244,7 +1327,7 @@ const gated = (
   const items = select(initial, {
       autoStart: true,
       autoClose: false,
-      nonYielding: true,
+      backPressure: false,
     }),
     seen: Item<string>[] = [],
     gate = Promise.withResolvers<void>();
@@ -1371,7 +1454,7 @@ const handles = (initial: string[]) => {
     items = select(initial, {
       autoStart: true,
       autoClose: false,
-      nonYielding: true,
+      backPressure: false,
     }),
     seen: Item<string>[] = [];
   mount(
@@ -1547,7 +1630,7 @@ test("JX-054 use waits until the runtime places its placeholder, also in each ro
   const items = select(["a", "b"], {
     autoStart: true,
     autoClose: false,
-    nonYielding: true,
+    backPressure: false,
   });
   const tree = h(Provide, {
     context: Theme,

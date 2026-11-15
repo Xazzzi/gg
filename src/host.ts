@@ -1,5 +1,6 @@
 // The host machinery of the JSX runtime: conversion, placement, drives, placement waits and dynamic props.
-import { type Emit, owned, pulling, register } from "./devtools.ts";
+import { type Emit, owned, pulling, register, release } from "./devtools.ts";
+import { BIND } from "./helpers.ts";
 import type { Child } from "./jsx.ts";
 import { FAULT, REPORT, select, type Val } from "./select.ts";
 import { chunked, noop, record } from "./source.ts";
@@ -368,7 +369,7 @@ export const drive = <E extends Driven>(
     select({} as Record<string, unknown>, {
       autoStart: true,
       autoClose,
-      nonYielding: true,
+      backPressure: false,
       // A child that fails after its drive let it go, or in its return(), has no entry to report it (JX-089).
       [FAULT]: error => reportError(error),
       [REPORT]: ops => {
@@ -387,6 +388,7 @@ export const drive = <E extends Driven>(
             if (apply(entry, state, parts)) moved = true;
             if (state.done) {
               end(entry.source);
+              release(entry.source);
               // Stryker disable next-line ConditionalExpression: each marks a finished part, which it never renders again
               if (!(entry as Driven as Entry).in) done?.(entry);
               keyed.delete(key);
@@ -413,6 +415,7 @@ export const drive = <E extends Driven>(
     entry.gate = undefined; // So a parked pull of the part never runs
     entry.via?.return();
     end(entry.source);
+    release(entry.source); // JX-041
   };
   const add = (entry: Driven) => {
     // Stryker disable next-line UpdateOperator: keys only need to differ
@@ -436,7 +439,8 @@ export const drive = <E extends Driven>(
     stop() {
       stopped = true;
       sources[Symbol.dispose]();
-      for (const entry of keyed.values()) end(entry.source);
+      for (const entry of keyed.values())
+        end(entry.source), release(entry.source);
     },
   };
 };
@@ -450,6 +454,7 @@ type Scope = {
   kids?: Set<Scope>;
   host?: Driving; // The drive of the children
   props?: Driving; // The drive of the dynamic props
+  binds?: Set<Driving>; // The props that a shared derive gives with no drive (JX-067)
   off?: boolean; // A place removed top
   live: boolean;
   guard?: true; // A boundary, which stays a scope (JX-091)
@@ -535,11 +540,20 @@ const stop = (scope: Scope) => {
   clear(scope);
   scope.props?.stop();
   scope.props = undefined;
+  if (scope.binds) for (const bound of scope.binds) bound.stop();
+  scope.binds = undefined;
   leave(scope);
 };
 /** Takes out a scope that drives nothing and holds no scope, and then the scopes above that it leaves empty. */
 const tidy = (scope: Scope) => {
-  if (scope.host || scope.props || scope.kids?.size || !scope.up || scope.guard)
+  if (
+    scope.host ||
+    scope.props ||
+    scope.binds?.size ||
+    scope.kids?.size ||
+    !scope.up ||
+    scope.guard
+  )
     return;
   leave(scope);
   tidy(scope.up);
@@ -551,6 +565,7 @@ const sync = (scope: Scope, live: boolean) => {
   scope.live = live;
   scope.host?.park(!live);
   scope.props?.park(!live);
+  if (scope.binds) for (const bound of scope.binds) bound.park(!live);
   if (scope.kids) for (const kid of scope.kids) sync(kid, live && !kid.off);
 };
 /** Parks the scopes that node holds when a place removes it, and resumes them when a place adds it again. */
@@ -646,9 +661,35 @@ const applyProp = (
     }
 };
 
-/** Makes the dynamic props of an element wait until the runtime places it, and then drives them (JX-061). */
+/**
+ * Makes the dynamic props of an element wait until the runtime places it, and then drives them (JX-061).
+ * A derive with a shared source gives its outputs to the prop with no drive (JX-067). */
 export const bind = (element: Element, props: [string, unknown][]) =>
   defer(binding, element, () => {
+    const driven = props.filter(([, source]) => !(source as any)[BIND]);
+    for (const [name, source] of props) {
+      const attach = (source as any)[BIND];
+      if (!attach) continue;
+      const scope = enter(element),
+        entry: Prop = { name, source },
+        binds = (scope.binds ??= new Set()),
+        fail = (error: unknown) => failIn(scope, error);
+      const bound: Driving = attach(
+        {
+          value: (value: unknown) =>
+            applyProp(
+              element,
+              entry,
+              { status: "fulfilled", value } as any,
+              fail,
+            ),
+          fail,
+        },
+        !scope.live,
+      );
+      binds.add(bound);
+    }
+    if (!driven.length) return;
     const host = driveIn(element, "props", (scope, over) =>
       drive(
         element,
@@ -661,7 +702,7 @@ export const bind = (element: Element, props: [string, unknown][]) =>
         over,
       ),
     );
-    for (const [name, source] of props) host.add({ name, source });
+    for (const [name, source] of driven) host.add({ name, source });
   });
 
 /**

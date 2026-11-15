@@ -1,7 +1,7 @@
 {
   "name": "@xazzzi/gg",
   "version": "0.3.0",
-  "description": "Tiny zero-dependency concurrent primitives and a JSX DOM runtime for modern JavaScript/TypeScript",
+  "description": "Zero-dependency concurrent primitives and a JSX DOM runtime for modern JavaScript/TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

@@ -9,6 +9,7 @@ import {
   feed,
   iff,
   latest,
+  queue,
   select,
   watch,
 } from "../src/index.ts";
@@ -50,7 +51,7 @@ test("DV-001 a missing or non-function hook does no devtools work", async () => 
     ch.send(1);
     const s = select(
       { a: 1 },
-      { autoClose: true, autoStart: true, nonYielding: true },
+      { autoClose: true, autoStart: true, backPressure: false },
     );
     feed([1], new Channel(), { autoStart: true });
     await setImmediate();
@@ -159,6 +160,21 @@ test("DV-003 CH-006 latest registers one channel with its options, and emits its
       ],
       ["send", 1, 1],
     ]);
+  } finally {
+    delete g[HOOK];
+  }
+});
+
+test("DV-003 CH-007 a preset that throws registers nothing, and the next channel registers", () => {
+  const seen: unknown[] = [];
+  g[HOOK] = (_kind: string, target: unknown) => {
+    seen.push(target);
+  };
+  try {
+    assert.throws(() => queue({ ackStyle: "all" }), TypeError);
+    assert.equal(seen.length, 0);
+    const ch = new Channel();
+    assert.deepEqual(seen, [ch]);
   } finally {
     delete g[HOOK];
   }
@@ -277,14 +293,14 @@ test("DV-030 DV-031 DV-032 select reports operations without the report hook", a
       {
         autoStart: true,
         autoClose: false,
-        nonYielding: true,
+        backPressure: false,
         [REPORT]: () => order.push("hook"),
       },
     );
     const bare = select([1], {
       autoStart: true,
       autoClose: false,
-      nonYielding: true,
+      backPressure: false,
     });
     await setImmediate();
     s.a = 2;
@@ -330,7 +346,7 @@ test("DV-032 report emits before the report hook", async () => {
       {
         autoClose: true,
         autoStart: true,
-        nonYielding: true,
+        backPressure: false,
         [REPORT]: () => order.push("hook"),
       },
     );
@@ -439,7 +455,7 @@ test("SE-14C DV-030 an emitter keeps the log after the last reader finishes", as
     const s = select([1], {
       autoStart: true,
       autoClose: false,
-      nonYielding: true,
+      backPressure: false,
     });
     await setImmediate();
     changes(s).return();
@@ -453,7 +469,11 @@ test("SE-14C DV-030 an emitter keeps the log after the last reader finishes", as
 });
 
 const el = () => fakeDocument.createElement("div") as any;
-const open = { autoStart: true, autoClose: false, nonYielding: true } as const;
+const open = {
+  autoStart: true,
+  autoClose: false,
+  backPressure: false,
+} as const;
 
 test("DV-003 the hook finds the caller of jsx, each and mount", async () => {
   const frames: string[] = [];
@@ -721,7 +741,7 @@ test("DV-050 changes registers a reader with its state and keys, and watch at it
     const s = select(["a"], {
       autoClose: true,
       autoStart: true,
-      nonYielding: true,
+      backPressure: false,
     });
     const all = changes(s),
       some = changes(s, [0]);
@@ -747,7 +767,7 @@ test("DV-051 a reader emits end one time, when it finishes or has no slot left",
   const ends = () =>
     log.filter(([kind, event]) => kind === "reader" && event === "end").length;
   try {
-    const open = { autoStart: true, autoClose: false, nonYielding: true };
+    const open = { autoStart: true, autoClose: false, backPressure: false };
     const s = select(["a", "b"], open);
     await setImmediate();
     const a = changes(s),

@@ -38,10 +38,10 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 | `autoStart`    | `false` | Without it, a select starts at its first observer (SE-030, SE-037).         |
 | `autoClose`    | `false` | Set `true` to close the select when its sources finish, as a join.          |
 | `backPressure` | `true`  | A flush waits until a consumer reads, or a reader reads or waits (SE-04A).  |
-| `nonYielding`  | `false` | Set `true` when only `changes` or `each` read, to skip snapshots.           |
 | `unwrap`       | `false` | Gives values, not `Val` objects. A rejection then fails the channel.        |
 
 `feed` has the same `autoStart` and `backPressure` defaults, but `autoClose: true` (FE-001).
+A select builds snapshots only while a `for await` reads it, so `changes` and `each` alone cost no snapshot (SE-045).
 [`spec/scope.md`](https://github.com/Xazzzi/gg/blob/master/spec/scope.md#defaults) gives the reason for each default.
 
 ## Pitfalls
@@ -51,6 +51,7 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
 - Under `ackStyle: "all"`, only snapshot consumers release a flush, so a select with only readers stops at its first publish (SE-04A).
 - `state.items[0].done = true` changes nothing that `select` sees.
   Write `state.items[0] = { ...state.items[0], done: true }`.
+  `each` gives the new value to the row at that index, or with `key`, to the row with that key (JX-03G).
 - An index write replaces the source, so an iterator in that slot restarts (SE-088).
   `sort` and `reverse` move slots and do not restart them (SE-09C).
 - Many single changes cost more than one splice.
@@ -63,7 +64,7 @@ The UI then reads state through `for await`, `changes` and `each`, and state sta
   To read the current outputs one time, call `outputs(state)`, which makes no reader (SE-14D).
   Call `return()`, call `[Symbol.dispose]()`, or bind the reader with `using`.
 - A default `Channel` keeps each value until a consumer reads it, because a later consumer can read the head.
-  Use `latest()` for a current value, which sets `firstReceive: "latest"` and `thenReceive: "latest"` (CH-006).
+  Use `latest()` for a current value, `queue()` for a work queue, `broadcast()` for values after attach, and `replay()` for all values (CH-006).
 - A misspelled option key throws a `TypeError` (CH-005, SE-008, FE-004).
 - `send`, `close` and `mapSnapshot` results cannot be thenables (CH-013, SE-052).
 - `send` on a closed channel throws a `StopError` (CH-014).
@@ -126,10 +127,12 @@ async function* Title({ title }: { title: Channel<string> }) {
 
 ## Lists with each
 
-- `each(state, render)` needs a select proxy with an array shape (JX-030).
+- `each(state, render, { key })` needs a select proxy with an array shape (JX-030).
+- A value keeps its row when it moves, so a swap of two items by index moves their rows, and a new value at an index updates the row there (JX-03G).
+  With `key`, a row belongs to the key of its value, so a new key at an index renders a new row.
 - `render` gets an `Item<T>` for one item, and runs one time for that item.
   `item.value` is the current value, so a component reads its first props with no `await`.
-- A write to an item gives the new value to the same `Item`, so the instance stays (JX-034).
+- A new output of a slot, or a value with the same key, goes to the same `Item`, so the instance stays (JX-034).
 - `for await (const value of item)` reads a `"latest"` channel that the `Item` makes at the first iteration (JX-03F).
   To combine an item with other sources, put it in a `select`.
 - An item that leaves ends its `Item`, and stops the dynamic children and dynamic props inside its nodes (JX-035).
@@ -152,7 +155,8 @@ async function* Title({ title }: { title: Channel<string> }) {
   Close the channel that a component reads to end the component.
 - `mount` returns an unmount function (JX-02A).
   It stops every host inside the parent, which ends `each` lists and their items, and empties the parent.
-  A component that waits on an open channel still ends only when that channel closes (JX-041).
+  A component that waits on a channel, a reader or a watch that it opened after a plain `yield` ends at once (JX-041).
+  After an `await` or a `yield*`, yield the same node again before you open a read, so the read ends with the component.
 - An element with dynamic children starts only when `mount` or a host places it (JX-02B).
   An element that you `append` by hand stays idle (JX-045), so yield it or make it a child.
 - An element with dynamic children belongs to the runtime (JX-043).
@@ -183,6 +187,4 @@ for await (const volume of watch(form, "volume")) input.valueAsNumber = volume;
 ## Helpers
 
 - `catching(source, onError)` ends a source quietly on failure, so an `unwrap` select stays open.
-- `abortable(promise, signal)` waits for a promise until a signal aborts.
 - `spread` with `mapSnapshot: spread` turns `Val` fields into `kLoading`, `kError` and `kDone` keys.
-- `isVal(value)` tests for a `Val`, across copies of the library.

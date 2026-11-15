@@ -12,7 +12,6 @@
 /// The rules behind all of this live in [`spec/`](spec/).
 import { styleText } from "node:util";
 import {
-  abortable,
   applyOps,
   CHAN,
   Channel,
@@ -23,7 +22,6 @@ import {
   each,
   feed,
   iff,
-  isVal,
   latest,
   mount,
   type Op,
@@ -430,8 +428,8 @@ topic("watch reads one slot", "- ");
 topic("Operations", "- ");
 {
   // Operations are ordered, so a UI can replay them without diffing.
-  // nonYielding builds no snapshots, for a select that only readers read.
-  using rows = select(["a"], { nonYielding: true });
+  // A select with no consumer builds no snapshots, so readers alone cost no snapshot.
+  using rows = select(["a"]);
   using reader = changes(rows);
   const read = async () => (await reader.next()).value ?? [];
   const seen: Op[] = await read();
@@ -462,7 +460,7 @@ topic("sort comparators", "- ");
   using scores = select([Promise.resolve(2), 3, 1], {
     unwrap: true,
     autoStart: true,
-    nonYielding: true,
+    backPressure: false,
   });
   await tick();
 
@@ -483,13 +481,6 @@ topic("spread", "- ");
   for await (const view of state)
     console.log(view.user, view.userLoading, view.userError, view.userDone);
   // => Ada false null true, the promise settled before the first snapshot
-}
-topic("isVal", "- ");
-{
-  // isVal tells a Val from a lookalike.
-  using state = select({ a: Promise.resolve(1) });
-  const snapshot = (await state[Symbol.asyncIterator]().next()).value;
-  console.log(isVal(snapshot.a), isVal({ status: "pending" })); // => true false
 }
 topic("derive", "- ");
 {
@@ -514,25 +505,12 @@ topic("catching", "- ");
   for await (const n of safe) console.log(n);
   // => 1, then logged: flaky
 }
-topic("abortable", "- ");
-{
-  // abortable stops waiting on a signal. It does not cancel the work.
-  const control = new AbortController();
-  const waiting = abortable(new Promise(() => {}), control.signal);
-  control.abort(new Error("gave up"));
-
-  try {
-    await waiting;
-  } catch (error) {
-    console.log((error as Error).message); // => gave up
-  }
-}
 topic("applyOps", "- ");
 {
   // applyOps replays ops onto a mirror, and map derives each entry.
   // prev is the entry being replaced, so it can be reused.
   const labels: string[] = [];
-  using rows = select(["a"], { nonYielding: true });
+  using rows = select(["a"]);
   using reader = changes(rows);
   const replay = async () =>
     applyOps(

@@ -235,6 +235,9 @@ async function arrayRun(seed: number) {
       snapshot => (outputs = snapshot),
     ) as any,
   ) as any;
+  void (async () => {
+    for await (const _ of s); // mapSnapshot runs only for a consumer (SE-045)
+  })();
   // A range that an Array method replaces with new slots, from a marked copy of the ids
   const replaced = (name: string, ...args: unknown[]) => {
     const marks = ids.map(() => 0) as any;
@@ -324,6 +327,9 @@ async function objectRun(seed: number) {
       snapshot => (outputs = snapshot),
     ) as any,
   ) as any;
+  void (async () => {
+    for await (const _ of s); // mapSnapshot runs only for a consumer (SE-045)
+  })();
   const chosen = keys.filter(() => roll(2)),
     reader = changes(s, chosen),
     mirror: any = { ...reader.outputs };

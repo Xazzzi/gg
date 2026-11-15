@@ -43,7 +43,13 @@ Options select the mode:
 | `next`       | Future values only   | Next, then newest    | Invalid    |
 
 Defaults are `firstReceive: "unread"`, `thenReceive: "every"`, `stopStyle: "drain"` and `ackStyle: "any"`.
-`latest()` makes a channel of a current value, with `firstReceive: "latest"` and `thenReceive: "latest"`.
+Presets name the common modes, and take only `stopStyle` and `ackStyle`:
+
+- `latest()` holds a current value: each consumer gets the newest value, then each newer one.
+- `queue()` is a work queue: each value goes to one consumer.
+- `broadcast()` gives each consumer the values sent after it attached.
+- `replay()` gives each consumer every value from the first one.
+
 `stopStyle: "stop"` discards values not yet read when the channel ends.
 `ackStyle: "all"` makes `asend` wait for every consumer, so a slow consumer holds at most one unread value for each producer that awaits.
 
@@ -87,6 +93,7 @@ A select records each change as an ordered operation, so arrays can be replayed 
 `sortOutputs` moves slots the same way, and compares outputs once.
 
 A select starts at its first observer, which is a `for await` or a read of `changes`, and stays open until code closes it.
+It builds snapshots only while a `for await` reads it, so a select that only `changes` or `each` reads costs no snapshot.
 [`spec/scope.md`](spec/scope.md#defaults) gives the reason for each default.
 
 `break` detaches one consumer, and leaves the sources open.
@@ -99,16 +106,16 @@ for await (const { users } of state) if (users?.length) break;
 
 ## Helpers
 
-- `abortable(promise, signal)` waits for a promise until a signal aborts.
 - `catching(source, onError)` wraps a source so a failure ends it quietly.
 - `derive(source, map)` maps each value of an async iterable, so a dynamic prop or child follows a computed value.
   When `map` reads one key of a `select`, use `derive(state, key, map)`, so `map` runs only when that key changes.
+  All derives of one key, or of one row item, share one reader, and a derive in a prop costs no more than a callback.
 - `iff(source, then, otherwise?)` gives one of two values for a truthy or falsy source, and calls a function branch at each change, so a `Channel<boolean>` gates a view or picks a prop value.
-  `derive` and `iff` stop the views that their map built, when the next output replaces them. A view that other code built is parked while it is out of the tree, and stops with the `mount` or the `each` entry above it.
+  `derive` and `iff` stop the views that their map built, when the next output replaces them. A view that other code built pauses while it is out of the tree, and stops with the `mount` or the `each` row above it.
 - `spread` turns `Val` fields into `kLoading`, `kError` and `kDone`, for `mapSnapshot: spread`.
-- `isVal(value)` tests for a `Val`, across copies of the library.
-- `applyOps(target, ops, map?, { eager })` replays operations onto a mirror, and `map` derives each entry.
-  An item that leaves and comes back in one call keeps its entry.
+- `applyOps(target, ops, map?, { eager, key })` replays operations onto a mirror, and `map` derives each entry.
+  A value takes the entry of the same value first, so an item that moves, or that leaves and comes back in one call, keeps its entry.
+  A new value takes the entry of its index, and `key` makes an entry belong to the key of a value instead.
   It folds a report or a read first, so `map` runs only for entries that land, and `eager` maps every step.
 
 ## JSX
@@ -121,7 +128,7 @@ A component is an async generator function, and each use gives one instance.
 The instance yields its node, then changes the nodes it owns.
 It yields again only to replace its node, or to wake its host with the same node.
 A promise or an async iterable is a child, so a channel of strings is live text.
-A fragment takes such children too, and its host drives them.
+A fragment takes such children too.
 Props set attributes, and `value`, `checked`, `selected`, `indeterminate` and `muted` set properties.
 An `on` prop takes only a function, and a URL attribute rejects a `javascript:` URL, so data in a prop cannot run code.
 Each HTML and SVG tag has typed listeners and live properties, and takes any other attribute.
@@ -144,24 +151,48 @@ async function* Row({ todo }: { todo: Channel<Todo> }) {
 }
 
 // Only each reads todos, so it builds no snapshots.
-const todos = select([] as Todo[], { nonYielding: true });
+const todos = select([] as Todo[]);
 mount(
   document.body,
   <ul>
-    {each(todos, todo => (
-      <Row todo={todo} />
-    ))}
+    {each(
+      todos,
+      todo => (
+        <Row todo={todo} />
+      ),
+      { key: todo => todo.id },
+    )}
   </ul>,
 );
 ```
 
 `each` reads the changes of `todos` with `changes`, and replays them onto its rows.
 It gives each item a channel, sends it each new value, and closes it when the item leaves.
+A value keeps its row when it moves, so a swap or a filter moves rows, and a new value at an index updates the row there.
+With `key`, a row belongs to the key of its value, so a new key at an index renders a new row.
+A component that stops also ends the `for await` loops that it opened after a `yield`.
 A row that leaves also stops the dynamic children and dynamic props inside it.
 A row that finishes renders again with the next value, so a row can also read its item once.
 So a row updates itself, and the list moves only nodes that change place.
 State needs no UI code, and a busy list renders all changes since its last read in one pass.
 [`examples/todomvc`](examples/todomvc) renders with it, [`examples/orbits`](examples/orbits) draws a simulation in SVG with views that mount and unmount, and [`examples/forms`](examples/forms) binds each kind of input to one state.
+
+## I need to
+
+| I need to                                    | Use                                                 |
+| -------------------------------------------- | --------------------------------------------------- |
+| pass values from producers to consumers      | `new Channel()`                                     |
+| give each value to one worker                | `queue()`                                           |
+| keep a current value that readers follow     | `latest()`                                          |
+| pipe a promise or an iterator into a channel | `feed(source, channel)`                             |
+| hold app state that code changes and reads   | `select(shape, { unwrap: true })`, then `for await` |
+| react to one field of a state                | `watch(state, key)`                                 |
+| mirror a state onto my own structure         | `changes(state)` and `applyOps`                     |
+| render a list                                | `each(state, render)`, and `{ key }` for identity   |
+| show a computed text or prop                 | `derive(state, key, map)`                           |
+| show or hide a view                          | `iff(source, view, otherView)`                      |
+| keep a failure in one view                   | `<Catch fallback={...}>`                            |
+| give a value to a subtree                    | `<Provide>`, then `yield* use(Context)`             |
 
 ## Specification
 

@@ -73,9 +73,14 @@ export const Orrery = ({ sim }: { sim: Sim }) => {
       <circle r="70" fill="url(#glow)" />
       <circle r={STAR} fill="#fff2b0" filter="url(#soft)" />
       <g>
-        {each(sim.bodies, body => (
-          <Planet body={body} withTrail={sim.trail} />
-        ))}
+        {each(
+          sim.bodies,
+          body => (
+            <Planet body={body} withTrail={sim.trail} />
+          ),
+          // Each frame writes new bodies, so a key keeps each planet.
+          { key: body => body.id },
+        )}
       </g>
       <text x="-290" y="-280">
         {derive(sim.stats, s => `t ${s.tick}`)}
@@ -84,7 +89,7 @@ export const Orrery = ({ sim }: { sim: Sim }) => {
   );
 };
 
-// Yields a new line per sample, so an unmount ends it at the next sample (JX-041).
+// Yields a new line per sample, and its read opens in a pull, so an unmount ends it at once (JX-041).
 async function* Speed({ stats }: { stats: AsyncIterable<Stats> }) {
   const speeds: number[] = [];
   for await (const { speed } of stats) {

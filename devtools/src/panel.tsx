@@ -242,7 +242,7 @@ async function* Table<T>(props: {
   const { feed, head, write, draw, empty } = props;
   const rows = select([] as T[], {
     autoStart: true,
-    nonYielding: true,
+    backPressure: false,
   });
   const blank = (<div class="empty" />) as HTMLElement;
   const box = (
@@ -1108,7 +1108,7 @@ const treeRow = (
 async function* List() {
   const rows = select([] as Line[], {
     autoStart: true,
-    nonYielding: true,
+    backPressure: false,
   });
   yield <nav id="list">{each(rows, line => derive(line, l => l.draw()))}</nav>;
   for await (const view of state)

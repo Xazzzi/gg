@@ -13,7 +13,11 @@ import {
 } from "../src/index.ts";
 import { REPORT } from "../src/select.ts";
 
-const open = { autoStart: true, autoClose: false, nonYielding: true } as const;
+const open = {
+  autoStart: true,
+  autoClose: false,
+  backPressure: false,
+} as const;
 const done = { done: true, value: undefined };
 const started = async <T>(state: T) => (await setImmediate(), state);
 const pending = (promise: Promise<unknown>) => /pending/.test(inspect(promise));
@@ -113,7 +117,7 @@ test("SE-153 a slice of several keys reads their operations in report order", as
 });
 
 test("SE-152 before start, a slice has empty outputs, and the object description sets its keys", async () => {
-  const s = select({ a: 1, b: 2 }, { autoClose: false, nonYielding: true });
+  const s = select({ a: 1, b: 2 }, { autoClose: false, backPressure: false });
   const r = changes(s, ["b"]);
   assert.deepEqual(r.outputs, {});
   void s[CHAN][Symbol.asyncIterator]().next();
@@ -186,7 +190,7 @@ test("SE-144 SE-151 a replay of the slice reads onto outputs equals the selected
 });
 
 test("SE-155 a slice made before start names the slots at start, and describes them", async () => {
-  const s = select(["a", "b", "c"], { autoClose: false, nonYielding: true });
+  const s = select(["a", "b", "c"], { autoClose: false, backPressure: false });
   const r = changes(s, [1, 3, 5]);
   assert.deepEqual(r.outputs, []);
   s.unshift("z");
@@ -207,7 +211,7 @@ test("SE-156 SE-037 a slice made before start finishes at the start of its first
     [[], [0]],
     [["a"], [1]],
   ] as const) {
-    const s = select([...shape], { nonYielding: true });
+    const s = select([...shape], { backPressure: false });
     assert.deepEqual(await changes(s, [...keys]).next(), done);
   }
 });
@@ -382,8 +386,8 @@ test("SE-162 SE-163 watch gives a first output of undefined, then skips an equal
 });
 
 test("SE-162 SE-155 a watch before start gives the output that start describes", async () => {
-  const s = select(["a", "b"], { autoClose: false, nonYielding: true }),
-    o = select({ k: 1 }, { autoClose: false, nonYielding: true });
+  const s = select(["a", "b"], { autoClose: false, backPressure: false }),
+    o = select({ k: 1 }, { autoClose: false, backPressure: false });
   const w = watch(s, 1).next(),
     k = watch(o, "k").next();
   void s[CHAN][Symbol.asyncIterator]().next();

@@ -18,6 +18,25 @@ export const pulling = <R>(source: unknown, pull: () => R): R => {
 /** Gives the slot source that a select pulls now, or undefined. */
 export const pulledSource = () => pulled;
 
+type Returnable = { return(value?: any): unknown };
+// The consumers and readers that code opened while a drive pulled a source, which end when the host lets the source go (JX-041).
+const opened = new WeakMap<object, Set<Returnable>>();
+/** Binds a consumer or a reader to the source that a drive pulls now, if any. */
+export const bindPulled = (consumer: Returnable) => {
+  if (Object(pulled) !== pulled) return;
+  const set = opened.get(pulled as object);
+  if (set) set.add(consumer);
+  else opened.set(pulled as object, new Set([consumer]));
+};
+/** Returns the consumers and readers bound to a source, once. */
+export const release = (source: unknown) => {
+  const set = opened.get(source as object);
+  if (!set) return;
+  // Stryker disable next-line CallExpression: a second return() of a consumer or a reader changes nothing
+  opened.delete(source as object);
+  for (const consumer of set) void consumer.return();
+};
+
 /** Runs make, so registrations inside name `by` as their owner (DV-005). */
 export const owned = <R>(by: object, make: () => R): R => {
   const outer = owner;

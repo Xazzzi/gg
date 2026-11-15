@@ -49,7 +49,20 @@ export class Channel<T, TReturn = undefined>
   [Symbol.dispose](): void;
 }
 
-export function latest<T, TReturn = undefined>(): Channel<T, TReturn>;
+export type PresetOptions = Pick<ChannelOptions, "stopStyle" | "ackStyle">;
+
+export function latest<T, TReturn = undefined>(
+  options?: PresetOptions,
+): Channel<T, TReturn>;
+export function queue<T, TReturn = undefined>(
+  options?: PresetOptions,
+): Channel<T, TReturn>;
+export function broadcast<T, TReturn = undefined>(
+  options?: PresetOptions,
+): Channel<T, TReturn>;
+export function replay<T, TReturn = undefined>(
+  options?: PresetOptions,
+): Channel<T, TReturn>;
 
 export class StopError extends Error {
   constructor(reason?: unknown);
@@ -94,8 +107,17 @@ The implementation MAY use any internal structure that gives the same observable
   A work queue gives each value to one consumer, so no value reaches all consumers.
 - CH-005: The constructor MUST throw a `TypeError` for an own enumerable string key of the options that the Public API does not list.
   So a misspelled option does not pass as a default.
-- CH-006: `latest()` MUST return a new `Channel` with `firstReceive: "latest"`, `thenReceive: "latest"` and the other defaults.
+- CH-006: A preset MUST return a new `Channel` with its receive modes, and the `stopStyle` and `ackStyle` of `options` or their defaults.
+  `latest()` sets `firstReceive: "latest"` and `thenReceive: "latest"`.
   So a consumer gets the current value, and then each newer value.
+  `queue()` sets `firstReceive: "unread"` and `thenReceive: "unread"`.
+  So each value goes to one consumer.
+  `broadcast()` sets `firstReceive: "next"` and `thenReceive: "every"`.
+  So a consumer gets each value sent after it attached.
+  `replay()` sets `firstReceive: "first"` and `thenReceive: "every"`.
+  So a consumer gets every value from value 1.
+- CH-007: A preset MUST throw a `TypeError` for an own enumerable string key of `options` other than `stopStyle` and `ackStyle`.
+  CH-003 and CH-004 apply to the values.
 
 CH-002 exists because `thenReceive: "unread"` guarantees that one consumer gets each value.
 This guarantee needs all consumers to take values from the shared head.

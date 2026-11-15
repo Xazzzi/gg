@@ -4,7 +4,8 @@ import type { Send, Todo } from "../state.ts";
 // A row owns its nodes, and changes them on each value from the list.
 // The list closes the channel when the todo leaves, so the loop ends.
 export async function* Row({ todo, send }: { todo: Item<Todo>; send: Send }) {
-  let id = "";
+  // The list keys rows by id, so a row keeps its todo.
+  const { id } = todo.value;
   const toggle = (
     <input
       class="toggle"
@@ -52,9 +53,6 @@ export async function* Row({ todo, send }: { todo: Item<Todo>; send: Send }) {
   ) as HTMLLIElement;
   yield li;
   for await (const item of todo) {
-    // The list reuses a row by position, so a new id ends an edit.
-    if (item.id !== id) li.classList.remove("editing");
-    id = item.id;
     li.classList.toggle("completed", item.completed);
     toggle.checked = item.completed;
     label.textContent = item.title;

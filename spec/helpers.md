@@ -1,6 +1,6 @@
 # Helpers
 
-`isVal` and `spread` in this document use `Val` from `select.md`.
+`spread` in this document uses `Val` from `select.md`.
 `applyOps` uses `Op` from `select.md`.
 `derive` and `iff` use `watch`, `State`, `Keys` and `Entry` from `select.md`.
 `Channel`, `feed` and `select` MUST NOT require callers to use a helper.
@@ -9,11 +9,6 @@ The key words MUST, MUST NOT, SHOULD and MAY are normative.
 ## Public API
 
 ```ts
-export function abortable<T>(
-  promise: PromiseLike<T>,
-  signal: AbortSignal,
-): Promise<T>;
-
 export interface Caught<T> extends AsyncIterableIterator<T, unknown, void> {
   return(value?: unknown): Promise<IteratorResult<T, unknown>>;
 }
@@ -45,36 +40,26 @@ export function iff<A, B = undefined>(
   otherwise?: B | (() => B),
 ): Derived<Awaited<A | B>>;
 
-export function isVal(value: unknown): value is Val<unknown>;
 export function spread<S>(snapshot: S): Spread<S>;
 
 type Entry<T> = T extends readonly (infer V)[] ? V : T[keyof T];
+
+export type ApplyOptions = {
+  eager?: boolean;
+  key?: (output: any) => unknown;
+};
 
 export function applyOps<T extends object>(
   target: T,
   ops: readonly Op[],
   map?: (value: unknown, prev: Entry<T> | undefined) => Entry<T>,
-  options?: { eager?: boolean },
+  options?: ApplyOptions,
 ): T;
 ```
 
 `Source<T>` is any of `PromiseLike<T>`, `AsyncIterable<T>`, `AsyncIterator<T>`, `Iterable<T>`, `Iterator<T>`.
 The package root exports the helpers.
 So a bundler can remove unused helpers.
-
-## abortable
-
-`abortable` waits for a promise until a signal aborts.
-Use it for APIs that have no signal support.
-It does not cancel the underlying work.
-
-- HE-001: `abortable` MUST settle as `promise` settles if `signal` did not abort.
-- HE-002: `abortable` MUST reject with `signal.reason` when `signal` aborts first.
-- HE-003: If `signal` aborted already, `abortable` MUST reject with `signal.reason`.
-  It MUST NOT call `then` on a thenable that is not a `Promise`, because `then` can start work.
-- HE-004: `abortable` MUST remove its abort listener when it settles.
-  So a loop over one long-lived signal retains nothing per pass.
-- HE-005: A later rejection of a `Promise` MUST NOT cause an `unhandledRejection`.
 
 ## catching
 
@@ -175,6 +160,11 @@ So a map that reads one key of a `select` runs only when that key changes, and n
   So `watch` checks `source` and `key` as SE-160 says.
   The iterator MUST then act as HE-051 to HE-053 and HE-055 to HE-058 say, with the `watch` as its source.
 
+- HE-05A: The derives of one slot of an object `select`, and the derives of one `Item` (JX-03F), MUST share one reader of that source.
+  The shared reader MUST open at the first `next()` of any of these derives, and MUST call `return()` on its source after the last of them returns.
+  Each derive MUST then act as if it read the source alone: it gets the newest output when it reads, and the end or the failure of the source.
+  A shared reader that finished MUST give its end to a later derive.
+  An index names the slot at that index at the call (SE-155), and a slot moves (SE-092), so the derives of an index MUST NOT share a reader.
 - HE-059: `derive` owns what `map` builds.
   While `map` runs, the JSX runtime records each element that `jsx` creates with a dynamic child or a dynamic prop, each wait of `use`, and each dynamic result of a component.
   When the iterator gives the next output, it MUST stop what the call for the output before it built.
@@ -221,13 +211,6 @@ for await (const label of iff(open, "Close", "Open")) seen.push(label);
 seen; // => [ 'Close', 'Open' ]
 ```
 
-## isVal
-
-- HE-020: `isVal` MUST return true for a `Val` from any copy of the library.
-  It MUST return false for all other values.
-  It reads the brand from SE-029.
-  So a plain object with the same fields is not a `Val`.
-
 ## spread
 
 `spread` is a pure snapshot projection for UI code.
@@ -271,6 +254,8 @@ export type Spread<S> = S extends readonly unknown[]
 If a key is only sometimes a `Val`, `Spread` gives it no suffix fields.
 HE-031 still adds the fields when the key holds a `Val`.
 
+- HE-020: `spread` MUST treat a value as a `Val` only if it has the brand from SE-029.
+  So it takes a `Val` from any copy of the library, and a plain object with the same fields is not a `Val`.
 - HE-030: `spread` MUST NOT change its input.
 - HE-031: For an object snapshot, a `Val` at key `k` MUST become four fields:
   `k` with the value, `kLoading`, `kError` and `kDone`.
@@ -303,7 +288,11 @@ A **mirror** is an object or array that holds one entry for each output of the s
 By default, it is lazy.
 One call first computes the combined result of its operations.
 `map` then runs only for entries that stay in `target`.
+In an array, a value first takes the entry of the same value that left, and otherwise the entry that left its index.
 An array value that leaves and comes back in one call keeps its entry, so `map` does not run for it.
+So two sets that swap two values move their entries, and a new value at an index updates the entry there.
+With `key`, an entry belongs to the key of an output.
+A new output with the same key then updates that entry, and a new key gets a new entry.
 With `eager: true`, `applyOps` applies each operation in turn.
 `map` then also runs for values that a later operation overwrites.
 `map` changes each output into the entry to store.
@@ -314,11 +303,15 @@ Without `map`, `applyOps` stores each output unchanged.
   It MUST return `target`.
   An empty mirror replayed from the first report MUST equal the outputs (SE-108).
 - HE-041: Under `eager`, `set` MUST store `map(value, prev)`.
-  `prev` is the own entry at that key, or `undefined` if there is none.
+  For an object, `prev` is the own entry at that key, or `undefined` if there is none.
+  For an array with `key`, `prev` is the entry at that index if the `set` updates it (HE-04H), and `undefined` otherwise.
+  For an array without `key`, `prev` is the entry at that index.
 - HE-042: Under `eager`, `delete` MUST remove the key.
   It MUST NOT call `map`.
 - HE-043: Under `eager`, `splice` MUST call `map` one time for each added value, in order, before it changes `target`.
-  `prev` MUST be the removed entry at the same index, or `undefined` past the removed range.
+  `prev` MUST be the first removed entry of that `splice` with the same match (HE-04H) that no added value took.
+  Without `key`, an added value that matches none MUST then take the removed entry at its own index, if no added value took it.
+  Otherwise `prev` is `undefined`.
 - HE-044: `splice` MUST accept any number of added values, also more than a function call can take as arguments.
 - HE-045: Under `eager`, `move` MUST place the entry from index `order[i]` at index `i`.
   It MUST NOT call `map`.
@@ -330,18 +323,17 @@ Without `map`, `applyOps` stores each output unchanged.
 - HE-048: Under `eager`, an error from `map` MUST propagate.
   The current operation MUST stay unapplied.
   Earlier operations MUST stay applied.
-- HE-049: If `options.eager` is not a boolean and not `undefined`, `applyOps` MUST throw a `TypeError`.
+- HE-049: If `options.eager` is not a boolean and not `undefined`, or `options.key` is not a function and not `undefined`, `applyOps` MUST throw a `TypeError`.
   It MUST also throw a `TypeError` for another own enumerable string key of `options`.
 - HE-04A: Without `eager`, the final `target` MUST equal an eager replay of the same `ops` with the same `map` results, including key order.
   For a value that reuses an entry (HE-04H), the `map` result is that entry.
-- HE-04B: Without `eager`, `map` MUST run one time for each value that stays in place after all `ops` and reuses no entry, and for no other value.
+- HE-04B: Without `eager`, `map` MUST run one time for each value that stays in place after all `ops` and reuses no entry with no call (HE-04H), and for no other value.
   For an array, it MUST run in index order.
   For an object, it MUST run in final key order among the written keys.
-- HE-04C: Without `eager`, `prev` MUST be the entry that the position or key inherited from before the call.
-  For an array, HE-04H defines what a position inherits.
+- HE-04C: Without `eager`, `prev` MUST be the entry from before the call that the value takes over.
+  For an object, a key takes over its own entry, also when one operation removes the key and a later operation sets it.
+  For an array, HE-04H defines what a value takes over.
   If there is no such entry, `prev` MUST be `undefined`.
-  A `move` takes the inherited entry with it to the new position.
-  A key that one operation removes and a later operation sets inherits its old entry.
   One entry MUST be `prev` at most one time.
 - HE-04D: Without `eager`, `map` MUST run before `target` changes.
   So any error MUST leave `target` unchanged.
@@ -355,14 +347,21 @@ Without `map`, `applyOps` stores each output unchanged.
   The result MAY have a hole or an `undefined` entry at that index.
   HE-04A treats these two as equal.
   `select` produces no holes (SE-010, SE-096).
-- HE-04H: Without `eager`, a value that lands in an array MUST take over at most one value that leaves, and a leaving value MUST be taken over at most one time.
-  A `set` value takes over the value at its index.
-  A `splice` value first takes over the first value that left by a `splice` in the same call with the `Object.is` same output, in leaving order.
-  Otherwise it takes over the value that it removes at its own index, if no other value took that over.
-  The value at a position after all `ops` traces back through what it took over to an entry from before the call.
-  If the output of that entry is the `Object.is` same value, the value MUST reuse that entry, with no `map` call.
-  Otherwise that entry is `prev`.
-  So a `splice` that keeps values, such as a filter, moves their entries and calls no `map`.
+- HE-04H: Without `eager`, a value that lands in an array MUST take over at most one entry from before the call, and an entry MUST be taken over at most one time.
+  The **match** of an output is `key(output)` with `key`, and the output itself otherwise.
+  Two matches are equal if they are the `Object.is` same.
+  A `set` **updates** what its index holds if it has `kept`, if `value` is the `Object.is` same as `prev`, or if the matches of `value` and `prev` are equal.
+  A `set` that updates takes over what its index holds: an entry, or what an earlier value at the index took over.
+  An entry **leaves** when a `set` that does not update overwrites it, or when a `splice` removes it, also through values that updated it.
+  It leaves with the output that its index held then.
+  After all `ops`, each value that stays and took over nothing by an update MUST take over the first entry that left with an equal match, in leaving order.
+  These values take over in index order.
+  Without `key`, each value that still took over nothing MUST then take over the entry that left its index when it landed, if no value took that entry.
+  A value that landed on a value from the same call traces back through it to an entry.
+  A value that took over an entry by its match, with the `Object.is` same output as that entry left with, and with no update of that entry in the call, MUST reuse the entry with no `map` call.
+  So a `splice` that keeps values, such as a filter, and two sets that swap values move their entries and call no `map`.
+  Any other value that took over an entry gets `map(value, entry)`.
+  A value that took over nothing gets `map(value, undefined)`.
 - HE-04I: Without `eager`, `applyOps` MUST NOT read an array index before the first index that `ops` touch.
   If the length stays, it MUST NOT read an index after the last one either.
   A `move` touches every index.
@@ -376,7 +375,7 @@ It costs one pass over an array target.
 
 ```ts
 const rows: { user: unknown }[] = [];
-const users = select(["ann", "bob"], { nonYielding: true });
+const users = select(["ann", "bob"], { backPressure: false });
 const reader = changes(users);
 const replay = async () =>
   applyOps(rows, (await reader.next()).value ?? [], (user, row) =>

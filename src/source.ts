@@ -2,6 +2,8 @@
 export const VAL = Symbol.for("gg.Val");
 /** Does nothing, as a default callback and a rejection sink. */
 export const noop = () => {};
+// Marks a source whose readers each get its newest value, so one read can serve all derives of it (HE-05A).
+export const SHARE: unique symbol = Symbol() as any;
 
 /** Tells if a value is a function. */
 const callable = (value: unknown) => typeof value === "function";

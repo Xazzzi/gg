@@ -28,7 +28,13 @@ export type Val<T> =
   | { status: "rejected"; value: undefined; reason: unknown; done: true };
 
 export type Op =
-  | { op: "set"; key: string | symbol | number; value: unknown; prev: unknown }
+  | {
+      op: "set";
+      key: string | symbol | number;
+      value: unknown;
+      prev: unknown;
+      kept?: true;
+    }
   | { op: "delete"; key: string | symbol; prev: unknown }
   | { op: "splice"; start: number; removed: unknown[]; added: unknown[] }
   | { op: "move"; order: number[] };
@@ -37,7 +43,6 @@ export type SelectOptions<S, R> = ChannelOptions & {
   autoStart?: boolean;
   autoClose?: boolean;
   backPressure?: boolean;
-  nonYielding?: boolean;
   unwrap?: boolean;
   mapSnapshot?: (snapshot: S) => R;
 };
@@ -144,7 +149,7 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 
 ## Options
 
-- SE-001: The defaults MUST be `autoStart: false`, `autoClose: false`, `backPressure: true`, `nonYielding: false`, `unwrap: false`.
+- SE-001: The defaults MUST be `autoStart: false`, `autoClose: false`, `backPressure: true`, `unwrap: false`.
   `scope.md` gives the reason for each default.
 - SE-002: `thenReceive` MUST default to `"latest"`.
   `firstReceive` MUST default to `"latest"`, or to `"unread"` when `thenReceive` is `"unread"`.
@@ -214,7 +219,7 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
 - SE-028: `select` MUST freeze each `Val`.
   A slot MUST keep the same `Val` object until its state changes.
 - SE-029: A `Val` MUST carry a non-enumerable `Symbol.for("gg.Val")` brand.
-  `isVal` in `helpers.md` reads this brand.
+  `spread` in `helpers.md` reads this brand (HE-020).
   So it operates across copies of the library.
 - SE-02A: If an iterator did not finish when a value rejects, it MUST get `return()` immediately, if it has `return`.
   A sync iterator that fails on a thenable result MUST also get `return()`.
@@ -259,8 +264,9 @@ A flush runs these steps in order.
 
 1. Advance idle sync iterators, and make the first pull on each new raw iterator.
 2. Report to readers and to the report hook.
-3. Publish.
+3. Publish, if the channel has an active consumer (SE-045).
 4. With `backPressure`, wait until a consumer reads that publish, or a reader reads (SE-04A).
+   With no active consumer, wait until a reader reads (SE-04A) or a consumer attaches.
 5. Advance each sync iterator due under SE-064.
 6. Pull each idle async iterator.
 7. Apply the auto close rule.
@@ -271,7 +277,7 @@ A flush runs these steps in order.
 - SE-04C: If the report hook returns a truthy value, the flush MUST await it before step 3.
   So the JSX host holds the pulls of a parked drive (JX-083).
   The hook is still not an observer.
-- SE-041: Without `nonYielding`, publish MUST build a snapshot.
+- SE-041: Publish MUST build a snapshot.
   It MUST then apply `mapSnapshot` and send the result.
   SE-02B skips steps 3 and 4 for a flush with no other change.
 - SE-042: With `backPressure`, publish MUST use `asend`.
@@ -282,15 +288,20 @@ A flush runs these steps in order.
   A snapshot shows the slots at publish.
   So it can include a change that the next flush reports.
 - SE-044: An async iterator MUST have at most one pull in progress.
-- SE-045: With `nonYielding`, a flush MUST NOT build a snapshot.
-  Steps 3 and 4 do not run.
-  `select` does not call `mapSnapshot`.
+- SE-045: With no active consumer, a flush MUST NOT build a snapshot, and MUST NOT call `mapSnapshot`.
+  When a consumer attaches to a started select that is not terminal, `select` MUST end a wait of step 4.
+  If a flush skipped a publish since the last publish, `select` MUST also send a snapshot before the consumer takes its start.
+  So a consumer under `firstReceive: "latest"` reads the current state, and not an older snapshot.
+  The next flush MUST NOT publish, unless a change came after that snapshot.
+  An auto close (SE-070) MUST send a snapshot first if a flush skipped a publish, unless the report hook exists.
+  So a consumer that attaches late reads the last state.
+  A terminal channel MUST also end a wait of step 4.
 - SE-046: A flush MUST do no more steps if the channel is terminal.
   It MUST check before each step, and before each iterator in steps 1, 5 and 6.
 - SE-047: Steps 1, 5 and 6 MUST pull iterators in slot order.
   A replaced object key keeps its place in slot order, and a new key comes last.
 - SE-048: A flush SHOULD cost time for the slots that changed and the raw iterators, and not for the other slots.
-  Publish builds a snapshot of all slots, so `nonYielding` and readers of operations get this cost.
+  Publish builds a snapshot of all slots, so a select with no consumer and readers of operations get this cost.
 - SE-049: After the flush that reports its removal, `select` MUST NOT retain the source of a slot that left the shape.
 - SE-04A: Under `ackStyle: "any"`, a reader that reads operations, or that waits with no operation to read, MUST also end the wait of step 4.
 - SE-04B: A wait of step 4 that ended MUST NOT retain an object.
@@ -423,6 +434,8 @@ A flush runs these steps in order.
   SE-02B is the exception.
   A new object key has `prev: undefined`.
   On an array, `key` MUST be a number.
+- SE-10C: The `set` of a state change MUST have `kept: true`, and the `set` of an assignment MUST NOT have `kept`.
+  So a mirror tells a slot that keeps its source from a new source at the index (HE-04H).
 - SE-104: `delete` on an object MUST produce `delete`.
 - SE-105: Each array structure change other than SE-09C MUST produce one `splice`.
   `push` and SE-096 use `start` equal to the old length.
@@ -571,7 +584,7 @@ These behaviours come from the rules above and are intentional.
 
 - SE-130: With `backPressure` and no consumer, a flush blocks at step 4.
   So `select` does not pull async iterators.
-  Use `autoStart` with `nonYielding` or `backPressure: false` for sources that need to run without a consumer.
+  Use `backPressure: false` for sources that need to run without a consumer, or read with a reader (SE-04A).
 - SE-131: `break` in a consumer does not close the channel.
   Close the channel, for example with `using`.
   `select` then does no more work.
@@ -590,7 +603,7 @@ These behaviours come from the rules above and are intentional.
 - SE-136: `select` discards a value that it pulled for a removed slot or a terminal channel.
   If the source is a `thenReceive: "unread"` channel, no other consumer gets that value.
   If a caller calls `next()` on a removed iterator, the caller gets the value after the value in progress.
-- SE-137: With `backPressure: false` or `nonYielding`, an async source with results that are always ready executes on microtasks only.
+- SE-137: With `backPressure: false`, or with no consumer and a reader that reads, an async source with results that are always ready executes on microtasks only.
   So the event loop executes no macrotask while that source has results.
 - SE-138: `Array.prototype` mutators applied with `.call` do not follow SE-090 and SE-09C.
   Each of their writes then follows the rules for index and `length` writes.
@@ -643,7 +656,7 @@ for await (const snapshot of s) console.log(snapshot); // => { user: 'ann', ads:
 Replay array changes onto DOM nodes:
 
 ```ts
-const s = select(["a", "b"], { nonYielding: true });
+const s = select(["a", "b"], { backPressure: false });
 const reader = changes(s);
 (await reader.next()).value; // => [ { op: 'splice', start: 0, removed: [], added: [ 'a', 'b' ] } ]
 s.shift();
@@ -658,7 +671,7 @@ Read the changes of one row, which the reader follows when the array moves it:
 ```ts
 import { setImmediate } from "node:timers/promises";
 const s = select(["a", "b", "c"], {
-  nonYielding: true,
+  backPressure: false,
   autoStart: true,
 });
 await setImmediate(); // Start has run
@@ -677,7 +690,7 @@ import { setImmediate } from "node:timers/promises";
 const form = select(
   { name: "ann", age: 30 },
   {
-    nonYielding: true,
+    backPressure: false,
     autoStart: true,
   },
 );
@@ -695,7 +708,7 @@ Read batched changes, where one read covers two reports:
 ```ts
 import { setImmediate } from "node:timers/promises";
 const s = select(["a"], {
-  nonYielding: true,
+  backPressure: false,
   autoStart: true,
 });
 await setImmediate(); // Start has run

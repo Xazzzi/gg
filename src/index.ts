@@ -2,26 +2,33 @@ export type {
   AckStyle,
   ChannelOptions,
   FirstReceive,
+  PresetOptions,
   StopStyle,
   ThenReceive,
 } from "./channel.ts";
-export { Channel, latest, StopError } from "./channel.ts";
+export {
+  broadcast,
+  Channel,
+  latest,
+  queue,
+  replay,
+  StopError,
+} from "./channel.ts";
 export type { FeedOptions, Source } from "./feed.ts";
 export { feed } from "./feed.ts";
-export type { Caught, Derived, Spread } from "./helpers.ts";
+export type { ApplyOptions, Caught, Derived, Spread } from "./helpers.ts";
 export {
-  abortable,
   applyOps,
   catching,
   derive,
   iff,
-  isVal,
   spread,
 } from "./helpers.ts";
 export type {
   Child,
   Context,
   Dynamic,
+  EachOptions,
   Item,
   JSX,
   Props,

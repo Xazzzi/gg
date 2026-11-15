@@ -4,9 +4,12 @@ import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
 import { attached } from "../src/channel.ts";
 import {
+  broadcast,
   Channel,
   type ChannelOptions,
   latest,
+  queue,
+  replay,
   StopError,
 } from "../src/index.ts";
 
@@ -81,6 +84,48 @@ test("CH-006 latest gives the current value, then each newer value", async () =>
   ch.close();
   assert.equal((await a.next()).done, true);
   assert.notEqual(latest(), latest());
+});
+
+test("CH-006 queue gives each value to one consumer", async () => {
+  const ch = queue<number>();
+  const a = ch[Symbol.asyncIterator](),
+    b = ch[Symbol.asyncIterator]();
+  const first = [a.next(), b.next()];
+  ch.send(1);
+  ch.send(2);
+  const values = (await Promise.all(first)).map(r => r.value);
+  assert.deepEqual(values.sort(), [1, 2]);
+  assert.throws(() => queue({ ackStyle: "all" }), TypeError);
+});
+
+test("CH-006 broadcast gives each value sent after attach, and replay gives every value", async () => {
+  const live = broadcast<number>(),
+    log = replay<number>({ stopStyle: "stop", ackStyle: "all" });
+  for (const ch of [live, log]) ch.send(1);
+  const a = live[Symbol.asyncIterator](),
+    b = log[Symbol.asyncIterator]();
+  const pending = a.next();
+  await setImmediate();
+  live.send(2);
+  assert.equal((await pending).value, 2);
+  assert.equal((await b.next()).value, 1);
+  log.send(2);
+  const ack = log.asend(3);
+  assert.equal((await b.next()).value, 2);
+  log.close();
+  assert.equal((await b.next()).done, true); // stopStyle "stop" drops 3
+  await assert.rejects(ack, StopError);
+});
+
+test("CH-007 a preset takes only stopStyle and ackStyle, with valid values", () => {
+  for (const make of [latest, queue, broadcast, replay]) {
+    assert.throws(() => make({ firstReceive: "next" } as any), TypeError);
+    assert.throws(() => make({ stopStyle: "x" } as any), TypeError);
+    assert.throws(() => make({ ackStyle: "x" } as any), TypeError);
+    assert.ok(make({ stopStyle: "stop" }) instanceof Channel);
+  }
+  // A preset that throws leaves the next channel registered as usual.
+  assert.ok(new Channel() instanceof Channel);
 });
 
 test("CH-003 unlisted option values throw", () => {

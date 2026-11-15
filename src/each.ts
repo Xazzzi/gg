@@ -16,7 +16,7 @@ import {
 } from "./host.ts";
 import type { Child } from "./jsx.ts";
 import { changes, isState, type Op, type State } from "./select.ts";
-import { append, noop } from "./source.ts";
+import { append, checkOptions, noop, SHARE } from "./source.ts";
 
 // `finished` marks a finished child, and `sent` a value sent after the last render (JX-03C).
 type Kept = Entry & {
@@ -46,6 +46,7 @@ class Handle<T> implements Item<T> {
   #channel?: Channel<T>;
   #control?: AbortController;
   #left = false;
+  readonly [SHARE] = true; // Each reader reads the newest value, so derives share one
 
   static {
     deliver = (handle, value) => handle.#deliver(value);
@@ -100,20 +101,26 @@ class Handle<T> implements Item<T> {
   }
 }
 
+/** The options of `each`. */
+export type EachOptions<T> = { key?: (value: T) => unknown };
+
 /** Renders one entry for each item of an array select, and gives each entry an `Item` handle. */
 export function each<T>(
   state: State<readonly unknown[], any, T[]>,
   render: (item: Item<T>) => Child,
+  options: EachOptions<T> = {},
 ): AsyncGenerator<Node[], void, void> {
   if (!isState(state) || !Array.isArray(state))
     throw new TypeError("each needs a select proxy with an array shape");
   if (typeof render !== "function")
     throw new TypeError("each render must be a function");
+  checkOptions(options, { key: "function" });
   const control = new AbortController(),
     rows: Rows = {};
   const iterator: AsyncGenerator<Node[], void, void> = replay(
     state,
     render,
+    options.key,
     () => iterator,
     control.signal,
     rows,
@@ -144,6 +151,7 @@ type Rows = {
 async function* replay<T>(
   state: State<readonly unknown[], any, T[]>,
   render: (item: Item<T>) => Child,
+  key: ((value: T) => unknown) | undefined,
   owner: () => object,
   signal: AbortSignal,
   rows: Rows,
@@ -239,26 +247,36 @@ async function* replay<T>(
   };
   /**
    * Replays a read onto the entries, and closes the entries that leave.
-   * A read with only set operations sends values, and adds and removes no entry. */
+   * A read with only set operations reads only the indexes that it names. */
   const apply = (ops: Op[]) => {
-    if (ops.every(op => op.op === "set")) return applyOps(entries, ops, map);
-    // An entry can leave only from between the entries that no operation touches.
-    const [head, tail] = untouched(ops, entries.length),
-      before = entries.slice(head, entries.length - tail);
-    applyOps(entries, ops, map);
+    const sets = ops.every(op => op.op === "set");
+    // An entry can leave only from the indexes that the sets name, or from between the entries that no operation touches.
+    let span: () => (Kept | undefined)[];
+    // Stryker disable next-line ConditionalExpression: the span between the untouched entries holds the named indexes too, with more work
+    if (sets) {
+      const named = [...new Set(ops.map(op => (op as { key: number }).key))];
+      span = () => named.map(index => entries[index]);
+    } else {
+      const [head, tail] = untouched(ops, entries.length);
+      // Stryker disable next-line ArithmeticOperator: a wider span holds the same entries that leave, with more work
+      span = () => entries.slice(head, entries.length - tail);
+    }
+    const before = span();
+    applyOps(entries, ops, map, { key: key as any });
+    const after = span();
     // Stryker disable next-line UpdateOperator: rounds only need to differ
     round++;
-    for (let i = entries.length - tail; i-- > head; )
-      (entries[i] as Kept).round = round;
+    for (const entry of after) (entry as Kept).round = round;
+    // A set that keeps each entry at its index changes no node (JX-037).
+    if (!sets || after.some((entry, i) => entry !== before[i])) dirty = true;
     for (const entry of before)
-      if (entry.round !== round) {
+      if (entry && entry.round !== round) {
         leave(entry.handle);
         end(entry.view);
         host.remove(entry);
         entry.nodes.forEach(stopIn);
         entry.past?.forEach(stopIn);
       }
-    dirty = true;
   };
   const reader = owned(self, () => changes(state)); // DV-043
   signal.addEventListener("abort", wake);

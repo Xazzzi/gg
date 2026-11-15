@@ -32,9 +32,15 @@ export function Main({ view, send }: { view: View; send: Send }) {
           (filter = "all") => `todo-list filter-${filter}`,
         )}
       >
-        {each(view.todos, todo => (
-          <Row todo={todo} send={send} />
-        ))}
+        {each(
+          view.todos,
+          todo => (
+            <Row todo={todo} send={send} />
+          ),
+          {
+            key: todo => todo.id,
+          },
+        )}
       </ul>
     </section>
   );

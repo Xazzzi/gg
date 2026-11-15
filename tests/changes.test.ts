@@ -5,7 +5,11 @@ import { inspect } from "node:util";
 import { applyOps, CHAN, changes, type Op, select } from "../src/index.ts";
 import { REPORT } from "../src/select.ts";
 
-const open = { autoStart: true, autoClose: false, nonYielding: true } as const;
+const open = {
+  autoStart: true,
+  autoClose: false,
+  backPressure: false,
+} as const;
 const done = { done: true, value: undefined };
 const started = async <T>(state: T) => (await setImmediate(), state);
 const pending = (promise: Promise<unknown>) => /pending/.test(inspect(promise));
@@ -49,7 +53,7 @@ test("SE-142 outputs is a copy of the outputs at the call, without mapSnapshot",
   const s = await started(
     select(
       { p: Promise.resolve(1), n: 2 },
-      { ...open, nonYielding: false, unwrap: true, mapSnapshot: () => 0 },
+      { ...open, unwrap: true, mapSnapshot: () => 0 },
     ),
   );
   const a = changes(s);
@@ -62,8 +66,8 @@ test("SE-142 outputs is a copy of the outputs at the call, without mapSnapshot",
 });
 
 test("SE-142 SE-107 before start, outputs is empty and the first read describes the shape", async () => {
-  const a = select(["a", "b"], { autoClose: false, nonYielding: true }),
-    o = select({ k: 1 }, { autoClose: false, nonYielding: true });
+  const a = select(["a", "b"], { autoClose: false, backPressure: false }),
+    o = select({ k: 1 }, { autoClose: false, backPressure: false });
   const ra = changes(a),
     ro = changes(o);
   assert.deepEqual(ra.outputs, []);

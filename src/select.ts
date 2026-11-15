@@ -5,6 +5,8 @@ import {
   CHOICES,
   Channel,
   type ChannelOptions,
+  consumed,
+  onAttach,
   onEnd,
   terminal,
 } from "./channel.ts";
@@ -60,7 +62,6 @@ export type SelectOptions<S, R> = ChannelOptions & {
   autoStart?: boolean;
   autoClose?: boolean;
   backPressure?: boolean;
-  nonYielding?: boolean;
   unwrap?: boolean;
   mapSnapshot?: (snapshot: S) => R;
   [REPORT]?: (ops: Op[]) => unknown; // A promise holds the next pulls (JX-083)
@@ -186,7 +187,6 @@ const OPTION_TYPES = {
   autoStart: "boolean",
   autoClose: "boolean",
   backPressure: "boolean",
-  nonYielding: "boolean",
   unwrap: "boolean",
   mapSnapshot: "function",
 };
@@ -296,7 +296,9 @@ class Select {
   #map!: Map<PropertyKey, Slot>; // The slots of an object shape
   #backPressure: boolean;
   #anyAck: boolean; // Under "all", only snapshot consumers release a flush (SE-04A)
-  #nonYielding: boolean;
+  #stale = false; // A flush with no consumer built no snapshot of its change (SE-045)
+  #shown = false; // An attach sent a snapshot of each change so far, so the next flush publishes none
+  #hold?: PromiseWithResolvers<void>; // The wait of step 4 with no consumer, which an attach ends
   #unwrap: boolean;
   #hook?: (ops: Op[]) => void; // The report hook, which is no observer
   #fault?: (error: unknown) => void;
@@ -387,7 +389,6 @@ class Select {
       autoStart = false,
       autoClose = false,
       backPressure = true,
-      nonYielding = false,
       unwrap = false,
       mapSnapshot,
       [REPORT]: hook,
@@ -396,7 +397,6 @@ class Select {
     if (autoClose) this.#watched = new Set();
     this.#backPressure = backPressure;
     this.#anyAck = options.ackStyle !== "all";
-    this.#nonYielding = nonYielding;
     this.#unwrap = unwrap;
     this.#hook = hook;
     this.#fault = fault;
@@ -420,6 +420,7 @@ class Select {
         );
     }
     onEnd(channel, () => this.#abort());
+    onAttach(channel, () => this.#join());
     if (autoStart) queueMicrotask(() => this.#start());
     else attached(channel).then(() => this.#start(), noop);
     this.state = new Proxy(target, this);
@@ -587,6 +588,7 @@ class Select {
   /** Marks the state changed, and schedules a flush. */
   #touch() {
     this.#changed = true;
+    this.#shown = false;
     this.#schedule();
   }
 
@@ -604,6 +606,7 @@ class Select {
       key: this.#keyOf(slot),
       value: this.#out(slot),
       prev,
+      kept: true, // The slot stays, so a mirror updates its entry (HE-04H)
     }));
     this.#touch();
   }
@@ -656,10 +659,12 @@ class Select {
   #pull(slot: Slot) {
     let result: any;
     try {
-      // Stryker disable next-line ConditionalExpression: pulling only names the source for an emitter
-      result = this.#emit
-        ? pulling(slot.source, () => slot.next.call(slot.iterator))
-        : slot.next.call(slot.iterator);
+      // A drive binds what a pull opens to its source (JX-041), and an emitter names the source.
+      result =
+        // Stryker disable next-line ConditionalExpression,LogicalOperator: without a drive, pulling only binds to a source that no host releases
+        this.#emit || this.#hook
+          ? pulling(slot.source, () => slot.next.call(slot.iterator))
+          : slot.next.call(slot.iterator);
       const thenable = isThenable(result);
       if (slot.kind === RAW) slot.kind = thenable ? ASYNC_RAW : SYNC_RAW;
       if (thenable && slot.kind === SYNC_RAW) {
@@ -775,8 +780,28 @@ class Select {
     this.#schedule();
   }
 
+  /** Ends a wait of step 4, and sends a snapshot of a change that no consumer saw, before the new consumer starts (SE-045). */
+  #join() {
+    this.#hold?.resolve();
+    if (!this.#stale || this.#terminal) return;
+    this.#stale = false;
+    this.#shown = true;
+    try {
+      this.#channel.send(this.#publishable());
+    } catch (error) {
+      this.#channel.throw(error);
+    }
+  }
+
+  /** Builds a snapshot, and maps it with mapSnapshot. */
+  #publishable() {
+    const snap = this.#snapshot();
+    return this.#mapSnapshot ? this.#mapSnapshot(snap) : snap;
+  }
+
   /** Marks every slot dead, returns the iterators, and wakes the readers, when the channel turns terminal. */
   #abort() {
+    this.#hold?.resolve();
     for (const slot of this.#slots()) {
       slot.dead = true;
       if (slot.kind >= ASYNC && slot.status < FINAL)
@@ -823,7 +848,7 @@ class Select {
       for (let list: Slot[]; (list = this.#due()).length; )
         for (const slot of list) if (this.#advancing(slot)) this.#pull(slot);
       if (this.#terminal) return;
-      const publish = this.#changed;
+      const publish = this.#changed && !this.#shown;
       this.#changed = false;
       // SE-064 applies to these in step 5
       const results = this.#results,
@@ -840,9 +865,19 @@ class Select {
         if (parked) await parked; // A parked drive holds the next pulls (JX-083)
       }
       if (this.#terminal) return;
-      if (publish && !this.#nonYielding) {
-        const snap = this.#snapshot();
-        const value = this.#mapSnapshot ? this.#mapSnapshot(snap) : snap;
+      // With no consumer, no code reads a snapshot, so the flush builds none (SE-045).
+      if (publish && !consumed(channel)) {
+        this.#stale = true;
+        if (this.#backPressure && !(this.#anyAck && this.#log.read)) {
+          const hold = (this.#hold = this.#anyAck
+            ? this.#log.seen()
+            : Promise.withResolvers());
+          await hold.promise;
+          this.#hold = undefined;
+        }
+      } else if (publish) {
+        this.#stale = false;
+        const value = this.#publishable();
         if (!this.#backPressure) channel.send(value);
         else {
           const sent = channel.asend(value);
@@ -866,7 +901,11 @@ class Select {
       if (watched && !this.#changed) {
         for (const slot of watched)
           if (slot.dead || !live(slot)) watched.delete(slot);
-        if (!watched.size) channel.close();
+        if (!watched.size) {
+          // A late consumer of a closed select reads its last snapshot, and a drive has none (SE-045).
+          if (this.#stale && !this.#hook) channel.send(this.#publishable());
+          channel.close();
+        }
       }
     } catch (error) {
       channel.throw(error); // A no-op for this channel's own stop error

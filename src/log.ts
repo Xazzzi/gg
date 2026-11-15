@@ -2,11 +2,17 @@
 // The select side, which runs the sources and flushes, is in select.ts.
 // Key slices and the parked readers exist so that a report wakes only the readers of its keys (SE-153, scope.md).
 import { type Channel, failed, resultOf, terminal } from "./channel.ts";
-import { type Emit, pulledSource, register } from "./devtools.ts";
+import { bindPulled, type Emit, pulledSource, register } from "./devtools.ts";
 import { append, noop } from "./source.ts";
 
 export type Op =
-  | { op: "set"; key: string | symbol | number; value: unknown; prev: unknown }
+  | {
+      op: "set";
+      key: string | symbol | number;
+      value: unknown;
+      prev: unknown;
+      kept?: true;
+    }
   | { op: "delete"; key: string | symbol; prev: unknown }
   | { op: "splice"; start: number; removed: unknown[]; added: unknown[] }
   | { op: "move"; order: number[] };
@@ -476,6 +482,7 @@ export class Reader implements Changes<unknown> {
       keys,
       source: pulledSource(),
     });
+    bindPulled(this); // JX-041
     if (slice?.spent?.()) {
       this.#end(); // SE-156 finishes a reader that names no slot
       return;

@@ -49,9 +49,11 @@ export type Item<T> = AsyncIterable<T> & {
   readonly value: T;
   readonly signal: AbortSignal;
 };
+export type EachOptions<T> = { key?: (value: T) => unknown };
 export function each<T>(
   state: State<readonly unknown[], any, T[]>,
   render: (item: Item<T>) => Child,
+  options?: EachOptions<T>,
 ): AsyncGenerator<Node[], void, void>;
 export type Context<T> = { readonly [VALUE]?: T }; // VALUE is a type-only symbol
 export const createContext: <T>(key: unknown) => Context<T>;
@@ -173,7 +175,7 @@ The runtime converts a child to nodes by these rules, in order.
   Each dynamic child is one entry.
   The static nodes between two dynamic children are one entry.
 - JX-021: `mount` MUST place the static nodes synchronously.
-- JX-022: `mount` MUST drive the dynamic children with one `select`, with `autoStart`, `nonYielding` and `autoClose`.
+- JX-022: `mount` MUST drive the dynamic children with one `select`, with `autoStart`, `autoClose` and no `backPressure`.
   So the children start in a microtask (SE-031), and the host does no more work when they all finish (SE-070).
   `mount` does no `select` call if there is no dynamic child.
 - JX-023: The runtime MUST place after each report of that `select` that changes the nodes of an entry.
@@ -215,7 +217,7 @@ The runtime converts a child to nodes by these rules, in order.
 A dynamic prop changes with its source, so a component needs no code to update an attribute or a live property.
 
 - JX-060: A dynamic prop at a key that starts with `on` MUST throw a `TypeError`, because an event attribute runs its value as code.
-- JX-061: An element with a dynamic prop MUST wait as JX-02B says, and MUST then drive its dynamic props with one `select`, with `autoStart`, `nonYielding` and `autoClose`.
+- JX-061: An element with a dynamic prop MUST wait as JX-02B says, and MUST then drive its dynamic props with one `select`, with `autoStart`, `autoClose` and no `backPressure`.
   The element MUST start its children before its dynamic props.
   This `select` is apart from the drive of the children, so `mount` into the element keeps its dynamic props (JX-020).
 - JX-062: A pending state, and an output that is the `Object.is` same as the last applied output, MUST change nothing.
@@ -226,6 +228,12 @@ A dynamic prop changes with its source, so a component needs no code to update a
   The element keeps its attribute or property, and the other dynamic props continue.
 - JX-066: A dynamic prop MUST keep its last output when its source finishes.
   It stops when the scope of the element stops (JX-081).
+- JX-067: A dynamic prop whose source is a `derive` with a shared reader (HE-05A) MUST NOT get a drive.
+  The runtime MUST bind it to the shared reader instead, under the scope of the element.
+  A binding MUST map each value and apply the output as JX-062 to JX-066 say, and hand a failure to the boundary (JX-092).
+  A parked binding MUST NOT map, and MUST map the newest value when it resumes (JX-083).
+  A binding MUST stop with its scope, and MUST then stop what its `map` built (HE-059).
+  So each prop costs no `select` slot, and all props of one slot cost one reader.
 
 ## Scopes
 
@@ -287,13 +295,19 @@ A component instance that finishes renders again with the next value of its item
 `each` owns only the nodes of its entries, so the other children of its host keep their nodes.
 
 - JX-030: `each` MUST throw a `TypeError` synchronously if `state` is not a `select` proxy with an array shape, or if `render` is not a function.
+  It MUST also throw a `TypeError` if `options.key` is not a function and not `undefined`, or for another own enumerable string key of `options`.
   It MUST return an async generator, and MUST NOT call `changes` before the first `next()`.
 - JX-031: The first `next()` MUST call `changes(state)`, make one entry for each item of `outputs`, and yield the nodes of all entries in order.
 - JX-032: For a new item, `each` MUST create an `Item` with the value, and call `render` with it.
   The result of `render` is the child of the entry.
   It MUST be a static child, or one dynamic child.
-- JX-033: `each` MUST replay each read onto its mirror of entries with `applyOps`.
+- JX-033: `each` MUST replay each read onto its mirror of entries with `applyOps`, with the `key` of `options`.
   So an item that leaves and comes back in one read keeps its entry, its `Item` and its instance (HE-04H).
+- JX-03G: Without `key`, a value takes the row of the same value that left, and otherwise the row that left its index (HE-04H).
+  So two sets that swap two items move their rows, and an assignment of a new value at an index gives the value to the row there.
+  A slot that gives a new output keeps its row (SE-10C), and so does a slot that gives the same output again.
+  With `key`, a row belongs to the key of the output.
+  So a new value with the key of a row gives the value to its `Item`, and a new key renders a new row.
 - JX-034: For an item that keeps its entry, `each` MUST give the new value to the `Item` of that entry.
   The `Item` MUST set `value`, and then send the value to its channel, if it has one.
   It MUST NOT call `render`, unless JX-03C applies.
@@ -303,10 +317,11 @@ A component instance that finishes renders again with the next value of its item
   This includes a node that an earlier output of the child or of one of its parts gave, if a scope is still bound through it.
   It MUST also return each part that the outputs of the child made (JX-086).
   So a row that leaves ends the dynamic children and the dynamic props inside it, also the ones that are parked.
-- JX-036: `each` MUST drive the dynamic children of its entries with one `select`, with `autoStart`, `nonYielding` and no `autoClose`.
+- JX-036: `each` MUST drive the dynamic children of its entries with one `select`, with `autoStart`, no `autoClose` and no `backPressure`.
   JX-024 to JX-028 apply.
 - JX-037: When the nodes of its entries changed after its last yield, `each` MUST yield a new array of the nodes of all entries in order.
-  A read with only `set` operations changes no node of `each` itself.
+  A read with only `set` operations that keep each entry at its index changes no node of `each` itself.
+  Such a read MUST read only the entries at the indexes that it names.
   `each` MUST NOT yield while no node changed.
   So a host that is busy gets one output for all changes since its last pull.
 - JX-038: `each` MUST NOT change a node outside its entries.
@@ -398,9 +413,12 @@ The scopes give a tree that needs no part of the generator.
   `derive` and `iff` stop what their `map` built (HE-059).
   A generator component that builds a view for each value has no such owner, so wrap the view in `derive`.
   In `each`, a child that finishes renders again (JX-03C).
-- JX-041: An async generator queues `return()` behind a pending `next()`.
-  So a component that waits on an open channel ends only when that channel closes, or at its next `yield`.
-  This holds when its host stops too, but not for `each` (JX-03B).
+- JX-041: When a drive lets a source go, because it stops, removes the entry, or the source finishes, the runtime MUST call `return()` on each `Channel` consumer and each reader of `changes` that code opened while the drive pulled that source.
+  A `watch` opens its reader at its first `next()`, so a `for await` on a `watch` in the pull is bound too.
+  So a component that waits on an open channel ends at once (CH-073).
+  Code after an `await` or a `yield*` resumes outside the pull (DV-052), so what it opens is not bound.
+  A plain `yield` of the same node before that code wakes the host and binds it.
+  An async generator queues `return()` behind a pending `next()`, so a component that waits on anything else ends only at its next `yield`.
 - JX-042: A node in the entries of two hosts, or in two entries of one host, has no defined position.
 - JX-043: The children of a host belong to the runtime.
   A place removes nodes that other code adds.
@@ -446,7 +464,7 @@ async function* Item({ name }: { name: Channel<string> }) {
 
 const names = select(["ann", "bob"], {
   autoStart: true,
-  nonYielding: true,
+  backPressure: false,
 });
 mount(
   document.body,

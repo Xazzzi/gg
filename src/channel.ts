@@ -1,4 +1,4 @@
-import { type Emit, pulledSource, register } from "./devtools.ts";
+import { bindPulled, type Emit, pulledSource, register } from "./devtools.ts";
 import { checkKeys, isThenable, noop } from "./source.ts";
 
 export type FirstReceive = "first" | "unread" | "latest" | "next";
@@ -61,27 +61,52 @@ export let terminal: (channel: Channel<any, any>) => boolean;
 export let resultOf: (channel: Channel<any, any>) => unknown;
 /** Calls ended when the channel turns terminal, before its signal aborts, for the one select of the channel. */
 export let onEnd: (channel: Channel<any, any>, ended: () => void) => void;
+/** Calls joined when a consumer attaches, before it takes its start, for the one select of the channel. */
+export let onAttach: (channel: Channel<any, any>, joined: () => void) => void;
+/** Tells if the channel has an active consumer. */
+export let consumed: (channel: Channel<any, any>) => boolean;
 
-let silent: boolean | undefined, // Set while latest makes its channel, which it registers itself
+let silent: boolean | undefined, // Set while a preset makes its channel, which it registers itself
   connect: (channel: Channel<any, any>, emit: Emit | undefined) => void;
-const LATEST = { firstReceive: "latest", thenReceive: "latest" } as const;
+
+/** The options that a preset takes, because the preset sets the receive modes. */
+export type PresetOptions = Pick<ChannelOptions, "stopStyle" | "ackStyle">;
+type Preset = <T, TReturn = undefined>(
+  options?: PresetOptions,
+) => Channel<T, TReturn>;
+const STYLES = { stopStyle: 0, ackStyle: 0 };
+
+/** Makes a preset of the receive modes, which takes only the stop and ack styles. */
+const preset =
+  (firstReceive: FirstReceive, thenReceive: ThenReceive): Preset =>
+  (options = {}) => {
+    checkKeys(options, STYLES);
+    const chosen = {
+      firstReceive,
+      thenReceive,
+      stopStyle: options.stopStyle ?? "drain",
+      ackStyle: options.ackStyle ?? "any",
+    };
+    silent = true;
+    let channel: Channel<any, any>;
+    try {
+      channel = new Channel(chosen);
+    } finally {
+      silent = false;
+    }
+    // Here, so the hook finds the caller at its fixed depth (DV-003).
+    connect(channel, register("channel", channel, chosen));
+    return channel;
+  };
 
 /** Makes a channel that gives each consumer the newest value, and then each newer value. */
-export function latest<T, TReturn = undefined>(): Channel<T, TReturn> {
-  silent = true;
-  const channel = new Channel<T, TReturn>(LATEST);
-  silent = false;
-  // Here, so the hook finds the caller at its fixed depth (DV-003).
-  connect(
-    channel,
-    register("channel", channel, {
-      ...LATEST,
-      stopStyle: "drain",
-      ackStyle: "any",
-    }),
-  );
-  return channel;
-}
+export const latest: Preset = preset("latest", "latest");
+/** Makes a work queue, which gives each value to one consumer. */
+export const queue: Preset = preset("unread", "unread");
+/** Makes a channel that gives each consumer each value sent after it attached. */
+export const broadcast: Preset = preset("next", "every");
+/** Makes a channel that gives each consumer every value from the first one. */
+export const replay: Preset = preset("first", "every");
 
 /** An async stream with many producers and consumers, whose options set what each consumer reads. */
 export class Channel<T, TReturn = undefined>
@@ -109,6 +134,7 @@ export class Channel<T, TReturn = undefined>
   #failed?: boolean;
   #result: unknown;
   #ended?: () => void;
+  #joined?: () => void;
   #emit?: Emit;
 
   static {
@@ -128,6 +154,10 @@ export class Channel<T, TReturn = undefined>
     onEnd = (channel, ended) => {
       channel.#ended = ended;
     };
+    onAttach = (channel, joined) => {
+      channel.#joined = joined;
+    };
+    consumed = channel => channel.#active > 0;
   }
 
   /** Aborts when the channel is terminal, with the stop error as its reason. */
@@ -241,6 +271,7 @@ export class Channel<T, TReturn = undefined>
     };
     consumer.return = value => (halt(), end(value));
     consumer.throw = error => (halt(), fail(error));
+    bindPulled(consumer); // JX-041
     return consumer;
   }
 
@@ -310,6 +341,7 @@ export class Channel<T, TReturn = undefined>
 
   /** Counts a new consumer, and starts it where its first receive mode says. */
   #attach(): Reader<T> {
+    this.#joined?.(); // A send here is the newest value at attach
     this.#active++;
     this.#consumer?.resolve();
     this.#consumer = undefined;

@@ -185,7 +185,12 @@ const SYNC_RAW = 5,
   ASYNC_RAW = 6;
 const KINDS = ["plain", "promise", "async", "raw", undefined, "raw", "raw"];
 const SYNC = [undefined, undefined, false, undefined, undefined, true, false];
-const RESERVED: PropertyKey[] = [Symbol.asyncIterator, Symbol.dispose, CHAN];
+// A runtime with no Symbol.dispose reserves no key for it, so a shape key "undefined" stays a slot.
+const RESERVED: PropertyKey[] = [
+  Symbol.asyncIterator,
+  Symbol.dispose ?? CHAN,
+  CHAN,
+];
 const OPTION_TYPES = {
   autoStart: "boolean",
   autoClose: "boolean",
@@ -324,7 +329,7 @@ class Select {
   #emit?: Emit;
   #bound?: Record<PropertyKey, (...args: unknown[]) => unknown>; // Array methods of the proxy, made at first read
   #iterate = () => this.#channel[Symbol.asyncIterator]();
-  #dispose = () => this.#channel[Symbol.dispose]();
+  #dispose = () => this.#channel.close();
 
   /** Array methods of an array proxy, which change the shape through splice and permute. */
   static #methods: Record<PropertyKey, Method> = {

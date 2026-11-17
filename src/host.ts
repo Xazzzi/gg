@@ -3,7 +3,7 @@ import { StopError } from "./channel.ts";
 import { type Emit, owned, pulling, register, release } from "./devtools.ts";
 import { BIND } from "./helpers.ts";
 import type { Child } from "./jsx.ts";
-import { FAULT, REPORT, RETURNS, select, type Val } from "./select.ts";
+import { CHAN, FAULT, REPORT, RETURNS, select, type Val } from "./select.ts";
 import { chunked, noop, record } from "./source.ts";
 
 // An entry that a drive keys, with its source and its last applied output.
@@ -554,7 +554,7 @@ export const drive = <E extends Driven>(
     },
     stop() {
       stopped = true;
-      sources[Symbol.dispose]();
+      sources[CHAN].close();
       letGo();
     },
   };

@@ -82,7 +82,7 @@ A select builds snapshots only while a `for await` reads it, so `changes` and `e
 - `on*` props with a function become listeners. The event type is the rest of the key in lower case if the element has that handler property, such as `onclick`, and the rest of the key as it is otherwise, such as `itemSelected`. Another value at an `on*` key throws (JX-008).
 - A custom element (a tag with `-`) gets the props that its class defines as properties, so it takes objects, arrays and functions. Other props stay attributes, and `innerHTML` and other properties of `HTMLElement` stay out of reach (JX-0B0, JX-0B1). A tag with no definition yet holds its prop values until `customElements.define` (JX-0B2).
 - `mount` takes a `ShadowRoot`, and a mount in it stops with the scope that holds its host (JX-02C).
-- A `javascript:` URL at `href`, `src`, `action`, `formaction` or `xlink:href` throws (JX-009).
+- A `javascript:` URL at `href`, `src`, `action`, `formaction`, `xlink:href`, `data`, `to` or `from`, or in an item of `values`, throws (JX-009).
 - Other props set attributes, except `value`, `checked`, `selected`, `indeterminate` and `muted`, which set properties (JX-002).
 - A promise or an async iterable prop is live, so `class={channel}` changes the attribute with each value, and `null`, `undefined` or `false` removes it (JX-064).
   An `on*` prop cannot be dynamic (JX-060).

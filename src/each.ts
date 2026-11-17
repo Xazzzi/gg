@@ -332,7 +332,7 @@ async function* replay<T>(
       apply(result.value);
     }
   } finally {
-    reader[Symbol.dispose]();
+    void reader.return();
     // A render that throws keeps the rows of its read out of entries, and their children out of the drive (JX-03A).
     for (const entry of new Set([...entries, ...made]))
       leave(entry.handle), end(entry.view);

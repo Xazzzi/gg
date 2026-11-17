@@ -89,7 +89,7 @@ Without `unwrap`, each source appears as a `Val` with `status`, `value`, `reason
 A select records each change as an ordered operation, so arrays can be replayed without diffing.
 `changes(state)` gives a reader of those operations at any time, and each read takes all of them since the last read.
 `changes(state, keys)` reads only some slots, and `watch(state, key)` gives the values of one slot, so a reader of one field wakes only when that field changes.
-`outputs(state)` gives the current outputs, with no reader to receive futher updates or finish.
+`outputs(state)` gives the current outputs, with no reader to receive further updates or finish.
 `sort` and `reverse` on an array state move slots without restarting sources.
 `sort` compares sources.
 `sortOutputs` moves slots the same way, and compares outputs once.
@@ -160,9 +160,9 @@ async function* User({ id }: { id: string }, { signal }: Instance) {
 ```
 
 ```tsx
-import { type Channel, each, mount, select } from "@xazzzi/gg";
+import { each, type Item, mount, select } from "@xazzzi/gg";
 
-async function* Row({ todo }: { todo: Channel<Todo> }) {
+async function* Row({ todo }: { todo: Item<Todo> }) {
   const li = (<li />) as HTMLLIElement;
   yield li;
   for await (const { title } of todo) li.textContent = title;

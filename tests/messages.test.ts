@@ -179,6 +179,11 @@ const cases: [string, () => unknown, RegExp][] = [
   ["reserved delete", () => delete list()[CHAN], /Reserved select key/],
   ["array key", () => (list().x = 1), /accepts index keys only/],
   [
+    "then slot",
+    () => select({ then: () => {} }),
+    /A select slot at then cannot hold a function/,
+  ],
+  [
     "spread collision",
     () =>
       spread({

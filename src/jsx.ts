@@ -170,7 +170,7 @@ export function jsx(
       : document.createElementNS(typeof xmlns === "string" ? xmlns : SVG, type);
   const values =
       html && type.includes("-") && globalThis.customElements
-        ? adopt(element, type)
+        ? adopt(element, element.localName) // An HTML document makes the name lower case
         : undefined,
     live: [string, unknown][] = [],
     dynamic: [string, unknown][] = [];

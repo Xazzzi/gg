@@ -332,6 +332,7 @@ A flush runs these steps in order.
 - SE-053: `unwrap` MUST output `value` for a fulfilled `Val`, and `undefined` for a pending one.
 - SE-054: A snapshot is a channel value.
   So a snapshot with a callable `then` key fails (CH-013).
+  SE-08D keeps a callable source from that key, so only an output or `mapSnapshot` gives such a snapshot.
 - SE-055: With `unwrap`, a slot that becomes rejected MUST call `channel.throw` with the unchanged reason.
   A rejection before start has its effect at start.
 
@@ -379,12 +380,18 @@ A flush runs these steps in order.
   A `delete` of `length` MUST fail as on an `Array`.
   So the trap returns false.
 - SE-08A: On a terminal channel, writes and mutators MUST succeed on the proxy, with no tracking, no flush and no reopen.
-  SE-034, SE-085, SE-095, SE-098, SE-099, SE-09A and SE-09F still apply.
+  SE-034, SE-085, SE-08D, SE-095, SE-098, SE-099, SE-09A and SE-09F still apply.
   They have priority over this rule.
   No detection runs, except the `Promise` check of SE-034.
 - SE-08B: If `shape` has an own reserved key, enumerable or not, `select` MUST throw a `TypeError` synchronously.
 - SE-08C: `defineProperty`, `preventExtensions` and `setPrototypeOf` on the proxy MUST throw a `TypeError`.
   So the `set` trap MUST NOT pass the proxy as the receiver to `Reflect.set`.
+- SE-08D: For an object shape, a callable source at the key `then` MUST make `select` or the write throw a `TypeError` synchronously.
+  A proxy read of `then` returns that source (SE-080).
+  So a callable source there makes the proxy a thenable, as it makes a plain object one.
+  Then `await` calls that source.
+  `feed`, `select`, `catching` and a JSX host read the proxy as a promise, and not its snapshots, because they detect a thenable first (FE-010).
+  A source that is not callable, such as a `Promise`, is valid at `then`.
 
 ## Arrays
 

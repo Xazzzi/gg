@@ -186,11 +186,13 @@ const SYNC_RAW = 5,
 const KINDS = ["plain", "promise", "async", "raw", undefined, "raw", "raw"];
 const SYNC = [undefined, undefined, false, undefined, undefined, true, false];
 // A runtime with no Symbol.dispose reserves no key for it, so a shape key "undefined" stays a slot.
+// Stryker disable MethodExpression: Node always has Symbol.dispose, so the filter drops nothing there
 const RESERVED: PropertyKey[] = [
   Symbol.asyncIterator,
-  Symbol.dispose ?? CHAN,
+  Symbol.dispose,
   CHAN,
-];
+].filter(Boolean);
+// Stryker restore all
 const OPTION_TYPES = {
   autoStart: "boolean",
   autoClose: "boolean",
@@ -217,6 +219,12 @@ const toIndex = (key: PropertyKey) => {
   if (typeof key !== "string") return undefined;
   const index = Number(key) >>> 0;
   return String(index) === key && index !== 2 ** 32 - 1 ? index : undefined;
+};
+
+/** Throws for a callable source at then, which would make the proxy a thenable (SE-08D). */
+const thenless = (key: PropertyKey, source: unknown) => {
+  if (key === "then" && typeof source === "function")
+    throw new TypeError("A select slot at then cannot hold a function");
 };
 
 /** A proxy trap for operations that a select proxy does not support. */
@@ -418,6 +426,7 @@ class Select {
     this.#channel = channel;
     this.#isArray = Array.isArray(shape);
     const target = this.#isArray ? Array.from(shape) : { ...shape };
+    thenless("then", target.then); // An array target keeps only indexes, so it has no then
     this.#target = target;
     this.#log = new Log(hook && []);
     if (this.#isArray)
@@ -1076,6 +1085,7 @@ class Select {
     if (RESERVED.includes(key)) throw new TypeError("Reserved select key");
     const target = this.#target;
     if (!this.#isArray) {
+      thenless(key, source);
       if (!Object.hasOwn(target, key) || !Object.is(target[key], source))
         this.#write(key, source);
     } else if (key === "length") this.#resize(source);

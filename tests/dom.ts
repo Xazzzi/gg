@@ -73,6 +73,9 @@ export class FakeElement extends FakeNode {
     this.tagName = tagName;
     this.namespaceURI = namespaceURI;
   }
+  get localName() {
+    return this.tagName;
+  }
   setAttribute(name: string, value: string) {
     this.attributes.set(name, value);
   }
@@ -132,7 +135,11 @@ export const fakeCustomElements = {
 };
 
 export const fakeDocument = {
-  createElement: (tag: string) => new (classes.get(tag) ?? FakeElement)(tag),
+  // An HTML document makes the tag name lower case.
+  createElement: (tag: string) => {
+    const name = tag.toLowerCase();
+    return new (classes.get(name) ?? FakeElement)(name);
+  },
   createElementNS: (namespace: string, tag: string) =>
     new FakeElement(tag, namespace),
   createTextNode: (data: string) => new FakeText(data),

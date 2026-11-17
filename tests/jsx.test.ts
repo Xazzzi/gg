@@ -2157,6 +2157,18 @@ test("JX-0B2 JX-0B3 a custom element of a tag with no definition holds its value
   assert.deepEqual(node.items, [3]);
 });
 
+test("JX-0B0 JX-0B2 a tag in upper case finds the definition of its lower case name", async () => {
+  const name = tag(),
+    held = h(name.toUpperCase(), { label: "a" });
+  customElements.define(name, Card as any);
+  await setImmediate();
+  assert.ok(held instanceof Card);
+  assert.deepEqual(held.log, ["label a 0"]);
+  const items = [1],
+    defined = h(name.toUpperCase(), { items });
+  assert.equal(defined.items, items);
+});
+
 test("JX-0B2 a dynamic prop with no output before the definition keeps the field of the class", async () => {
   const name = tag(),
     node = h(name, { items: latest<unknown>() });

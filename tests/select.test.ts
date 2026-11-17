@@ -1367,10 +1367,41 @@ test("SE-050 a __proto__ key stays an own snapshot field", async () => {
 
 test("SE-052 SE-054 SE-111 a thenable snapshot fails the channel", async () => {
   for (const backPressure of [true, false])
-    for (const options of [{ mapSnapshot: () => ({ then() {} }) }, {}]) {
-      const s = select({ then: () => {} }, { ...options, backPressure } as any);
+    for (const options of [
+      { mapSnapshot: () => ({ then() {} }) },
+      { unwrap: true }, // An output can still be callable
+    ]) {
+      const s = select({ then: Promise.resolve(() => {}) }, {
+        ...options,
+        backPressure,
+      } as any);
       await assert.rejects(iter(s).next(), TypeError);
     }
+});
+
+test("SE-08D SE-08A SE-017 a callable source at then throws, also from a getter and on a terminal channel, and changes nothing", () => {
+  const fn = () => {};
+  assert.throws(() => select({ then: fn }), TypeError);
+  assert.throws(
+    () =>
+      select({
+        get then() {
+          return fn;
+        },
+      }),
+    TypeError,
+  );
+  const s: any = select({ a: 1, then: 2 });
+  assert.throws(() => (s.then = fn), TypeError);
+  assert.equal(s.then, 2);
+  // A source that is not callable, and a callable source at another key, are valid.
+  const promise = Promise.resolve(fn);
+  s.then = promise;
+  s.call = fn;
+  assert.equal(s.then, promise);
+  s[Symbol.dispose]();
+  assert.throws(() => (s.then = fn), TypeError);
+  assert.equal(s.then, promise);
 });
 
 test("SE-055 a rejection before start takes effect at start, unless replaced", async () => {

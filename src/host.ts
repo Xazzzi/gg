@@ -459,7 +459,7 @@ export const drive = <E extends Driven>(
   autoClose: boolean,
   route: (error: unknown) => void, // Hands a failure to a boundary
   done?: (entry: E) => void,
-  over?: () => void,
+  over: () => void = noop,
 ) => {
   const keyed = new Map<string, E>();
   let id = 0,
@@ -507,7 +507,7 @@ export const drive = <E extends Driven>(
               if (!(entry as Driven as Entry).in) done?.(entry);
               keyed.delete(key);
               // A boundary that stopped the drive in this report can have given its scope a new drive (JX-092).
-              if (!keyed.size && !stopped) over?.();
+              if (!keyed.size && !stopped) over();
             }
           }
           if (moved && !stopped) changed();
@@ -515,6 +515,8 @@ export const drive = <E extends Driven>(
           // The select has no consumer to get the error, so the drive hands it on, and SE-110 stops it (JX-088).
           fail(error);
           letGo();
+          // A boundary that took the error stopped the drive, and can have given its scope a new drive (JX-092).
+          if (!stopped) over();
           throw error;
         }
         // A parked drive applies the outputs that it has, and pulls no more until it resumes (JX-083).

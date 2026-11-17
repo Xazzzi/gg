@@ -67,6 +67,7 @@ A select builds snapshots only while a `for await` reads it, so `changes` and `e
   Use `latest()` for a current value, `queue()` for a work queue, `broadcast()` for values after attach, and `replay()` for all values (CH-006).
 - A misspelled option key throws a `TypeError` (CH-005, SE-008, FE-004).
 - `send`, `close` and `mapSnapshot` results cannot be thenables (CH-013, SE-052).
+- A function at the key `then` of an object shape throws a `TypeError`, because it would make the state a thenable (SE-08D).
 - `send` on a closed channel throws a `StopError` (CH-014).
 
 ## Components

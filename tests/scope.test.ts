@@ -1276,6 +1276,60 @@ test("JX-088 JX-092 a place that throws under a boundary goes to the boundary", 
   assert.deepEqual(list, []);
 });
 
+test("JX-088 JX-081 an element whose drive fails to apply a report leaves its scope", async () => {
+  const list = reporting(),
+    s = stage(),
+    values = latest<any>(),
+    bad = el("b"),
+    failure = new Error("place");
+  let inner: any = h("p", { children: values });
+  const ref = new WeakRef(inner),
+    insert = inner.insertBefore;
+  inner.insertBefore = function (node: any, at: any) {
+    if (node === bad) throw failure;
+    return insert.call(this, node, at);
+  };
+  await show(s.view, inner);
+  values.send(bad);
+  await setImmediate();
+  assert.deepEqual(list, [failure]);
+  await show(s.view, "gone");
+  inner = undefined;
+  // The mount stays, so only a scope that left lets the element go.
+  assert.equal(await freed(ref), true);
+  s.unmount();
+});
+
+test("JX-088 JX-093 a boundary whose drive fails to apply a report keeps the drive of its fallback", async () => {
+  const list = reporting(),
+    values = latest<any>(),
+    text = latest<string>(),
+    bad = el("b"),
+    failure = new Error("place"),
+    section = h("section", { children: values }),
+    insert = section.insertBefore;
+  section.insertBefore = function (node: any, at: any) {
+    if (node === bad) throw failure;
+    return insert.call(this, node, at);
+  };
+  text.send("fallback");
+  let unmount!: () => void;
+  const channels = await selects(async () => {
+    unmount = mount(
+      el(),
+      h(Catch, { fallback: () => text, children: section }),
+    );
+    await setImmediate();
+    values.send(bad);
+    await setImmediate();
+  });
+  assert.equal(html(section), "<section>fallback</section>");
+  assert.deepEqual(list, []);
+  // The scope holds the drive of the fallback, so the unmount stops it.
+  unmount();
+  assert.deepEqual(aborted(channels), [true, true]);
+});
+
 test("JX-091 a boundary stays a scope when what is under it finishes, so a later start binds to it", async () => {
   const list = reporting(),
     p = h("p", { children: Promise.resolve("done") }),

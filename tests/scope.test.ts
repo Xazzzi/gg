@@ -376,6 +376,36 @@ test("JX-083 JX-086 a drive that parks after the report that added a part opens 
   host.stop();
 });
 
+test("JX-083 a part that leaves a parked drive before its first pull never opens", async () => {
+  let opened = 0;
+  async function* part() {
+    opened++;
+    yield "p";
+  }
+  const host = drive<Entry>(
+    {},
+    applyOutput,
+    () => {},
+    true,
+    error => {
+      throw error;
+    },
+  );
+  async function* outer() {
+    yield ["x", part()];
+    host.park(true);
+    yield "y";
+  }
+  const entry: Entry = { nodes: [], source: outer() };
+  host.add(entry);
+  for (let i = 0; i < 5; i++) await setImmediate();
+  host.remove(entry); // The part waits on the gate of the drive, not on its own
+  host.park(false);
+  for (let i = 0; i < 5; i++) await setImmediate();
+  assert.equal(opened, 0);
+  host.stop();
+});
+
 test("JX-086 a part that leaves the output parks, and resumes with no lost value when the output holds it again", async () => {
   const s = stage(),
     a = counted(),

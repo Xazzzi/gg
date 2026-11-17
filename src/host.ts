@@ -16,6 +16,7 @@ export type Entry = Driven & {
   pool?: Map<unknown, Entry>; // Each part that the outputs of the entry made, by its source
   in?: Entry;
   gate?: PromiseWithResolvers<void>; // Of a parked part
+  ended?: true; // Its drive took it out
 };
 type Gated = { next(): unknown; return(): unknown };
 // A node whose children a host places: an element, or a shadow root (JX-02C).
@@ -118,7 +119,7 @@ export const adopt = (element: Element, tag: string) => {
   }
   // A held value and no closure, because a closure here would share its context with apply, which retains it.
   const ref = new WeakRef(element);
-  forgotten.register(element, { refs: refs.add(ref), ref });
+  forgotten.register(element, { refs: refs.add(ref), ref }, ref);
   return values;
 };
 
@@ -127,6 +128,7 @@ const defined = (tag: string) => {
   const refs = wanted.get(tag) as Set<WeakRef<Element>>;
   wanted.delete(tag);
   for (const ref of refs) {
+    forgotten.unregister(ref);
     const element = ref.deref();
     if (!element) continue;
     const values = held.get(element) as Map<string, unknown>;
@@ -313,7 +315,8 @@ const gated = (part: Entry, host: Parts): Gated => {
     pulling(source, () => (iterator ??= source[Symbol.asyncIterator]()).next()); // DV-052
   const next = (): Promise<unknown> => {
     const wait = part.gate?.promise ?? host.held();
-    return wait ? wait.then(next) : pull();
+    // A part that its drive took out while the drive was parked pulls nothing at the resume.
+    return part.ended ? new Promise(noop) : wait ? wait.then(next) : pull();
   };
   return { next, return: () => iterator?.return?.() };
 };
@@ -526,6 +529,7 @@ export const drive = <E extends Driven>(
     keyed.delete(entry.key as string);
     delete sources[entry.key as string];
     entry.gate = undefined; // So a parked pull of the part never runs
+    entry.ended = true;
     end(entry.source);
     release(entry.source); // JX-041
   };

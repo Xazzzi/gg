@@ -2078,6 +2078,32 @@ test("JX-0B4 a hold of a tag that code never defines retains nothing after its e
   assert.ok(done);
 });
 
+test("JX-0B4 a definition lets the refs of its tag go while their elements live", async () => {
+  const Real = globalThis.WeakRef,
+    registry = new FinalizationRegistry<() => void>(done => done()),
+    name = tag();
+  let done = false;
+  globalThis.WeakRef = class<T extends WeakKey> extends Real<T> {
+    constructor(target: T) {
+      super(target);
+      registry.register(this, () => (done = true));
+    }
+  } as WeakRefConstructor;
+  let element: Element;
+  try {
+    element = h(name, { items: [1] });
+  } finally {
+    globalThis.WeakRef = Real;
+  }
+  customElements.define(name, Card as any);
+  for (let i = 0; i < 20 && !done; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  assert.ok(done);
+  assert.ok(element);
+});
+
 test("JX-0B2 JX-0B3 a custom element of a tag with no definition holds its values, and applies them in key order after the definition", async () => {
   const name = tag(),
     source = latest<unknown>(),

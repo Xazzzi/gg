@@ -315,7 +315,7 @@ type Keyed = { report: Op[]; places: Map<PropertyKey, number[]> };
 /** The outputs of a slice reader, and how it rewrites operations to them (SE-152 to SE-156). */
 export type View = {
   readonly outputs: unknown;
-  begin(length: number): void;
+  begin?(length: number): void; // Only an index slice is among the readers that a start begins
   project(list: Op[]): Op[];
   pick(keyed: Keyed): Op[] | undefined; // The same as project, for a slice of fewer slots than the report has keys
   readonly names?: Set<PropertyKey>; // The keys of a key slice, which the log wakes its reader by
@@ -331,8 +331,6 @@ export class KeySlice implements View {
     this.outputs = outputs;
     this.names = names;
   }
-
-  begin() {}
 
   // Stryker disable next-line BlockStatement: project gives the same operations
   pick({ report, places }: Keyed) {
@@ -526,7 +524,7 @@ export class Reader implements Changes<unknown> {
   /** Names the slots of an array slice when the select starts. */
   #begin(length: number) {
     if (!this.#slice) return;
-    this.#slice.begin(length);
+    (this.#slice as IndexSlice).begin(length);
     this.#wake();
   }
 

@@ -996,6 +996,35 @@ test("SE-042 SE-043 backPressure holds the next flush until the read", async () 
   s[CHAN].close();
 });
 
+test("SE-04D SE-042 backPressure pulls an async iterator again only after an observer reads its last value", async () => {
+  const pulls: PromiseWithResolvers<number>[] = [];
+  const source = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => {
+        const pull = Promise.withResolvers<number>();
+        pulls.push(pull);
+        return pull.promise.then(value => ({ value, done: false }));
+      },
+    }),
+  };
+  const s: any = select({ a: source, b: 0 }),
+    it = iter(s);
+  assert.deepEqual((await it.next()).value, { a: pendingVal, b: 0 });
+  await setImmediate();
+  assert.equal(pulls.length, 1);
+  s.b = 1;
+  await setImmediate();
+  pulls[0]?.resolve(10);
+  await setImmediate();
+  assert.deepEqual((await it.next()).value, { a: pendingVal, b: 1 });
+  await setImmediate();
+  assert.equal(pulls.length, 1);
+  assert.deepEqual((await it.next()).value, { a: ok(10, false), b: 1 });
+  await setImmediate();
+  assert.equal(pulls.length, 2);
+  s[CHAN].close();
+});
+
 test("SE-043 a change during step 1 belongs to that flush", async () => {
   const log: Op[][] = [];
   const s: any = select(
@@ -1550,6 +1579,40 @@ test("SE-075 SE-045 collected changes keep the channel open, and a late consumer
   s.b = 2;
   const it = iter(s);
   assert.deepEqual((await it.next()).value, { a: 1, b: 2 });
+  assert.equal((await it.next()).done, true);
+});
+
+test("SE-075 SE-04A a pending asend keeps the channel open, also when a reader read the report", async () => {
+  const p = Promise.withResolvers<number>(),
+    s = select({ a: p.promise }, { autoClose: true, stopStyle: "stop" }),
+    reader = changes(s),
+    got: unknown[] = [];
+  (async () => {
+    for await (const _ of reader);
+  })();
+  const done = (async () => {
+    for await (const snapshot of s) got.push(snapshot);
+  })();
+  await setImmediate();
+  p.resolve(1);
+  await done;
+  assert.deepEqual(got, [{ a: pendingVal }, { a: ok(1) }]);
+});
+
+test("SE-075 a change while auto close waits for a pending asend publishes before the close", async () => {
+  const p = Promise.withResolvers<number>(),
+    s: any = select({ a: p.promise }, { autoClose: true }),
+    reader = changes(s),
+    it = iter(s);
+  (async () => {
+    for await (const _ of reader);
+  })();
+  assert.deepEqual((await it.next()).value, { a: pendingVal });
+  p.resolve(1);
+  await setImmediate();
+  s.b = 2;
+  assert.deepEqual((await it.next()).value, { a: ok(1) });
+  assert.deepEqual((await it.next()).value, { a: ok(1), b: 2 });
   assert.equal((await it.next()).done, true);
 });
 

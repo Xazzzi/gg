@@ -275,7 +275,7 @@ A flush runs these steps in order.
 4. With `backPressure`, wait until a consumer reads that publish, or a reader reads (SE-04A).
    With no active consumer, wait until a reader reads (SE-04A) or a consumer attaches.
 5. Advance each sync iterator due under SE-064.
-6. Pull each idle async iterator.
+6. Pull each idle async iterator, except one with a result after step 2 (SE-04D).
 7. Apply the auto close rule.
 8. If changes collected during this flush, schedule the next flush.
 
@@ -319,6 +319,9 @@ A flush runs these steps in order.
   The report hook does not end the wait.
 - SE-04B: A wait of step 4 that ended MUST NOT retain an object.
   So a `select` that only consumers read grows no memory with each flush.
+- SE-04D: Step 6 MUST NOT pull an async iterator whose result came after step 2 of that flush.
+  The next flush reports that result, and its step 6 pulls the iterator.
+  So with `backPressure`, an async iterator waits until an observer reads its last value, as SE-061 does for a sync iterator.
 
 ## Snapshots
 

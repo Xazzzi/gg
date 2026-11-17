@@ -869,6 +869,7 @@ class Select {
   async #flush() {
     this.#phase = RUNNING;
     const channel = this.#channel;
+    let sent: Promise<void> | undefined;
     try {
       // SE-046: terminal marks every slot dead, so idle() checks steps 1, 5 and 6, and steps 7 and 8 do nothing.
       // SE-043: a step 1 change belongs to this flush, so repeat for slots it added, and fresh stops a second advance.
@@ -908,7 +909,7 @@ class Select {
         const value = this.#publishable();
         if (!this.#backPressure) channel.send(value);
         else {
-          const sent = channel.asend(value);
+          sent = channel.asend(value);
           // SE-04A: a reader that reads the report observes this flush too
           if (!this.#anyAck) await sent;
           else if (!this.#log.read) {
@@ -923,13 +924,21 @@ class Select {
           if (slot.kind === SYNC_RAW && idle(slot)) this.#pull(slot);
       const ready = this.#ready;
       if (ready)
+        // SE-04D: a result after step 2 waits for the next report, so no observer missed it
         for (const slot of drain(ready))
-          if (slot.kind !== SYNC_RAW && idle(slot)) this.#pull(slot); // Only iterators with a known kind reach ready
+          if ((this.#results as Map<Slot, boolean> | undefined)?.has(slot))
+            ready.add(slot);
+          else if (slot.kind !== SYNC_RAW && idle(slot)) this.#pull(slot); // Only iterators with a known kind reach ready
       const watched = this.#watched;
       if (watched && !this.#changed) {
         for (const slot of watched)
           if (slot.dead || !live(slot)) watched.delete(slot);
         if (!watched.size) {
+          // SE-075: a reader can release the flush before a consumer reads the publish, which stays pending
+          if (sent) {
+            await sent; // A close rejects it
+            if (this.#changed) return;
+          }
           // A late consumer of a closed select reads its last snapshot, and a drive has none (SE-045).
           if (this.#stale && !this.#hook) channel.send(this.#publishable());
           channel.close();

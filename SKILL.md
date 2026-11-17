@@ -108,7 +108,8 @@ async function* Title({ title }: { title: Channel<string> }) {
 
 ## Cancel work
 
-- A component with a second parameter gets an instance: `async function* User({ id }, { signal })` (JX-0C0).
+- A component with a second parameter gets an instance: `async function* User({ id }, { signal }: Instance)` (JX-0C0).
+  The runtime reads the `length` of the function, so a default value on that parameter or on the one before it hides the instance.
   Pass `signal` to `fetch` or any abortable work, because a component that waits in an `await` sees no `return()` until it settles.
 - `signal` aborts with a `StopError` when the runtime lets the result go, or when a returned element's scope stops (JX-0C2, JX-0C3).
   Parking does not abort it, and a result that is neither dynamic nor an element never aborts.

@@ -304,7 +304,7 @@ class Select {
   #anyAck: boolean; // Under "all", only snapshot consumers release a flush (SE-04A)
   #stale = false; // A flush with no consumer built no snapshot of its change (SE-045)
   #shown = false; // An attach sent a snapshot of each change so far, so the next flush publishes none
-  #hold?: PromiseWithResolvers<void>; // The wait of step 4 with no consumer, which an attach ends
+  #hold?: PromiseWithResolvers<void>; // The wait of step 4, which an attach ends
   #unwrap: boolean;
   #hook?: (ops: Op[]) => void; // The report hook, which is no observer
   #fault?: (error: unknown) => void;
@@ -893,30 +893,24 @@ class Select {
         if (parked) await parked; // A parked drive holds the next pulls (JX-083)
       }
       if (this.#terminal) return;
-      // With no consumer, no code reads a snapshot, so the flush builds none (SE-045).
-      if (publish && !consumed(channel)) {
-        this.#stale = true;
+      if (publish) {
+        // With no consumer, no code reads a snapshot, so the flush builds none (SE-045).
+        if (!consumed(channel)) this.#stale = true;
+        else {
+          this.#stale = false;
+          const value = this.#publishable();
+          if (this.#backPressure) sent = channel.asend(value);
+          else channel.send(value);
+        }
+        // SE-04A: a reader that reads the report observes this flush too, and SE-045: an attach ends the wait.
         if (this.#backPressure && !(this.#anyAck && this.#log.read)) {
           const hold = (this.#hold = this.#anyAck
             ? this.#log.seen()
             : Promise.withResolvers());
+          sent?.then(hold.resolve, hold.reject);
           await hold.promise;
           this.#hold = undefined;
           if (this.#terminal) return; // A close ends the wait too
-        }
-      } else if (publish) {
-        this.#stale = false;
-        const value = this.#publishable();
-        if (!this.#backPressure) channel.send(value);
-        else {
-          sent = channel.asend(value);
-          // SE-04A: a reader that reads the report observes this flush too
-          if (!this.#anyAck) await sent;
-          else if (!this.#log.read) {
-            const seen = this.#log.seen();
-            sent.then(seen.resolve, seen.reject);
-            await seen.promise;
-          }
         }
       }
       if (settled)

@@ -3036,6 +3036,23 @@ test("SE-133 SE-045 a late next consumer does not read the first state, and its 
   s[CHAN].close();
 });
 
+test("SE-045 an attach ends the wait of step 4 for a publish that a consumer left unread", async () => {
+  const s = select({ a: 1 }, { autoStart: true, firstReceive: "next" });
+  await setImmediate();
+  const a = iter(s),
+    first = a.next();
+  s.a = 2;
+  assert.equal(((await first).value as any).a, 2);
+  s.a = 3; // A is busy, so the flush waits for it to read
+  await setImmediate();
+  await a.return();
+  const pending = iter(s).next();
+  await setImmediate();
+  s.a = 4;
+  assert.equal(((await pending).value as any).a, 4);
+  s[CHAN].close();
+});
+
 test("SE-134 stop with no backPressure can drop the final snapshot", async () => {
   const s = select(
     { a: 1 },

@@ -264,6 +264,21 @@ test("JX-067 a stop ends the binding and returns the shared reader", async () =>
   s[CHAN].close();
 });
 
+test("HE-053 HE-05A JX-067 a return of a bound derive returns the shared reader", async () => {
+  const s = select({ a: 1 }, { autoStart: true }),
+    parent = el();
+  const counts = await counting(async () => {
+    const label = derive(s, "a", v => `${v}`);
+    const unmount = mount(parent, h("p", { title: label }));
+    await setImmediate();
+    await label.return(); // As `await using` does, before the scope stops
+    await setImmediate();
+    unmount();
+  });
+  assert.equal(counts["reader end"], 1);
+  s[CHAN].close();
+});
+
 test("JX-067 a later async output wins, and a map failure goes to the boundary", async () => {
   const s = select({ a: 1 }, { autoStart: true }),
     gates = [Promise.withResolvers<string>(), Promise.withResolvers<string>()],

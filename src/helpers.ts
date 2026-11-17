@@ -305,7 +305,8 @@ const mapped = (
     started = false,
     finished = false,
     last: unknown,
-    made: (() => void)[] = []; // What stops the elements that map built for the last output (HE-059)
+    made: (() => void)[] = [], // What stops the elements that map built for the last output (HE-059)
+    off = noop; // Takes a binding out of its shared reader (JX-067)
 
   const over = () => end() as IteratorReturnResult<void>;
 
@@ -381,6 +382,7 @@ const mapped = (
       if (!finished) {
         finish();
         drop(made);
+        off(); // A bound derive has no iterator, so its return() leaves the shared reader here (HE-05A)
         for (const request of pending.splice(0)) request.resolve(over());
         if (typeof iterator?.return === "function") await iterator.return();
       }
@@ -398,8 +400,7 @@ const mapped = (
       started = true;
       box.emit?.("start");
       let held: Result | undefined, // The newest value while parked
-        turn = 0,
-        off = noop;
+        turn = 0;
       /**
        * Maps a value and gives the output to the sink, unless a later value or a stop came first.
        * A prop shows no node, so a binding owns nothing that map builds (JX-067). */

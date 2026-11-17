@@ -146,6 +146,18 @@ An element runs its dynamic children only once `mount` or a host places it, so a
 It uses the `context-request` event of the web components community protocol, so it works with other libraries that follow it.
 `<Catch fallback={error => <p>Failed</p>}>` makes its one element child a boundary: a failure inside it stops what it holds, and shows the fallback in that element.
 A failure with no boundary above goes to `reportError`.
+A component with a second parameter gets an `Instance`, whose `signal` aborts when the runtime lets the component go, so `fetch` and other work in an `await` stop with it.
+Parking does not abort it, and a component with one parameter gets no instance and costs nothing.
+
+```tsx
+import type { Instance } from "@xazzzi/gg";
+
+async function* User({ id }: { id: string }, { signal }: Instance) {
+  yield <p>Loading</p>;
+  const user = await (await fetch(`/users/${id}`, { signal })).json();
+  yield <p>{user.name}</p>;
+}
+```
 
 ```tsx
 import { type Channel, each, mount, select } from "@xazzzi/gg";
@@ -199,6 +211,7 @@ State needs no UI code, and a busy list renders all changes since its last read 
 | show or hide a view                          | `iff(source, view, otherView)`                      |
 | keep a failure in one view                   | `<Catch fallback={...}>`                            |
 | give a value to a subtree                    | `<Provide>`, then `yield* use(Context)`             |
+| cancel a fetch when a component goes away    | a second parameter `{ signal }: Instance`           |
 
 ## Specification
 

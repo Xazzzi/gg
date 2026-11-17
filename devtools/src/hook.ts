@@ -933,7 +933,8 @@
   const flash = (node: any) => {
     const element = node?.nodeType === 1 ? node : node?.parentElement;
     if (!element) return false;
-    element.scrollIntoView({ block: "center" });
+    // A smooth scroll would end after the read of the rect, so the box would miss the element.
+    element.scrollIntoView({ block: "center", behavior: "instant" });
     const r = element.getBoundingClientRect(),
       box = document.createElement("div");
     box.style.cssText = `position:fixed;z-index:2147483647;pointer-events:none;background:rgba(111,168,220,.35);outline:1px solid #6fa8dc;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`;

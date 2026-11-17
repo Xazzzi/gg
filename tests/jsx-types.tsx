@@ -25,6 +25,7 @@ export const typed = [
     onClick={event => event.anything}
     data-id={1}
   />,
+  <input onclick={null} onkeydown={false} onClick={undefined} onthing={null} />,
   <div class={text} style="color: red" hidden value={{ any: 1 }} />,
   <svg
     aria-label="x"
@@ -44,6 +45,8 @@ export const typed = [
   <input checked="yes" />,
   // @ts-expect-error a div has no value property to read
   <div onclick={event => event.currentTarget.value} />,
+  // @ts-expect-error a handler is a function, null, undefined or false (JX-008)
+  <input onclick={true} />,
   // @ts-expect-error a keydown event has no detail text
   <input onkeydown={(event: CustomEvent<string>) => event.detail} />,
 ];

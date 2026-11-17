@@ -32,16 +32,17 @@ export type Static =
 export type Dynamic = PromiseLike<Static> | AsyncIterable<Child>;
 export type Child = Static | Dynamic | readonly Child[];
 export type Props = {
-  [name: `on${string}`]: ((event: any) => void) | undefined;
+  [name: `on${string}`]: ((event: any) => void) | null | false | undefined;
 } & { [name: string]: unknown; children?: Child };
 
 /** A prop value, or a promise or an async iterable of it, which makes a dynamic prop. */
 type Live<V> = V | PromiseLike<V> | AsyncIterable<V>;
 type Text = string | number | bigint | boolean | null | undefined;
 type Handlers<E> = {
-  [K in keyof HTMLElementEventMap as `on${K}`]?: (
-    event: HTMLElementEventMap[K] & { currentTarget: E },
-  ) => void;
+  [K in keyof HTMLElementEventMap as `on${K}`]?:
+    | ((event: HTMLElementEventMap[K] & { currentTarget: E }) => void)
+    | null
+    | false;
 };
 type LiveProp<E, K extends string> =
   E extends Record<K, infer V> ? Live<V | number | null | undefined> : unknown;
@@ -59,7 +60,7 @@ interface ElementProps<E> extends Handlers<E> {
   title?: Live<Text>;
   hidden?: Live<Text>;
   xmlns?: string;
-  [name: `on${string}`]: ((event: any) => void) | undefined;
+  [name: `on${string}`]: ((event: any) => void) | null | false | undefined;
   [name: string]: unknown;
 }
 type Tags = HTMLElementTagNameMap &

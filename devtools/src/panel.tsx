@@ -60,6 +60,9 @@ const evaluate = <T,>(expression: string) =>
       error ? reject(new Error(error.value ?? "eval failed")) : resolve(result),
     ),
   );
+// A page sends the ids in its batches, so Number keeps a forged id from adding code to the eval.
+const call = (method: string, id: number) =>
+  `${HOOK}?.${method}?.(${Number(id)})`;
 
 const time = (at: number) => {
   const d = new Date(at);
@@ -534,7 +537,7 @@ const hostBody = (id: number, entry: () => GG.Entry, feed: Channel<View>) => [
         e.kind === "component" ? (
           <a
             title="Open the function in Sources"
-            onclick={() => evaluate(`inspect(${HOOK}?.type?.(${id}))`)}
+            onclick={() => evaluate(`inspect(${call("type", id)})`)}
           >
             {e.sourceText}
           </a>
@@ -651,7 +654,7 @@ const Shown = ({ id, feed }: { id: number; feed: Channel<View> }) => {
       <button
         type="button"
         title="Log to the console, and keep as $gg"
-        onclick={() => evaluate(`${HOOK}?.reveal?.(${id})`)}
+        onclick={() => evaluate(call("reveal", id))}
       >
         Log
       </button>
@@ -662,12 +665,12 @@ const Shown = ({ id, feed }: { id: number; feed: Channel<View> }) => {
             title="Select its node in the Elements tab, and outline it in the page"
             onclick={() => {
               showTab("elements");
-              evaluate(`${HOOK}?.showNode?.(${id})`);
+              evaluate(call("showNode", id));
             }}
           >
             Show
           </button>
-          {inspectButton(`${HOOK}?.nodeOf?.(${id})`)}
+          {inspectButton(call("nodeOf", id))}
         </>
       ) : null}
     </div>,
@@ -714,11 +717,11 @@ const nodeDetail = (id: number, feed: Channel<View>) => {
       <button
         type="button"
         title="Outline it in the page"
-        onclick={() => evaluate(`${HOOK}?.flashDom?.(${id})`)}
+        onclick={() => evaluate(call("flashDom", id))}
       >
         Show
       </button>
-      {inspectButton(`${HOOK}?.domOf?.(${id})`)}
+      {inspectButton(call("domOf", id))}
     </div>,
     entries.has(host) ? <Shown id={host} feed={feed} /> : null,
     entries.has(drive) ? <Shown id={drive} feed={feed} /> : null,
@@ -1045,8 +1048,8 @@ const nodeRow = (
         class={`row tree${id === selected ? " selected" : ""}`}
         style={`padding-left: ${depth * 14 + 4}px`}
         onclick={() => pick(id)}
-        ondblclick={() => evaluate(`${HOOK}?.flashDom?.(${id})`)}
-        {...hover(() => evaluate(`${HOOK}?.flashDom?.(${id})`))}
+        ondblclick={() => evaluate(call("flashDom", id))}
+        {...hover(() => evaluate(call("flashDom", id)))}
         title="Double-click or hover with Alt to show in the page"
       >
         <span class="twisty" onclick={toggle}>
@@ -1082,10 +1085,9 @@ const treeRow = (
         style={`padding-left: ${depth * 14 + 4}px`}
         onclick={() => pick(e.id)}
         ondblclick={() =>
-          e.kind === "component" &&
-          evaluate(`inspect(${HOOK}?.type?.(${e.id}))`)
+          e.kind === "component" && evaluate(`inspect(${call("type", e.id)})`)
         }
-        {...hover(() => evaluate(`${HOOK}?.flashNode?.(${e.id})`))}
+        {...hover(() => evaluate(call("flashNode", e.id)))}
         title={
           e.kind === "component"
             ? "Double-click to open the source, hover with Alt to show in the page"

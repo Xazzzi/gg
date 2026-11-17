@@ -108,17 +108,15 @@ const remove = (id: number) => {
 
 // A row builds its nodes from the first value, and changes them on each later value.
 async function* RowView({ row }: { row: Item<Row> }) {
-  // The handlers read the current id, because a row can take another item at its index.
-  const label = (
-      <a onclick={() => choose(row.value.id)} />
-    ) as HTMLAnchorElement,
-    cell = (<td class="col-md-1" />) as HTMLTableCellElement;
+  // The list keys rows by id, so a row keeps its id.
+  const { id } = row.value,
+    label = (<a onclick={() => choose(id)} />) as HTMLAnchorElement;
   const tr = (
     <tr>
-      {cell}
+      <td class="col-md-1">{`${id}`}</td>
       <td class="col-md-4">{label}</td>
       <td class="col-md-1">
-        <a onclick={() => remove(row.value.id)}>
+        <a onclick={() => remove(id)}>
           <span class="glyphicon glyphicon-remove" aria-hidden="true" />
         </a>
       </td>
@@ -128,7 +126,6 @@ async function* RowView({ row }: { row: Item<Row> }) {
   yield tr;
   for await (const item of row) {
     // A new text node relays out the whole table, so an unchanged text stays.
-    if (cell.textContent !== `${item.id}`) cell.textContent = `${item.id}`;
     if (label.textContent !== item.label) label.textContent = item.label;
     tr.className = item.selected ? "danger" : "";
   }

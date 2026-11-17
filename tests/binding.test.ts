@@ -64,6 +64,34 @@ test("HE-05A derives of one object slot share one reader", async () => {
   s[CHAN].close();
 });
 
+test("HE-05A a slot that leaves retains no shared reader of its key, after a return or at its end", async () => {
+  const s = select({} as Record<symbol, number>, { autoStart: true }),
+    registry = new FinalizationRegistry<() => void>(done => done());
+  let collected = 0;
+  await (async () => {
+    const left = Symbol(),
+      ended = Symbol();
+    registry.register(left, () => collected++);
+    registry.register(ended, () => collected++);
+    s[left] = 1;
+    s[ended] = 2;
+    const returned = derive(s, left, v => v),
+      finished = derive(s, ended, v => v);
+    await returned.next();
+    await finished.next();
+    await returned.return(); // The last derive leaves
+    delete s[left];
+    delete s[ended]; // The reader of the slot finishes, and its derive stays
+    assert.equal((await finished.next()).done, true);
+  })();
+  for (let i = 0; i < 20 && collected < 2; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  assert.equal(collected, 2);
+  s[CHAN].close();
+});
+
 test("HE-05A a number key names the slot of its string, so their derives share one reader", async () => {
   const key = Symbol("key"),
     s = select({ 1: "a", [key]: "b" }, { autoStart: true });

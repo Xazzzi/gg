@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { inspect } from "node:util";
+import { applyOutput, drive, type Entry } from "../src/host.ts";
 import { Channel, derive, iff, select } from "../src/index.ts";
 import { Catch, each, type Item, jsx, mount } from "../src/jsx.ts";
 import { FakeElement, fakeDocument, html } from "./dom.ts";
@@ -343,6 +344,36 @@ test("JX-085 an output with dynamic children drives each of them as a part, in o
   await show(s.view, "plain");
   assert.equal(html(s.parent), "<div>plain</div>");
   s.unmount();
+});
+
+test("JX-083 JX-086 a drive that parks after the report that added a part opens the part only at the resume", async () => {
+  let opened = 0;
+  async function* part() {
+    opened++;
+    yield "p";
+  }
+  // A place of another host can park the drive between two flushes, so the next flush finds the part not pulled.
+  const host = drive<Entry>(
+    {},
+    applyOutput,
+    () => {},
+    true,
+    error => {
+      throw error;
+    },
+  );
+  async function* outer() {
+    yield ["x", part()];
+    host.park(true); // Runs in step 6 of the flush that added the part
+    yield "y";
+  }
+  host.add({ nodes: [], source: outer() });
+  for (let i = 0; i < 5; i++) await setImmediate();
+  assert.equal(opened, 0);
+  host.park(false);
+  await setImmediate();
+  assert.equal(opened, 1);
+  host.stop();
 });
 
 test("JX-086 a part that leaves the output parks, and resumes with no lost value when the output holds it again", async () => {

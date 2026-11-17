@@ -2055,6 +2055,29 @@ test("JX-0B1 a property of HTMLElement.prototype is no own property, so data rea
   assert.throws(() => h(card(), { onclick: "alert(1)" }), TypeError);
 });
 
+test("JX-0B4 a hold of a tag that code never defines retains nothing after its element goes", async () => {
+  // A WeakRef that tells when the collector takes it, which it can only after the hold lets it go.
+  const Real = globalThis.WeakRef,
+    registry = new FinalizationRegistry<() => void>(done => done());
+  let done = false;
+  globalThis.WeakRef = class<T extends WeakKey> extends Real<T> {
+    constructor(target: T) {
+      super(target);
+      registry.register(this, () => (done = true));
+    }
+  } as WeakRefConstructor;
+  try {
+    (() => jsx("x-never", { label: "a" }))();
+  } finally {
+    globalThis.WeakRef = Real;
+  }
+  for (let i = 0; i < 20 && !done; i++) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  assert.ok(done);
+});
+
 test("JX-0B2 JX-0B3 a custom element of a tag with no definition holds its values, and applies them in key order after the definition", async () => {
   const name = tag(),
     source = latest<unknown>(),
@@ -2143,13 +2166,14 @@ test("JX-0B4 a hold retains no element, and a definition skips a collected one",
   (() => {
     registry.register(h(name, { items: [1] }), () => (collected = true));
   })();
+  await setImmediate();
+  (globalThis.gc as () => void)(); // The registries run in a later task, so the hold still has the ref here
+  customElements.define(name, Card as any);
   for (let i = 0; i < 20 && !collected; i++) {
     await setImmediate();
     globalThis.gc?.();
   }
   assert.ok(collected);
-  customElements.define(name, Card as any);
-  await setImmediate();
 });
 
 test("JX-008 a value at an on key that is no function throws, except null, undefined and false", () => {

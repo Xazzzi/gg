@@ -141,7 +141,7 @@ const send = (run: Run, result: Result) => {
 /**
  * Makes one reader of open for all subscribers, which opens at the first subscriber and returns after the last (HE-05A).
  * A new subscriber gets the newest result at once, and starts a new run after the last one finished or returned. */
-const hub = (open: () => AsyncIterator<unknown>): Hub => {
+const hub = (open: () => AsyncIterator<unknown>, idle = noop): Hub => {
   let current: Run | undefined;
   /**
    * Reads the source of a run until it finishes, fails or returns.
@@ -156,7 +156,7 @@ const hub = (open: () => AsyncIterator<unknown>): Hub => {
     }
     send(run, result);
     // A slot that leaves can come back, so a later subscriber reads it alone.
-    if (current === run) current = undefined;
+    if (current === run) (current = undefined), idle();
   };
   /** Opens a new run outside the pull that asks for it, and makes it current (HE-05A). */
   const start = () =>
@@ -173,7 +173,7 @@ const hub = (open: () => AsyncIterator<unknown>): Hub => {
       return () => {
         if (!run.takers.delete(take) || run.takers.size) return;
         // A subscriber of a finished run can leave after a new run started.
-        if (current === run) current = undefined;
+        if (current === run) (current = undefined), idle();
         void quietReturn(run.iterator);
       };
     },
@@ -188,13 +188,26 @@ const hubOf = (source: any, keyed: boolean, key: unknown) => {
   if (keyed) {
     // An array slot moves, so a later derive of an index can name another slot.
     if (Array.isArray(source)) return undefined;
-    let byKey = slotHubs.get(source);
-    if (!byKey) slotHubs.set(source, (byKey = new Map()));
+    const byKey = slotHubs.get(source) ?? new Map<PropertyKey, Hub>();
+    slotHubs.set(source, byKey);
     // A number key names the slot of its string.
     const name = typeof key === "number" ? `${key}` : (key as PropertyKey);
-    let made = byKey.get(name);
-    if (!made) byKey.set(name, (made = hub(() => watch(source, name))));
-    return made;
+    // Found at each subscribe, so a hub with no run leaves the map, and a key that leaves retains nothing.
+    const found: Hub = {
+      subscribe(take) {
+        let made = byKey.get(name);
+        if (!made)
+          byKey.set(
+            name,
+            (made = hub(
+              () => watch(source, name),
+              () => byKey.delete(name),
+            )),
+          );
+        return made.subscribe(take);
+      },
+    };
+    return found;
   }
   if (!source[SHARE]) return undefined;
   let made = sourceHubs.get(source);

@@ -25,6 +25,7 @@ type Parts = {
   add(entry: Entry): void;
   quit(entry: Entry): void;
   fail(error: unknown): void;
+  held(): Promise<void> | undefined; // The wait of a parked drive
 };
 type Prop = Driven & { name: string };
 // Properties whose attribute sets only the initial state, or that have no attribute.
@@ -76,7 +77,12 @@ export const attribute = (name: string, value: any): string => {
 const customs = new WeakSet<Element>(),
   held = new WeakMap<Element, Map<string, unknown>>(),
   // Weak, so a hold retains no element (JX-0B4).
-  wanted = new Map<string, Set<WeakRef<Element>>>();
+  wanted = new Map<string, Set<WeakRef<Element>>>(),
+  // Takes the ref of a collected element out, so a tag that code never defines grows nothing.
+  forgotten = new FinalizationRegistry<{
+    refs: Set<WeakRef<Element>>;
+    ref: WeakRef<Element>;
+  }>(({ refs, ref }) => refs.delete(ref));
 /** Marks a value that a dynamic prop holds before its first output. */
 export const NONE: unique symbol = Symbol() as any;
 
@@ -110,7 +116,9 @@ export const adopt = (element: Element, tag: string) => {
     const apply = () => defined(tag);
     customElements.whenDefined(tag).then(apply, apply);
   }
-  refs.add(new WeakRef(element));
+  // A held value and no closure, because a closure here would share its context with apply, which retains it.
+  const ref = new WeakRef(element);
+  forgotten.register(element, { refs: refs.add(ref), ref });
   return values;
 };
 
@@ -295,16 +303,19 @@ export const ROUTE: unique symbol = Symbol() as any;
 // What takes the part of a source out of its drive, for the builder that owns the source (HE-059).
 const evict = new WeakMap<object, () => void>();
 
-/** Reads the source of a part for a drive, and pulls it only while the part is not parked (JX-086). */
-const gated = (part: Entry): Gated => {
+/**
+ * Reads the source of a part for a drive, and pulls it only while the part and its drive are not parked (JX-083, JX-086).
+ * A drive can park before the first pull of a part, which its select makes before the report. */
+const gated = (part: Entry, host: Parts): Gated => {
   const source = part.source as AsyncIterable<unknown>;
   let iterator: AsyncIterator<unknown> | undefined;
   const pull = () =>
     pulling(source, () => (iterator ??= source[Symbol.asyncIterator]()).next()); // DV-052
-  return {
-    next: () => (part.gate ? part.gate.promise.then(pull) : pull()),
-    return: () => iterator?.return?.(),
+  const next = (): Promise<unknown> => {
+    const wait = part.gate?.promise ?? host.held();
+    return wait ? wait.then(next) : pull();
   };
+  return { next, return: () => iterator?.return?.() };
 };
 
 /** Parks or resumes a part and the parts of its last output. */
@@ -334,7 +345,7 @@ const take = (entry: Entry, source: any, host: Parts): Entry => {
   pool.set(source, part);
   // A promise has no pull to park.
   if (typeof source.then !== "function") {
-    part.via = gated(part);
+    part.via = gated(part, host);
     register("part", part.via, { source });
   }
   evict.set(source, () => {
@@ -455,6 +466,9 @@ export const drive = <E extends Driven>(
   // A drive that stopped shows nothing, so no boundary takes its failure (JX-094).
   const fail = (error: unknown) =>
     stopped ? reportError(error) : route(error);
+  /** Gives the wait that a resume ends, while the drive is parked. */
+  const held = () =>
+    parked ? (gate ??= Promise.withResolvers()).promise : undefined;
   /** Lets each source go, which ends what its pulls opened (JX-041, DV-045). */
   const letGo = () => {
     for (const entry of keyed.values())
@@ -501,7 +515,7 @@ export const drive = <E extends Driven>(
           throw error;
         }
         // A parked drive applies the outputs that it has, and pulls no more until it resumes (JX-083).
-        if (parked) return (gate ??= Promise.withResolvers()).promise;
+        return held();
       },
     }),
   );
@@ -522,13 +536,13 @@ export const drive = <E extends Driven>(
     (entry.source as any)[ROUTE]?.(fail);
     sources[entry.key] = entry.via ?? entry.source;
   };
-  const parts: Parts = { add, quit, fail };
+  const parts: Parts = { add, quit, fail, held };
   return {
     add: add as (entry: E) => void,
     remove: quit as unknown as (entry: E) => void,
     park(on: boolean) {
       parked = on;
-      // Stryker disable next-line ConditionalExpression: a drive that parks has no gate, because a drive parks only while it runs
+      // Stryker disable next-line ConditionalExpression: a drive parks only while it runs, and a running drive has no gate
       if (!on) gate?.resolve(), (gate = undefined);
       // A part that left its output stays parked (JX-086).
       for (const entry of keyed.values())

@@ -33,7 +33,7 @@ mount(
   <button type="button" onclick={() => sim.step()}>
     Step
   </button>,
-  <button type="button" onclick={() => sim.add(5)}>
+  <button type="button" onclick={() => sim.add()}>
     +50
   </button>,
   <button type="button" onclick={() => sim.remove()}>

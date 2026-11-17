@@ -491,7 +491,10 @@
         ? entries.get(host.select)?.ref.deref()
         : undefined;
       const slots: any[] = (proxy && inspectors.get(proxy)?.()) ?? [];
-      if (host.kind === "each") sizes.set(host.id, slots.length);
+      // The drive of the rows holds only rows with a dynamic source, so the items come from the array of each.
+      const items =
+        host.kind === "each" && entries.get(host.source as number)?.ref.deref();
+      if (items) sizes.set(host.id, inspectors.get(items)?.().length ?? 0);
       for (const slot of slots) {
         const child = byTarget.get(slot.source);
         if (child?.kind !== "component" && child?.kind !== "each") continue;

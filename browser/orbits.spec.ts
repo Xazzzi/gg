@@ -65,7 +65,7 @@ test("dynamic props move the bodies while the simulation runs", async ({
 test("the list follows bodies that arrive and leave", async ({ page }) => {
   const count = await planets(page).count();
   await page.getByRole("button", { name: "+50" }).click();
-  await expect.poll(() => planets(page).count()).toBeGreaterThan(count);
+  await expect.poll(() => planets(page).count()).toBeGreaterThan(count + 25);
   const more = await planets(page).count();
   await page.getByRole("button", { name: "-50" }).click();
   await expect.poll(() => planets(page).count()).toBeLessThan(more);

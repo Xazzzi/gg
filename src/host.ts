@@ -61,9 +61,13 @@ export const attribute = (name: string, value: any): string => {
   if (value.toString === Object.prototype.toString)
     throw new TypeError(`${name} does not take a plain object`);
   const text = `${value}`,
-    lower = name.toLowerCase(),
-    urls = lower === "values" ? text.split(";") : [text];
-  if (URLS.has(lower) && urls.some(url => SCRIPT.test(url)))
+    lower = name.toLowerCase();
+  if (
+    URLS.has(lower) &&
+    (lower === "values" ? text.split(";") : [text]).some(url =>
+      SCRIPT.test(url),
+    )
+  )
     throw new TypeError(`${name} does not take a javascript: URL`);
   return text;
 };

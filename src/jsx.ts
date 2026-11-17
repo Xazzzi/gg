@@ -95,6 +95,9 @@ const SVG_TAGS = new Set(
     ),
   ),
   isSvg = (tag: string) => SVG_TAGS.has(tag) || /^fe[A-Z]/.test(tag);
+/** Tells if a key starts with on in any case, as the DOM takes an attribute name of an HTML element (JX-008). */
+const isOn = (name: string) =>
+  (name.charCodeAt(0) | 32) === 111 && (name.charCodeAt(1) | 32) === 110;
 // The last mount into each parent, which its unmount function ends (JX-02A).
 const mounts = new WeakMap<Parent, object>();
 /** Mounts children into parent, keeps dynamic children live, and gives a function that unmounts them. */
@@ -172,9 +175,9 @@ export function jsx(
     live: [string, unknown][] = [],
     dynamic: [string, unknown][] = [];
   for (const name of Object.keys(props)) {
-    const value = props[name],
-      on = /^on/i.test(name); // The DOM takes an attribute name of an HTML element in any case (JX-008)
+    const value = props[name];
     if (name === "children" || value === undefined) continue;
+    const on = isOn(name);
     if (isDynamic(value)) {
       if (on) throw new TypeError(`${name} does not take a dynamic value`);
       dynamic.push([name, value]);

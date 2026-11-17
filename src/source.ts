@@ -166,9 +166,13 @@ export const building = <R>(make: () => R): [R, (() => void)[]] => {
   const outer = built,
     list: (() => void)[] = (built = []);
   try {
-    return [make(), list];
-  } finally {
+    const made = make();
     built = outer;
+    return [made, list];
+  } catch (error) {
+    built = outer;
+    for (const stop of list) stop(); // A make that throws gives no output to own them
+    throw error;
   }
 };
 /** Records what stops a thing that code builds now, if a builder runs. */

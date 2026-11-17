@@ -172,14 +172,14 @@ export function jsx(
     live: [string, unknown][] = [],
     dynamic: [string, unknown][] = [];
   for (const name of Object.keys(props)) {
-    const value = props[name];
+    const value = props[name],
+      on = /^on/i.test(name); // The DOM takes an attribute name of an HTML element in any case (JX-008)
     if (name === "children" || value === undefined) continue;
     if (isDynamic(value)) {
-      if (name.startsWith("on"))
-        throw new TypeError(`${name} does not take a dynamic value`);
+      if (on) throw new TypeError(`${name} does not take a dynamic value`);
       dynamic.push([name, value]);
       values?.set(name, NONE);
-    } else if (name.startsWith("on")) {
+    } else if (on) {
       if (value === null || value === false) continue;
       // A text value would make an inline handler, which runs text as code (JX-008).
       if (typeof value !== "function")

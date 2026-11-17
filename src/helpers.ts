@@ -190,12 +190,10 @@ const hubOf = (source: any, keyed: boolean, key: unknown) => {
     if (Array.isArray(source)) return undefined;
     let byKey = slotHubs.get(source);
     if (!byKey) slotHubs.set(source, (byKey = new Map()));
-    let made = byKey.get(key as PropertyKey);
-    if (!made)
-      byKey.set(
-        key as PropertyKey,
-        (made = hub(() => watch(source, key as PropertyKey))),
-      );
+    // A number key names the slot of its string.
+    const name = typeof key === "number" ? `${key}` : (key as PropertyKey);
+    let made = byKey.get(name);
+    if (!made) byKey.set(name, (made = hub(() => watch(source, name))));
     return made;
   }
   if (!source[SHARE]) return undefined;
@@ -320,7 +318,8 @@ const mapped = (
   /** Reads one value from the source and maps it, and opens the source at the first call (HE-051). */
   const step = async (): Promise<IteratorResult<unknown, void>> => {
     if (finished) return over();
-    let mapping = false;
+    let mapping = false,
+      fresh: (() => void)[] = []; // What the call for this value built
     try {
       if (!started) {
         started = true;
@@ -337,8 +336,9 @@ const mapped = (
         }
       } while (pass && !pass(result.value));
       mapping = true;
-      const [output, fresh] = building(() => map(result.value)),
-        settled = await output;
+      let output: unknown;
+      [output, fresh] = building(() => map(result.value));
+      const settled = await output;
       // A repeat of the last output keeps its elements, and a discarded output keeps none.
       if (finished || Object.is(settled, last)) drop(fresh);
       else {
@@ -350,6 +350,7 @@ const mapped = (
       box.emit?.("value", settled); // DV-061
       return { done: false, value: settled };
     } catch (error) {
+      drop(fresh); // A map that rejects gives no output to own them (HE-059)
       if (finished) return over(); // return() arrived first, so the late failure is discarded
       finish();
       if (mapping) void quietReturn(iterator); // HE-057

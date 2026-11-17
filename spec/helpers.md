@@ -167,6 +167,7 @@ So a map that reads one key of a `select` runs only when that key changes, and n
   Each derive MUST then act as if it read the source alone: it gets the newest output when it reads, and the end or the failure of the source.
   After the shared reader finishes, a later derive MUST open a new shared reader.
   So a later derive of a slot that a `delete` removed waits for the slot, and reads it when code writes the key again.
+  A number key names the slot of its string, so the derives of `1` and `"1"` share a reader.
   An index names the slot at that index at the first `next()` (SE-161), and a slot moves (SE-092), so the derives of an index MUST NOT share a reader.
 - HE-059: `derive` owns what `map` builds.
   While `map` runs, the JSX runtime records each element that `jsx` creates with a dynamic child or a dynamic prop, each wait of `use`, and each dynamic result of a component.
@@ -176,6 +177,7 @@ So a map that reads one key of a `select` runs only when that key changes, and n
   To stop a component result is to take its part out of its drive and return it (JX-086), or to call its `return()` if no host drives it.
   An output that is the `Object.is` same as the output before it keeps what that output owns, and the iterator MUST stop what the new call built.
   The iterator MUST also stop what a call built whose output it discards (HE-055).
+  A call whose `map` throws or rejects gives no output, so the iterator MUST stop what that call built.
   When `source` finishes or fails, the last output keeps what it owns.
   A node that code built outside `map` is not owned, so a host parks it (JX-082).
   `map` owns only what it builds before it returns, so an element that an async `map` builds after an `await` is not owned.

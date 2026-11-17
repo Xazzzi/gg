@@ -110,6 +110,31 @@ test("JX-0C2 HE-059 a builder that stops a component result aborts its signal, a
   assert.ok(stopped(signals[1] as AbortSignal));
 });
 
+test("JX-0C2 HE-059 derive stops what a map that throws or rejects built", async () => {
+  const n = new Channel<number>(),
+    signals: AbortSignal[] = [];
+  const Loads = (_: object, life: Instance) => (
+    signals.push(life.signal),
+    (async function* () {
+      yield "x";
+    })()
+  );
+  n.send(1), n.send(2);
+  const throws = derive(n, () => {
+    h(Loads);
+    throw new Error("sync");
+  });
+  await assert.rejects(throws.next(), /sync/);
+  const rejects = derive(n, async () => {
+    h(Loads);
+    await null;
+    throw new Error("async");
+  });
+  await assert.rejects(rejects.next(), /async/);
+  assert.equal(signals.length, 2);
+  assert.ok(signals.every(stopped));
+});
+
 test("JX-0C3 a component that gives an element aborts when the scope of the element stops, and not when a place removes it", async () => {
   const signals: AbortSignal[] = [];
   const Card = (_: object, life: Instance) => (

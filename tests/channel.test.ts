@@ -253,6 +253,16 @@ test("CH-01E a consumer that has not read yet holds the ack of a value that it r
   assert.equal(settled(p), true);
 });
 
+test("CH-01E a consumer that attaches after a value resolves its ack under all", async () => {
+  const ch = new Channel<number>({ firstReceive: "next", ackStyle: "all" });
+  const p = ch.asend(1),
+    read = iter(ch).next();
+  await setImmediate();
+  assert.equal(settled(p), true); // It starts after value 1
+  ch.send(2);
+  assert.deepEqual(await read, val(2));
+});
+
 test("CH-010 CH-012 send returns undefined and accepts null and undefined", async () => {
   const ch = new Channel<unknown>({ thenReceive: "every" });
   assert.equal(ch.send(undefined), undefined);

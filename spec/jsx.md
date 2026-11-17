@@ -162,12 +162,16 @@ The runtime uses the global `document` when it creates nodes.
   With a dynamic child, at any depth of its arrays, `Fragment` MUST return `props.children` unchanged.
   So the host that gets those children drives them (JX-020).
 
-- JX-008: A value at a key that starts with `on` MUST throw a `TypeError`, unless it is a function, `null`, `undefined` or `false`.
+- JX-008: A value at a key that starts with `on`, in any case, MUST throw a `TypeError`, unless it is a function, `null`, `undefined` or `false`.
   An event attribute runs its text as code, so a text value from data would run that data.
+  The DOM ignores the case of an attribute name of an HTML element, so `OnClick` also makes an event attribute.
   JX-060 does the same for a dynamic value.
-- JX-009: At `href`, `src`, `action`, `formaction` and `xlink:href`, in any case, a text that has the `javascript:` scheme MUST throw a `TypeError`.
+- JX-009: At `href`, `src`, `action`, `formaction`, `xlink:href` and `data`, in any case, a text that has the `javascript:` scheme MUST throw a `TypeError`.
+  At `to` and `from`, in any case, the same text MUST throw, and at `values` each item that `;` separates.
   The check reads the text as the URL parser does: it skips leading C0 controls and spaces, and it skips tabs and newlines.
   A link from data then cannot run code when the user clicks it.
+  `data` loads the URL of an `object`, and `to`, `from` and `values` let an SVG animation set `href` to a URL.
+  Other text at these keys stays as the DOM takes it.
   A dynamic prop reports the error (JX-065).
 - JX-00A: A static prop that JX-002, JX-008 or JX-009 rejects MUST throw before the element takes its children.
   So the children of a `jsx` call that throws stay where they were.
@@ -269,7 +273,7 @@ The runtime converts a child to nodes by these rules, in order.
 
 A dynamic prop changes with its source, so a component needs no code to update an attribute or a live property.
 
-- JX-060: A dynamic prop at a key that starts with `on` MUST throw a `TypeError`, because an event attribute runs its value as code.
+- JX-060: A dynamic prop at a key that starts with `on`, in any case, MUST throw a `TypeError`, because an event attribute runs its value as code.
 - JX-061: An element with a dynamic prop MUST wait as JX-02B says, and MUST then drive its dynamic props with one `select`, with `autoStart`, `autoClose` and no `backPressure`.
   The element MUST start its children before its dynamic props.
   This `select` is apart from the drive of the children, so `mount` into the element keeps its dynamic props (JX-020).

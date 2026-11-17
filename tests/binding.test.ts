@@ -64,6 +64,29 @@ test("HE-05A derives of one object slot share one reader", async () => {
   s[CHAN].close();
 });
 
+test("HE-05A a number key names the slot of its string, so their derives share one reader", async () => {
+  const key = Symbol("key"),
+    s = select({ 1: "a", [key]: "b" }, { autoStart: true });
+  const counts = await counting(async () => {
+    const one = derive(s, 1, v => v),
+      two = derive(s, "1" as never, v => v),
+      other = derive(s, key, v => v);
+    assert.deepEqual(
+      [
+        (await one.next()).value,
+        (await two.next()).value,
+        (await other.next()).value,
+      ],
+      ["a", "a", "b"],
+    );
+    await one.return();
+    await two.return();
+    await other.return();
+  });
+  assert.equal(counts.reader, 2); // A symbol key keeps its own slot
+  s[CHAN].close();
+});
+
 test("HE-05A an array slot shares no reader, because a slot moves", async () => {
   const s = select([1, 2], { autoStart: true });
   const counts = await counting(async () => {

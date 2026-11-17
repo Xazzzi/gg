@@ -365,7 +365,10 @@ export class Channel<T, TReturn = undefined>
     // Stryker disable next-line ArithmeticOperator: pos only matters after a read, as a reader with no read ends only under "stop", which drops the newest
     const reader: Reader<T> = { at, pos: at ? at.n - 1 : 0 };
     if (at) this.#place(reader);
-    this.#readers?.add(reader);
+    if (this.#readers) {
+      this.#readers.add(reader);
+      this.#ack(this.#floor()); // A reader that starts after a value acks it (CH-01E)
+    }
     this.#emit?.("attach", reader, pulledSource());
     return reader;
   }

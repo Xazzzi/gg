@@ -36,8 +36,19 @@ export const LIVE = new Set([
   "muted",
 ]);
 
-// The attributes that load or navigate to a URL, and the javascript: scheme as the URL parser reads it (JX-009).
-const URLS = new Set(["href", "src", "action", "formaction", "xlink:href"]);
+// The attributes that load or navigate to a URL, or that an SVG animation sets href to, and the javascript: scheme as the URL parser reads it (JX-009).
+// The values of an animation are a list that ; separates.
+const URLS = new Set([
+  "href",
+  "src",
+  "action",
+  "formaction",
+  "xlink:href",
+  "data",
+  "to",
+  "from",
+  "values",
+]);
 const SCRIPT =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the URL parser skips leading C0 controls
   /^[\u0000-\u001F ]*j[\t\n\r]*a[\t\n\r]*v[\t\n\r]*a[\t\n\r]*s[\t\n\r]*c[\t\n\r]*r[\t\n\r]*i[\t\n\r]*p[\t\n\r]*t[\t\n\r]*:/i;
@@ -49,8 +60,10 @@ export const attribute = (name: string, value: any): string => {
     throw new TypeError(`${name} does not take a function`);
   if (value.toString === Object.prototype.toString)
     throw new TypeError(`${name} does not take a plain object`);
-  const text = `${value}`;
-  if (URLS.has(name.toLowerCase()) && SCRIPT.test(text))
+  const text = `${value}`,
+    lower = name.toLowerCase(),
+    urls = lower === "values" ? text.split(";") : [text];
+  if (URLS.has(lower) && urls.some(url => SCRIPT.test(url)))
     throw new TypeError(`${name} does not take a javascript: URL`);
   return text;
 };

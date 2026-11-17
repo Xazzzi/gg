@@ -2164,6 +2164,24 @@ test("JX-008 a value at an on key that is no function throws, except null, undef
   }
 });
 
+test("JX-008 JX-060 an on key in any case takes only a function, and listens as in lower case", () => {
+  for (const name of ["OnClick", "ONERROR", "oNload"])
+    assert.throws(
+      () => h("img", { [name]: "alert(1)" }),
+      new RegExp(`TypeError: ${name} takes a function`),
+    );
+  assert.throws(
+    () => h("img", { OnError: latest<string>() }),
+    /TypeError: OnError does not take a dynamic value/,
+  );
+  const listener = () => {},
+    node = h("button", { OnClick: listener, ONDBLCLICK: listener });
+  assert.deepEqual(node.listeners, [
+    ["click", listener],
+    ["dblclick", listener],
+  ]);
+});
+
 test("JX-009 a javascript: URL throws at a URL attribute, as the URL parser reads it", () => {
   const script = "javascript:".split("");
   const urls = [
@@ -2189,6 +2207,29 @@ test("JX-009 a javascript: URL throws at a URL attribute, as the URL parser read
   });
   assert.equal(safe.attributes.get("href"), "/javascript:x");
   assert.equal(safe.attributes.get("title"), "javascript:x");
+});
+
+test("JX-009 a javascript: URL throws at the data of an object, and at each value of an SVG animation", () => {
+  assert.throws(
+    () => h("object", { data: "javascript:alert(1)" }),
+    /TypeError: data does not take a javascript: URL/,
+  );
+  const animations: [string, object][] = [
+    ["set", { attributeName: "href", to: " javascript:alert(1)" }],
+    ["animate", { attributeName: "href", FROM: "JavaScript:x" }],
+    ["animate", { attributeName: "href", values: "/a; java\tscript:x" }],
+  ];
+  for (const [tag, props] of animations)
+    assert.throws(() => h(tag, props), TypeError);
+  const safe = h("animate", {
+    attributeName: "x",
+    values: "0;10;0",
+    to: "/a;javascript:x",
+  });
+  assert.equal(safe.attributes.get("values"), "0;10;0");
+  assert.equal(safe.attributes.get("to"), "/a;javascript:x"); // Only values is a list
+  const movie = h("object", { data: "/movie.svg" });
+  assert.equal(movie.attributes.get("data"), "/movie.svg");
 });
 
 test("JX-00A a rejected static prop throws before the element takes its children", () => {

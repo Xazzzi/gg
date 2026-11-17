@@ -271,7 +271,8 @@ export class Channel<T, TReturn = undefined>
     const halt = () => {
       stop.on = true;
       stop.bound?.delete(stop.self); // A consumer that did not attach runs no finally
-
+      // One shared wake serves the modes where each consumer reads each value, so the others wake and block again.
+      // A wake of one consumer needs a promise per block, as the "unread" queue has.
       if (!this.#queue) return this.#rouse();
       const { wake } = stop;
       stop.wake = undefined; // So the queue skips this consumer

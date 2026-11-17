@@ -78,6 +78,8 @@ export function catching<T>(
   /** Serves the queued `next()` calls one at a time, in order. */
   const pump = () => {
     const request = pending[0];
+    // After return() empties pending, this shift can drop a later request and start a second step.
+    // Each step returns done at once after the finish, so the order and the results stay the same.
     step()
       .then(request.resolve, request.reject)
       .then(() => {
@@ -358,6 +360,8 @@ const mapped = (
   /** Serves the queued `next()` calls one at a time, in order. */
   const pump = () => {
     const request = pending[0];
+    // After return() empties pending, this shift can drop a later request and start a second step.
+    // Each step returns done at once after the finish, so the order and the results stay the same.
     step()
       .then(request.resolve, request.reject)
       .then(() => {

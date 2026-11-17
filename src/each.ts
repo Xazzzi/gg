@@ -10,6 +10,7 @@ import {
   holds,
   isDynamic,
   PARK,
+  quitSource,
   ROUTE,
   stopIn,
   toNodes,
@@ -161,6 +162,7 @@ async function* replay<T>(
     entries: Kept[] = [],
     stale: Kept[] = [];
   let fresh: Kept[] = [],
+    made: Kept[] = [], // The rows that render made in the read that applies now
     dirty = true,
     round = 0,
     reading = false,
@@ -215,6 +217,7 @@ async function* replay<T>(
         sent: false,
       }),
       child = render(handle as Item<T>);
+    made.push(kept);
     if (isDynamic(child)) {
       kept.source = child;
       fresh.push(kept);
@@ -263,6 +266,7 @@ async function* replay<T>(
       span = () => entries.slice(head, entries.length - tail);
     }
     const before = span();
+    made = [];
     applyOps(entries, ops, map, { key: key as any });
     const after = span();
     // Stryker disable next-line UpdateOperator: rounds only need to differ
@@ -329,7 +333,10 @@ async function* replay<T>(
     }
   } finally {
     reader[Symbol.dispose]();
-    for (const entry of entries) leave(entry.handle), end(entry.view);
+    // A render that throws keeps the rows of its read out of entries, and their children out of the drive (JX-03A).
+    for (const entry of new Set([...entries, ...made]))
+      leave(entry.handle), end(entry.view);
+    for (const entry of fresh) quitSource(entry.source);
     host.stop();
   }
 }

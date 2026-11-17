@@ -1320,6 +1320,43 @@ test("JX-03A an error from render ends each, and ends the items", async () => {
   assert.deepEqual(await list.next(), { done: true, value: undefined });
 });
 
+test("JX-03A JX-039 an error from render ends the items that the same read rendered before it", async () => {
+  const failure = new Error("x"),
+    seen: Item<string>[] = [],
+    returned: string[] = [],
+    items = select(["a"], {
+      autoStart: true,
+      autoClose: false,
+      backPressure: false,
+    });
+  // Row b gives a dynamic child that the drive never got, so each returns it itself.
+  const child = {
+    [Symbol.asyncIterator]: () => child,
+    next: async () => ({ done: false, value: "y" }),
+    return: async () => (returned.push("b"), { done: true, value: undefined }),
+  };
+  const list = each(items, item => {
+    if (item.value === "c") throw failure;
+    seen.push(item);
+    return item.value === "b" ? child : "x";
+  });
+  await setImmediate();
+  await list.next();
+  items.push("b", "c");
+  await assert.rejects(list.next(), failure);
+  assert.deepEqual(returned, ["b"]);
+  assert.deepEqual(
+    seen.map(item => [item.value, item.signal.aborted]),
+    [
+      ["a", true],
+      ["b", true],
+    ],
+  );
+  const reader = (seen[1] as Item<string>)[Symbol.asyncIterator]();
+  assert.deepEqual(await reader.next(), { done: false, value: "b" });
+  assert.deepEqual(await reader.next(), { done: true, value: undefined });
+});
+
 test("JX-03A a render result with a nested dynamic child ends each", async () => {
   const items = select(["a"], {
     autoStart: true,

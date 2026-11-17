@@ -57,7 +57,8 @@ export async function* use<T>(
   const lost = { return: () => placed.reject(new StopError("use not placed")) };
   placed.promise.catch(noop); // The component reads the rejection only at its next pull
   defer(waiting, anchor, placed.resolve, lost.return);
-  bindPulled(lost); // JX-041
+  // A place settles placed, so a later release of lost rejects nothing, and the binding ends with the component (JX-041).
+  bindPulled(lost);
   yield anchor;
   await placed.promise;
   return consume(anchor, context);

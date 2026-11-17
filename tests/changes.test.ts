@@ -362,6 +362,16 @@ test("SE-037 the first read of a reader starts the select, and a reader alone do
   s[CHAN].close();
 });
 
+test("SE-037 the read of a reader that finished does not start the select", async () => {
+  const s = select({ a: 1 });
+  const r = changes(s);
+  await r.return();
+  assert.deepEqual(await r.next(), { done: true, value: undefined });
+  await setImmediate();
+  assert.deepEqual(changes(s).outputs, {});
+  s[CHAN].close();
+});
+
 test("SE-037 SE-030 reads and a consumer start the select once", async () => {
   const s = select({ a: 1 }, { backPressure: false });
   const r = changes(s);

@@ -495,7 +495,7 @@ export class Reader implements Changes<unknown> {
   }
 
   next(): Promise<IteratorResult<Op[], undefined>> {
-    this.#start(); // SE-037
+    if (!this.#ended) this.#start(); // SE-037, and a finished reader starts nothing
     const read = Promise.withResolvers<IteratorResult<Op[], undefined>>();
     this.#waiting.push(read);
     this.#settle();

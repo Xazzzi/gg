@@ -404,7 +404,12 @@ class Select {
     },
   };
 
-  constructor(shape: any, options: any, channel: Channel<any>) {
+  constructor(
+    target: any,
+    found: Detected[],
+    options: any,
+    channel: Channel<any>,
+  ) {
     const {
       autoStart = false,
       autoClose = false,
@@ -424,23 +429,28 @@ class Select {
     this.#returns = returns;
     this.#mapSnapshot = mapSnapshot;
     this.#channel = channel;
-    this.#isArray = Array.isArray(shape);
-    const target = this.#isArray ? Array.from(shape) : { ...shape };
-    thenless("then", target.then); // An array target keeps only indexes, so it has no then
+    this.#isArray = Array.isArray(target);
     this.#target = target;
     this.#log = new Log(hook && []);
     if (this.#isArray)
-      for (const source of target)
+      target.forEach((source: unknown, index: number) => {
         this.#array.push(
-          this.#make(source, undefined, this.#array.length, detect(source)),
+          this.#make(source, undefined, index, found[index] as Detected),
         );
+      });
     else {
       this.#map = new Map();
-      for (const key of Reflect.ownKeys(target))
+      Reflect.ownKeys(target).forEach((key, index) => {
         this.#map.set(
           key,
-          this.#make(target[key], key, this.#rank(key), detect(target[key])),
+          this.#make(
+            target[key],
+            key,
+            this.#rank(key),
+            found[index] as Detected,
+          ),
         );
+      });
     }
     onEnd(channel, () => this.#abort());
     onAttach(channel, () => this.#join());
@@ -1191,20 +1201,27 @@ export function select(shape: any, options: any = {}): any {
     ackStyle,
     firstReceive = thenReceive === "unread" ? "unread" : "latest",
   } = options;
+  const isArray = Array.isArray(shape),
+    target = isArray ? Array.from(shape) : { ...shape };
+  thenless("then", target.then); // An array target keeps only indexes, so it has no then
+  // SE-016 throws here, before the channel exists, so a call that fails registers nothing (DV-001).
+  const found = (
+    isArray ? target : Reflect.ownKeys(target).map(key => target[key])
+  ).map((source: unknown) => detect(source));
   const channel = new Channel<any>({
     firstReceive,
     thenReceive,
     stopStyle,
     ackStyle,
   });
-  const core = new Select(shape, options, channel),
+  const core = new Select(target, found, options, channel),
     { state } = core;
   openers.set(state, core);
   // Here, so the hook finds the caller at its fixed depth (DV-003).
   core.connect(
     register("select", state, {
       channel,
-      array: Array.isArray(shape),
+      array: isArray,
       unwrap: !!options.unwrap,
       slots: () => core.describe(),
     }),

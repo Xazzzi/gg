@@ -20,6 +20,7 @@ So this spec defines only the contract with that extension.
 
 - DV-001: The library MUST read the hook when it creates a `Channel`, when `feed`, `select`, `derive` or `iff` is called, and for each registration of DV-040 to DV-042, DV-046, DV-047 and DV-050.
   If the value is not a function, the library does no devtools work for that object.
+  A `select` call that throws MUST register nothing, so the panel shows no channel that no select owns.
 - DV-002: The library MUST call the hook as `hook(kind, target, detail)`.
   The hook returns an emitter or `undefined`.
 - DV-003: The call stack of the hook MUST be the hook, an internal function, the `Channel` constructor, a preset of `channel.md`, the `feed`, `select`, `derive`, `iff`, `jsx` or `each` function or the `[Symbol.asyncIterator]` method of an `Item`, and then the caller.

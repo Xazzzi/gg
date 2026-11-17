@@ -260,6 +260,7 @@ For an `O` that `unknown` extends, such as from an `any` state, they are `Proper
   SE-055 then applies.
 - SE-037: Before start, the first `next()` of a reader MUST start the slots in a microtask, as an active consumer does.
   A reader that no code reads MUST NOT start them.
+  The `next()` of a reader that finished MUST NOT start them either.
   The slots MUST start one time, also when a consumer and a reader both start them.
   So `changes`, `watch` and `each` work on a select with no consumer and no `autoStart`.
 

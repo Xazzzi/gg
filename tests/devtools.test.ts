@@ -44,6 +44,24 @@ const install = (check?: (kind: string, target: any) => void) => {
   return { log, details, off: () => delete g[HOOK] };
 };
 
+test("DV-001 SE-016 SE-08D a select call that throws registers nothing", () => {
+  const { log, off } = install();
+  try {
+    const failure = new Error("then");
+    const source = {
+      get then() {
+        throw failure;
+      },
+    };
+    assert.throws(() => select({ a: 1, b: source }), failure);
+    assert.throws(() => select([1, source]), failure);
+    assert.throws(() => select({ then: () => {} }), TypeError);
+    assert.deepEqual(log, []);
+  } finally {
+    off();
+  }
+});
+
 test("DV-001 a missing or non-function hook does no devtools work", async () => {
   for (const value of [undefined, {}]) {
     g[HOOK] = value;
